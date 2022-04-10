@@ -11,3 +11,6 @@ We'd love to collaborate with you to make Keploy great. To get started:
 * [Slack](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA) - Discussions with the community and the team.
 * [GitHub](https://github.com/keploy/keploy/issues) - For bug reports and feature requests.
 
+## Documentation(WIP):
+  https://docs.google.com/document/d/1scq1sGUPeWyupBqtZCDnbx2G1GMtchHBdRql9XwEEtE/edit?usp=sharing
+
