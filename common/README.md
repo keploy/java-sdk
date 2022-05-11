@@ -1,0 +1,1 @@
+Module for common classes like Exception,Serializer/Deserializer,Models, etc.
