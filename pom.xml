@@ -38,11 +38,6 @@
             <artifactId>log4j-core</artifactId>
             <version>2.17.2</version>
         </dependency>
-<!--            <dependency>-->
-<!--                <groupId>org.apache.logging.log4j</groupId>-->
-<!--                <artifactId>log4j-slf4j-impl</artifactId>-->
-<!--                <version>2.17.2</version>-->
-<!--            </dependency>-->
     </dependencies>
     <build>
         <resources>
@@ -50,17 +45,5 @@
                 <directory>src/main/resources</directory>
             </resource>
         </resources>
-<!--        <plugins>-->
-<!--            <plugin>-->
-<!--                <artifactId>maven-assembly-plugin</artifactId>-->
-<!--                <version>3.3.0</version>-->
-<!--                <configuration>-->
-<!--                    <descriptors>-->
-<!--                        <descriptor>src/assembly/src.xml</descriptor>-->
-<!--                    </descriptors>-->
-<!--                </configuration>-->
-<!--            </plugin>-->
-<!--        </plugins>-->
-
     </build>
 </project>
