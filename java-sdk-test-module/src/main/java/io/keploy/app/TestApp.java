@@ -8,6 +8,10 @@ import org.apache.logging.log4j.Logger;
 public class TestApp {
     private static Logger logger = LogManager.getLogger(TestApp.class);
 
+    public static void main(String[] args){
+        TestApp testApp = new TestApp();
+        testApp.sum();
+    }
     public void sum() {
         logger.error("Hi There!");
         int x= 50;
