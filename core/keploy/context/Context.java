@@ -12,12 +12,12 @@ import java.util.WeakHashMap;
 @Setter
 @NoArgsConstructor
 public class Context {
-    public ThreadLocal<Map<HttpServletRequest, Context>> bindings = new ThreadLocal<>();
+    private static ThreadLocal<Map<HttpServletRequest, Context>> bindings = new ThreadLocal<>();
 
-    public KeployContext keployContext;
+    private static KeployContext keployContext;
 
     public Context(String mode, String testId, Dependency[] deps) {
-        this.keployContext = new KeployContext(
+        keployContext = new KeployContext(
                 mode, testId, deps
         );
     }
@@ -26,16 +26,20 @@ public class Context {
         Context ctx = new Context();
         Map<HttpServletRequest, Context> map = new WeakHashMap<>();
         map.put(request, ctx);
-        this.bindings.set(map);
+        bindings.set(map);
     }
 
     public Context get(HttpServletRequest request) {
-        return this.bindings.get().get(request);
+        return bindings.get().get(request);
     }
 
     public void set(HttpServletRequest request, Context ctx) {
         Map<HttpServletRequest, Context> map = new WeakHashMap<>();
         map.put(request, ctx);
-        this.bindings.set(map);
+        bindings.set(map);
+    }
+
+    public void cleanup(){
+        bindings.set(null);
     }
 }
