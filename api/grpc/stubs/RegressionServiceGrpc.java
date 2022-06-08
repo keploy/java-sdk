@@ -8,11 +8,11 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
     value = "by gRPC proto compiler (version 1.45.0)",
     comments = "Source: service.proto")
 @io.grpc.stub.annotations.GrpcGenerated
-public final class GrpcServiceGrpc {
+public final class RegressionServiceGrpc {
 
-  private GrpcServiceGrpc() {}
+  private RegressionServiceGrpc() {}
 
-  public static final String SERVICE_NAME = "GrpcService";
+  public static final String SERVICE_NAME = "services.RegressionService";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<stubs.Service.endRequest,
@@ -26,10 +26,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.endRequest,
       stubs.Service.endResponse> getEndMethod() {
     io.grpc.MethodDescriptor<stubs.Service.endRequest, stubs.Service.endResponse> getEndMethod;
-    if ((getEndMethod = GrpcServiceGrpc.getEndMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getEndMethod = GrpcServiceGrpc.getEndMethod) == null) {
-          GrpcServiceGrpc.getEndMethod = getEndMethod =
+    if ((getEndMethod = RegressionServiceGrpc.getEndMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getEndMethod = RegressionServiceGrpc.getEndMethod) == null) {
+          RegressionServiceGrpc.getEndMethod = getEndMethod =
               io.grpc.MethodDescriptor.<stubs.Service.endRequest, stubs.Service.endResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "End"))
@@ -38,7 +38,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.endRequest.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.endResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("End"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("End"))
               .build();
         }
       }
@@ -57,10 +57,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.startRequest,
       stubs.Service.startResponse> getStartMethod() {
     io.grpc.MethodDescriptor<stubs.Service.startRequest, stubs.Service.startResponse> getStartMethod;
-    if ((getStartMethod = GrpcServiceGrpc.getStartMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getStartMethod = GrpcServiceGrpc.getStartMethod) == null) {
-          GrpcServiceGrpc.getStartMethod = getStartMethod =
+    if ((getStartMethod = RegressionServiceGrpc.getStartMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getStartMethod = RegressionServiceGrpc.getStartMethod) == null) {
+          RegressionServiceGrpc.getStartMethod = getStartMethod =
               io.grpc.MethodDescriptor.<stubs.Service.startRequest, stubs.Service.startResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "Start"))
@@ -69,7 +69,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.startRequest.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.startResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("Start"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("Start"))
               .build();
         }
       }
@@ -88,10 +88,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.getTCRequest,
       stubs.Service.TestCase> getGetTCMethod() {
     io.grpc.MethodDescriptor<stubs.Service.getTCRequest, stubs.Service.TestCase> getGetTCMethod;
-    if ((getGetTCMethod = GrpcServiceGrpc.getGetTCMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getGetTCMethod = GrpcServiceGrpc.getGetTCMethod) == null) {
-          GrpcServiceGrpc.getGetTCMethod = getGetTCMethod =
+    if ((getGetTCMethod = RegressionServiceGrpc.getGetTCMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getGetTCMethod = RegressionServiceGrpc.getGetTCMethod) == null) {
+          RegressionServiceGrpc.getGetTCMethod = getGetTCMethod =
               io.grpc.MethodDescriptor.<stubs.Service.getTCRequest, stubs.Service.TestCase>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "GetTC"))
@@ -100,7 +100,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.getTCRequest.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.TestCase.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("GetTC"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("GetTC"))
               .build();
         }
       }
@@ -119,10 +119,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.getTCSRequest,
       stubs.Service.getTCSResponse> getGetTCSMethod() {
     io.grpc.MethodDescriptor<stubs.Service.getTCSRequest, stubs.Service.getTCSResponse> getGetTCSMethod;
-    if ((getGetTCSMethod = GrpcServiceGrpc.getGetTCSMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getGetTCSMethod = GrpcServiceGrpc.getGetTCSMethod) == null) {
-          GrpcServiceGrpc.getGetTCSMethod = getGetTCSMethod =
+    if ((getGetTCSMethod = RegressionServiceGrpc.getGetTCSMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getGetTCSMethod = RegressionServiceGrpc.getGetTCSMethod) == null) {
+          RegressionServiceGrpc.getGetTCSMethod = getGetTCSMethod =
               io.grpc.MethodDescriptor.<stubs.Service.getTCSRequest, stubs.Service.getTCSResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "GetTCS"))
@@ -131,7 +131,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.getTCSRequest.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.getTCSResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("GetTCS"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("GetTCS"))
               .build();
         }
       }
@@ -150,10 +150,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.TestCaseReq,
       stubs.Service.postTCResponse> getPostTCMethod() {
     io.grpc.MethodDescriptor<stubs.Service.TestCaseReq, stubs.Service.postTCResponse> getPostTCMethod;
-    if ((getPostTCMethod = GrpcServiceGrpc.getPostTCMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getPostTCMethod = GrpcServiceGrpc.getPostTCMethod) == null) {
-          GrpcServiceGrpc.getPostTCMethod = getPostTCMethod =
+    if ((getPostTCMethod = RegressionServiceGrpc.getPostTCMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getPostTCMethod = RegressionServiceGrpc.getPostTCMethod) == null) {
+          RegressionServiceGrpc.getPostTCMethod = getPostTCMethod =
               io.grpc.MethodDescriptor.<stubs.Service.TestCaseReq, stubs.Service.postTCResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "PostTC"))
@@ -162,7 +162,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.TestCaseReq.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.postTCResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("PostTC"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("PostTC"))
               .build();
         }
       }
@@ -181,10 +181,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.TestReq,
       stubs.Service.deNoiseResponse> getDeNoiseMethod() {
     io.grpc.MethodDescriptor<stubs.Service.TestReq, stubs.Service.deNoiseResponse> getDeNoiseMethod;
-    if ((getDeNoiseMethod = GrpcServiceGrpc.getDeNoiseMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getDeNoiseMethod = GrpcServiceGrpc.getDeNoiseMethod) == null) {
-          GrpcServiceGrpc.getDeNoiseMethod = getDeNoiseMethod =
+    if ((getDeNoiseMethod = RegressionServiceGrpc.getDeNoiseMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getDeNoiseMethod = RegressionServiceGrpc.getDeNoiseMethod) == null) {
+          RegressionServiceGrpc.getDeNoiseMethod = getDeNoiseMethod =
               io.grpc.MethodDescriptor.<stubs.Service.TestReq, stubs.Service.deNoiseResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "DeNoise"))
@@ -193,7 +193,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.TestReq.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.deNoiseResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("DeNoise"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("DeNoise"))
               .build();
         }
       }
@@ -212,10 +212,10 @@ public final class GrpcServiceGrpc {
   public static io.grpc.MethodDescriptor<stubs.Service.TestReq,
       stubs.Service.testResponse> getTestMethod() {
     io.grpc.MethodDescriptor<stubs.Service.TestReq, stubs.Service.testResponse> getTestMethod;
-    if ((getTestMethod = GrpcServiceGrpc.getTestMethod) == null) {
-      synchronized (GrpcServiceGrpc.class) {
-        if ((getTestMethod = GrpcServiceGrpc.getTestMethod) == null) {
-          GrpcServiceGrpc.getTestMethod = getTestMethod =
+    if ((getTestMethod = RegressionServiceGrpc.getTestMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getTestMethod = RegressionServiceGrpc.getTestMethod) == null) {
+          RegressionServiceGrpc.getTestMethod = getTestMethod =
               io.grpc.MethodDescriptor.<stubs.Service.TestReq, stubs.Service.testResponse>newBuilder()
               .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
               .setFullMethodName(generateFullMethodName(SERVICE_NAME, "Test"))
@@ -224,7 +224,7 @@ public final class GrpcServiceGrpc {
                   stubs.Service.TestReq.getDefaultInstance()))
               .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
                   stubs.Service.testResponse.getDefaultInstance()))
-              .setSchemaDescriptor(new GrpcServiceMethodDescriptorSupplier("Test"))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("Test"))
               .build();
         }
       }
@@ -235,50 +235,50 @@ public final class GrpcServiceGrpc {
   /**
    * Creates a new async stub that supports all call types for the service
    */
-  public static GrpcServiceStub newStub(io.grpc.Channel channel) {
-    io.grpc.stub.AbstractStub.StubFactory<GrpcServiceStub> factory =
-      new io.grpc.stub.AbstractStub.StubFactory<GrpcServiceStub>() {
+  public static RegressionServiceStub newStub(io.grpc.Channel channel) {
+    io.grpc.stub.AbstractStub.StubFactory<RegressionServiceStub> factory =
+      new io.grpc.stub.AbstractStub.StubFactory<RegressionServiceStub>() {
         @java.lang.Override
-        public GrpcServiceStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-          return new GrpcServiceStub(channel, callOptions);
+        public RegressionServiceStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
+          return new RegressionServiceStub(channel, callOptions);
         }
       };
-    return GrpcServiceStub.newStub(factory, channel);
+    return RegressionServiceStub.newStub(factory, channel);
   }
 
   /**
    * Creates a new blocking-style stub that supports unary and streaming output calls on the service
    */
-  public static GrpcServiceBlockingStub newBlockingStub(
+  public static RegressionServiceBlockingStub newBlockingStub(
       io.grpc.Channel channel) {
-    io.grpc.stub.AbstractStub.StubFactory<GrpcServiceBlockingStub> factory =
-      new io.grpc.stub.AbstractStub.StubFactory<GrpcServiceBlockingStub>() {
+    io.grpc.stub.AbstractStub.StubFactory<RegressionServiceBlockingStub> factory =
+      new io.grpc.stub.AbstractStub.StubFactory<RegressionServiceBlockingStub>() {
         @java.lang.Override
-        public GrpcServiceBlockingStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-          return new GrpcServiceBlockingStub(channel, callOptions);
+        public RegressionServiceBlockingStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
+          return new RegressionServiceBlockingStub(channel, callOptions);
         }
       };
-    return GrpcServiceBlockingStub.newStub(factory, channel);
+    return RegressionServiceBlockingStub.newStub(factory, channel);
   }
 
   /**
    * Creates a new ListenableFuture-style stub that supports unary calls on the service
    */
-  public static GrpcServiceFutureStub newFutureStub(
+  public static RegressionServiceFutureStub newFutureStub(
       io.grpc.Channel channel) {
-    io.grpc.stub.AbstractStub.StubFactory<GrpcServiceFutureStub> factory =
-      new io.grpc.stub.AbstractStub.StubFactory<GrpcServiceFutureStub>() {
+    io.grpc.stub.AbstractStub.StubFactory<RegressionServiceFutureStub> factory =
+      new io.grpc.stub.AbstractStub.StubFactory<RegressionServiceFutureStub>() {
         @java.lang.Override
-        public GrpcServiceFutureStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-          return new GrpcServiceFutureStub(channel, callOptions);
+        public RegressionServiceFutureStub newStub(io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
+          return new RegressionServiceFutureStub(channel, callOptions);
         }
       };
-    return GrpcServiceFutureStub.newStub(factory, channel);
+    return RegressionServiceFutureStub.newStub(factory, channel);
   }
 
   /**
    */
-  public static abstract class GrpcServiceImplBase implements io.grpc.BindableService {
+  public static abstract class RegressionServiceImplBase implements io.grpc.BindableService {
 
     /**
      */
@@ -386,16 +386,16 @@ public final class GrpcServiceGrpc {
 
   /**
    */
-  public static final class GrpcServiceStub extends io.grpc.stub.AbstractAsyncStub<GrpcServiceStub> {
-    private GrpcServiceStub(
+  public static final class RegressionServiceStub extends io.grpc.stub.AbstractAsyncStub<RegressionServiceStub> {
+    private RegressionServiceStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
     }
 
     @java.lang.Override
-    protected GrpcServiceStub build(
+    protected RegressionServiceStub build(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-      return new GrpcServiceStub(channel, callOptions);
+      return new RegressionServiceStub(channel, callOptions);
     }
 
     /**
@@ -457,16 +457,16 @@ public final class GrpcServiceGrpc {
 
   /**
    */
-  public static final class GrpcServiceBlockingStub extends io.grpc.stub.AbstractBlockingStub<GrpcServiceBlockingStub> {
-    private GrpcServiceBlockingStub(
+  public static final class RegressionServiceBlockingStub extends io.grpc.stub.AbstractBlockingStub<RegressionServiceBlockingStub> {
+    private RegressionServiceBlockingStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
     }
 
     @java.lang.Override
-    protected GrpcServiceBlockingStub build(
+    protected RegressionServiceBlockingStub build(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-      return new GrpcServiceBlockingStub(channel, callOptions);
+      return new RegressionServiceBlockingStub(channel, callOptions);
     }
 
     /**
@@ -521,16 +521,16 @@ public final class GrpcServiceGrpc {
 
   /**
    */
-  public static final class GrpcServiceFutureStub extends io.grpc.stub.AbstractFutureStub<GrpcServiceFutureStub> {
-    private GrpcServiceFutureStub(
+  public static final class RegressionServiceFutureStub extends io.grpc.stub.AbstractFutureStub<RegressionServiceFutureStub> {
+    private RegressionServiceFutureStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
     }
 
     @java.lang.Override
-    protected GrpcServiceFutureStub build(
+    protected RegressionServiceFutureStub build(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
-      return new GrpcServiceFutureStub(channel, callOptions);
+      return new RegressionServiceFutureStub(channel, callOptions);
     }
 
     /**
@@ -603,10 +603,10 @@ public final class GrpcServiceGrpc {
       io.grpc.stub.ServerCalls.ServerStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.ClientStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.BidiStreamingMethod<Req, Resp> {
-    private final GrpcServiceImplBase serviceImpl;
+    private final RegressionServiceImplBase serviceImpl;
     private final int methodId;
 
-    MethodHandlers(GrpcServiceImplBase serviceImpl, int methodId) {
+    MethodHandlers(RegressionServiceImplBase serviceImpl, int methodId) {
       this.serviceImpl = serviceImpl;
       this.methodId = methodId;
     }
@@ -659,9 +659,9 @@ public final class GrpcServiceGrpc {
     }
   }
 
-  private static abstract class GrpcServiceBaseDescriptorSupplier
+  private static abstract class RegressionServiceBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoFileDescriptorSupplier, io.grpc.protobuf.ProtoServiceDescriptorSupplier {
-    GrpcServiceBaseDescriptorSupplier() {}
+    RegressionServiceBaseDescriptorSupplier() {}
 
     @java.lang.Override
     public com.google.protobuf.Descriptors.FileDescriptor getFileDescriptor() {
@@ -670,21 +670,21 @@ public final class GrpcServiceGrpc {
 
     @java.lang.Override
     public com.google.protobuf.Descriptors.ServiceDescriptor getServiceDescriptor() {
-      return getFileDescriptor().findServiceByName("GrpcService");
+      return getFileDescriptor().findServiceByName("RegressionService");
     }
   }
 
-  private static final class GrpcServiceFileDescriptorSupplier
-      extends GrpcServiceBaseDescriptorSupplier {
-    GrpcServiceFileDescriptorSupplier() {}
+  private static final class RegressionServiceFileDescriptorSupplier
+      extends RegressionServiceBaseDescriptorSupplier {
+    RegressionServiceFileDescriptorSupplier() {}
   }
 
-  private static final class GrpcServiceMethodDescriptorSupplier
-      extends GrpcServiceBaseDescriptorSupplier
+  private static final class RegressionServiceMethodDescriptorSupplier
+      extends RegressionServiceBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoMethodDescriptorSupplier {
     private final String methodName;
 
-    GrpcServiceMethodDescriptorSupplier(String methodName) {
+    RegressionServiceMethodDescriptorSupplier(String methodName) {
       this.methodName = methodName;
     }
 
@@ -699,11 +699,11 @@ public final class GrpcServiceGrpc {
   public static io.grpc.ServiceDescriptor getServiceDescriptor() {
     io.grpc.ServiceDescriptor result = serviceDescriptor;
     if (result == null) {
-      synchronized (GrpcServiceGrpc.class) {
+      synchronized (RegressionServiceGrpc.class) {
         result = serviceDescriptor;
         if (result == null) {
           serviceDescriptor = result = io.grpc.ServiceDescriptor.newBuilder(SERVICE_NAME)
-              .setSchemaDescriptor(new GrpcServiceFileDescriptorSupplier())
+              .setSchemaDescriptor(new RegressionServiceFileDescriptorSupplier())
               .addMethod(getEndMethod())
               .addMethod(getStartMethod())
               .addMethod(getGetTCMethod())

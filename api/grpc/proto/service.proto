@@ -1,5 +1,7 @@
 syntax = "proto3";
-option java_package ="stubs";
+option java_package = "stubs";
+option go_package = "go.keploy.io/server/grpc/regression";
+package services;
 
 message Dependency {
   string Name = 1;
@@ -117,7 +119,7 @@ message testResponse{
 }
 
 
-service GrpcService{
+service RegressionService{
   rpc End (endRequest) returns (endResponse);
   rpc Start (startRequest) returns (startResponse);
   rpc GetTC (getTCRequest) returns (TestCase);
