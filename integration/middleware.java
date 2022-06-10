@@ -1,3 +1,4 @@
+import context.Context;
 import io.github.cdimascio.dotenv.Dotenv;
 import keploy.Keploy;
 
@@ -13,6 +14,7 @@ import java.util.Map;
 
 public class middleware implements Filter {
 
+
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
     }
@@ -27,6 +29,9 @@ public class middleware implements Filter {
         if (k == null || dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE").equals(new mode().getMode().MODE_OFF.getTypeName())) {
             filterChain.doFilter(servletRequest, servletResponse);
         }
+
+        //setting request context
+        Context.setCtx((HttpServletRequest)servletRequest);
 
         HttpServletRequestWrapper httpServletRequestWrapper = new HttpServletRequestWrapper((HttpServletRequest) servletRequest);
 
