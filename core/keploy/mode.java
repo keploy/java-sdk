@@ -1,8 +1,10 @@
-import context.Context;
-
 public class mode {
 
     private ModeType Mode;
+
+    public mode() {
+
+    }
 
     public mode(ModeType mode) {
         Mode = mode;
@@ -17,7 +19,7 @@ public class mode {
     }
 
     public boolean isValid(ModeType mode) {
-        if (mode==ModeType.MODE_RECORD || mode==ModeType.MODE_TEST || mode==ModeType.MODE_OFF) {
+        if (mode == ModeType.MODE_RECORD || mode == ModeType.MODE_TEST || mode == ModeType.MODE_OFF) {
             return true;
         }
         return false;
@@ -27,11 +29,11 @@ public class mode {
         setMode(ModeType.MODE_TEST);
     }
 
-    public ModeType getModeFromContext(Context ctx){
-        return ModeType.MODE_OFF;
-    }
+//    public ModeType getModeFromContext(Context ctx){
+//        return ModeType.MODE_OFF;
+//    }
 
-    enum ModeType {
+    public enum ModeType {
         MODE_RECORD,
         MODE_TEST,
         MODE_OFF;
