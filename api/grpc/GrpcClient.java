@@ -5,13 +5,14 @@ import io.grpc.StatusRuntimeException;
 import keploy.Keploy;
 import keploy.KeployInstance;
 import keploy.context.Context;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpServletResponseWrapper;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,14 +20,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class GrpcClient {
 
-    private static final Logger logger = Logger.getLogger(GrpcClient.class.getName());
-
+    //    private static final Logger logger = Logger.getLogger(GrpcClient.class.getName());getName
+    private static final Logger logger = LogManager.getLogger("GrpcClient");
     private RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
 
     public GrpcClient() {
@@ -51,7 +50,7 @@ public class GrpcClient {
                 }
                 testCases.add(tcs);
             } catch (StatusRuntimeException e) {
-                logger.log(Level.WARNING, "RPC failed: {0}", e.getStatus());
+                logger.warn("RPC failed: {0}", e.getStatus());
                 return null;
             }
         }
@@ -172,7 +171,7 @@ public class GrpcClient {
             resStream.write(resBody);
 
         } catch (Exception e) {
-            logger.severe("Failed to get response ");
+            logger.error("Failed to get response ", e.getMessage());
         }
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
@@ -209,7 +208,7 @@ public class GrpcClient {
 
         HttpServletRequest ctxReq = Context.getCtx();
         if (ctxReq == null) {
-            logger.warning("failed to get keploy context");
+            logger.warn("failed to get keploy context");
             return;
         }
 
