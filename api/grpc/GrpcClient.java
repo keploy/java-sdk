@@ -4,33 +4,42 @@ import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import keploy.KeployInstance;
+import keploy.context.Context;
+import keploy.keploy.Keploy;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
-
+import javax.servlet.http.HttpServletRequest;
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-class Keploy {
-    private static final Logger logger = Logger.getLogger(Keploy.class.getName());
+public class GrpcClient {
 
-    private final RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
+    private static final Logger logger = Logger.getLogger(GrpcClient.class.getName());
 
-    public Keploy(Channel channel) {
-        blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
+    private RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
+
+    public GrpcClient() {
+
     }
 
-    //    Service.TestCase[] fetch(){
-////        RegressionServiceGrpc.RegressionServiceBlockingStub stub;
-////        Service.TestCase testCase = stub.getTC(Service.getTCRequest.newBuilder().setApp("sample-url-shortener").setId("09a39684-c551-42a9-9b64-3f61815a8662").build());
-//        for (int i = 0; ; i += 25) {
-//            RegressionServiceGrpc.RegressionServiceBlockingStub stub;
-//            Service.getTCSResponse testcases =  stub.getTCS(Service.getTCSRequest.newBuilder().setApp("sample-url-shortener").setOffset("0").setLimit("25").build());
-//            System.out.println(testcases);
-//        }
-//    }
+    public GrpcClient(Channel channel) {
+        this.blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
+    }
+
+
     public List<Service.getTCSResponse> fetch() {
 
         List<Service.getTCSResponse> testCases = new ArrayList<>();
@@ -52,8 +61,51 @@ class Keploy {
 
     }
 
-    public void simulate() {
+    public String simulate() {
+        String targetURL = Service.HttpReq.newBuilder().getURL();
+        String body = Service.HttpReq.newBuilder().getBody();
+        String method = Service.HttpReq.newBuilder().getMethod();
+        HttpURLConnection connection = null;
 
+        try {
+            //Create connection
+            URL url = new URL(targetURL);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod(method);
+            connection.setRequestProperty("Content-Type",
+                    "application/x-www-form-urlencoded");
+
+            connection.setRequestProperty("Content-Length",
+                    Integer.toString(urlParameters.getBytes().length));
+            connection.setRequestProperty("Content-Language", "en-US");
+
+            connection.setUseCaches(false);
+            connection.setDoOutput(true);
+            //Send request
+            DataOutputStream wr = new DataOutputStream(
+                    connection.getOutputStream());
+            wr.writeBytes(urlParameters);
+            wr.close();
+
+            //Get Response
+            InputStream is = connection.getInputStream();
+            BufferedReader rd = new BufferedReader(new InputStreamReader(is));
+            StringBuilder response = new StringBuilder(); // or StringBuffer if Java version 5+
+            String line;
+            while ((line = rd.readLine()) != null) {
+                response.append(line);
+                response.append('\r');
+            }
+            rd.close();
+            return response.toString();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
     }
 
     public void GetResp() {
@@ -62,6 +114,55 @@ class Keploy {
 
     public void Test() {
 
+    }
+
+    public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) {
+
+        HttpServletRequest ctxReq = Context.getCtx();
+        if (ctxReq == null) {
+            logger.warning("failed to get keploy context");
+            return;
+        }
+
+        Service.TestCaseReq.Builder testCaseBuilder = Service.TestCaseReq.newBuilder();
+        Keploy k = ki.getInstance().getKeploy();
+
+        Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
+        httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
+        Map<String, String> urlParamsMap = httpReqBuilder.getURLParamsMap();
+        urlParamsMap = params;
+
+        Map<String, Service.StrArr> headerMap = httpReqBuilder.getHeaderMap();
+        setRequestHeaderMap(ctxReq, headerMap);
+        httpReqBuilder.setBody(reqBody.toString());
+        Service.HttpReq httpReq = httpReqBuilder.build();
+
+
+        testCaseBuilder.setAppID(k.getCfg().getApp().getName());
+        testCaseBuilder.setCaptured(Instant.now().getEpochSecond());
+        testCaseBuilder.setURI(ctxReq.getRequestURI());
+        testCaseBuilder.setHttpResp(httpResp);
+        testCaseBuilder.setHttpReq(httpReq);
+
+        blockingStub.postTC(testCaseBuilder.build());
+    }
+
+
+    public void setRequestHeaderMap(HttpServletRequest httpServletRequest, Map<String, Service.StrArr> headerMap) {
+
+        List<String> headerNames = Collections.list(httpServletRequest.getHeaderNames());
+        for (String name : headerNames) {
+
+            List<String> values = Collections.list(httpServletRequest.getHeaders(name));
+            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+
+            for (int i = 0; i < values.size(); i++) {
+                builder.setValue(i, values.get(i));
+            }
+            Service.StrArr value = builder.build();
+
+            headerMap.put(name, value);
+        }
     }
 
     public String start(int Total) {
@@ -79,9 +180,8 @@ class Keploy {
     public void check() {
 
     }
-}
 
-public class GrpcClient {
+
     public static void main(String[] args) {
         String target = "localhost:8081";
         ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
@@ -100,9 +200,11 @@ public class GrpcClient {
 //        System.out.println(testCase);
 //       Service.getTCSResponse testcases =  stub.getTCS(Service.getTCSRequest.newBuilder().setApp("sample-url-shortener").setOffset("0").setLimit("25").build());
 //        System.out.println(testcases);
-        Keploy k = new Keploy(channel);
+        GrpcClient k = new GrpcClient(channel);
         List<Service.getTCSResponse> testCases = k.fetch();
         System.out.println(testCases);
         System.out.println(testCases.size());
     }
+
+
 }

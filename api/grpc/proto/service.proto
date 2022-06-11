@@ -6,7 +6,7 @@ package services;
 message Dependency {
   string Name = 1;
   string Type = 2;
-  map<string,string> Meta = 3;
+  map<string, string> Meta = 3;
   repeated DataBytes Data = 4;
 }
 
@@ -63,7 +63,7 @@ message HttpReq {
   int64 ProtoMajor = 2;
   int64 ProtoMinor = 3;
   string URL = 4;
-  map<string,string> URLParams = 5;
+  map<string, string> URLParams = 5;
   map<string, StrArr> Header = 6;
   string Body = 7;
 }
@@ -74,7 +74,7 @@ message StrArr {
 
 message HttpResp {
   int64 StatusCode = 1;
-  map<string, StrArr> Header  = 2;
+  map<string, StrArr> Header = 2;
   string Body = 3;
 }
 
@@ -103,19 +103,19 @@ message getTCRequest {
 message getTCSRequest{
   string app = 1;
   string  offset = 2;
-  string limit  = 3;
+  string limit = 3;
 }
 message getTCSResponse{
   repeated TestCase tcs = 1;
 }
 message postTCResponse{
-  map<string,string> tcsId = 1;
+  map<string, string> tcsId = 1;
 }
 message deNoiseResponse {
   string message = 1;
 }
 message testResponse{
-  map<string,bool> pass = 1;
+  map<string, bool> pass = 1;
 }
 
 

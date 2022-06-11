@@ -12,13 +12,13 @@ import javax.servlet.http.HttpServletRequest;
 public class Context {
     private static ThreadLocal<HttpServletRequest> ctx = new ThreadLocal<>();
 
-    public void setCtx(HttpServletRequest httpServletRequest){
+    public static void setCtx(HttpServletRequest httpServletRequest){
         ctx.set(httpServletRequest);
     }
-    public HttpServletRequest getCtx(){
+    public static HttpServletRequest getCtx(){
         return ctx.get();
     }
-    public void cleanup(){
+    public static void cleanup(){
         ctx.set(null);
     }
 }
