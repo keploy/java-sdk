@@ -1,8 +1,7 @@
-import grpc.GrpcClient;
 import io.github.cdimascio.dotenv.Dotenv;
+import keploy.Keploy;
 import keploy.KeployInstance;
 import keploy.context.Context;
-import keploy.keploy.Keploy;
 import keploy.mode;
 import stubs.Service;
 
@@ -53,7 +52,7 @@ public class middleware implements Filter {
 
         //getting url params map
 
-        Map<String, String> urlParams = setUrlParams((Map<String, String>) httpServletRequestWrapper.getParameterMap());
+        Map<String, String> urlParams = setUrlParams(httpServletRequestWrapper.getParameterMap());
 
         HttpServletResponseWrapper httpServletResponseWrapper = new HttpServletResponseWrapper((HttpServletResponse) servletResponse);
 
@@ -97,22 +96,16 @@ public class middleware implements Filter {
         }
     }
 
-    public Map<String, String> setUrlParams(Map<String, String> param) {
+    public Map<String, String> setUrlParams(Map<String, String[]> param) {
         Map<String, String> urlParams = new HashMap<>();
 
         for (String key : param.keySet()) {
-            String strings = param.get(key);
-
-//            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
-//            for (int i = 0; i < strings.length; i++) {
-//                builder.setValue(i, strings[i]);
-//            }
-//            String value = builder.build();
-            urlParams.put(key, strings);
+            //taking only value of the parameter
+            String value = param.get(key)[0];
+            urlParams.put(key, value);
         }
         return urlParams;
     }
-
 
     @Override
     public void destroy() {

@@ -1,27 +1,21 @@
-package grpc;
-
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import keploy.Keploy;
 import keploy.KeployInstance;
 import keploy.context.Context;
-import keploy.keploy.Keploy;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
 import javax.servlet.http.HttpServletRequest;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -61,51 +55,53 @@ public class GrpcClient {
 
     }
 
-    public String simulate() {
-        String targetURL = Service.HttpReq.newBuilder().getURL();
-        String body = Service.HttpReq.newBuilder().getBody();
-        String method = Service.HttpReq.newBuilder().getMethod();
-        HttpURLConnection connection = null;
+    public String denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
 
+        Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
+        testCaseBuilder.setId(id);
+        testCaseBuilder.setCaptured(testCaseReq.getCaptured());
+        testCaseBuilder.setURI(testCaseReq.getURI());
+        testCaseBuilder.setHttpReq(testCaseReq.getHttpReq());
+        Service.TestCase testCase = testCaseBuilder.build();
+
+        simulate(testCase);
+
+
+        return "denoise successfull";
+    }
+
+    public String simulate(Service.TestCase testCase) throws Exception {
+
+
+        String url = testCase.getHttpReq().getURL();
+        String host = KeployInstance.getInstance().getKeploy().getCfg().getApp().getHost();
+        String port = KeployInstance.getInstance().getKeploy().getCfg().getApp().getPort();
+        String method = testCase.getHttpReq().getMethod();
+        String body = testCase.getHttpReq().getBody();
+
+        String targetUrl = "http://" + host + ":" + port + url;
+
+        HttpRequest req = HttpRequest.newBuilder(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+        Map<String, List<String>> headerMap = req.headers().map();
+        convertHeaderMap(testCase.getHttpReq().getHeaderMap(), headerMap);
+
+        HttpClient client = HttpClient.newHttpClient();
         try {
-            //Create connection
-            URL url = new URL(targetURL);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod(method);
-            connection.setRequestProperty("Content-Type",
-                    "application/x-www-form-urlencoded");
-
-            connection.setRequestProperty("Content-Length",
-                    Integer.toString(urlParameters.getBytes().length));
-            connection.setRequestProperty("Content-Language", "en-US");
-
-            connection.setUseCaches(false);
-            connection.setDoOutput(true);
-            //Send request
-            DataOutputStream wr = new DataOutputStream(
-                    connection.getOutputStream());
-            wr.writeBytes(urlParameters);
-            wr.close();
-
-            //Get Response
-            InputStream is = connection.getInputStream();
-            BufferedReader rd = new BufferedReader(new InputStreamReader(is));
-            StringBuilder response = new StringBuilder(); // or StringBuffer if Java version 5+
-            String line;
-            while ((line = rd.readLine()) != null) {
-                response.append(line);
-                response.append('\r');
-            }
-            rd.close();
-            return response.toString();
+            HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
-            e.printStackTrace();
-            return null;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+            logger.info("failed sending testcase request to app");
+            throw new Exception(e);
         }
+
+        return "success";
+    }
+
+    //converting  Map<String,Service.StrArr> to Map<String,List<String>
+    public void convertHeaderMap(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
+//        for(String key:srcMap.keySet()){
+//            srcMap.get(key).
+//            destMap.put(key,null);
+//        }
     }
 
     public void GetResp() {
