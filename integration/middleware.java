@@ -73,7 +73,7 @@ public class middleware implements Filter {
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
         setResponseHeaderMap(httpServletResponseWrapper, headerMap);
-        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(reqBody.toString()).build();
+        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(resBody.toString()).build();
 
         grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
     }

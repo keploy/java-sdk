@@ -1,5 +1,3 @@
-package grpc;
-
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -10,8 +8,11 @@ import keploy.context.Context;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
+import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
-import java.io.IOException;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletResponseWrapper;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 public class GrpcClient {
 
@@ -72,7 +74,7 @@ public class GrpcClient {
         return "denoise successfull";
     }
 
-    public String simulate(Service.TestCase testCase) throws Exception {
+    public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
 
         String url = testCase.getHttpReq().getURL();
         String host = KeployInstance.getInstance().getKeploy().getCfg().getApp().getHost();
@@ -82,44 +84,103 @@ public class GrpcClient {
 
         String targetUrl = "http://" + host + ":" + port + url;
 
-        HttpRequest req = HttpRequest.newBuilder(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+        HttpRequest req = HttpRequest.newBuilder(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+
         Map<String, List<String>> headerMap = req.headers().map();
-        convertHeaderMap(testCase.getHttpReq().getHeaderMap(), headerMap);
+        convertHeaderMap_StrArrToList(testCase.getHttpReq().getHeaderMap(), headerMap);
 
         HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> response;
         try {
-            HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
+            response = client.send(req, HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             logger.info("failed sending testcase request to app");
             throw new Exception(e);
         }
+        Service.HttpResp resp = GetResp(testCase.getId());
 
-        return "success";
+        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.body())) {
+            resp.newBuilder().setBody(response.body());
+            resp.newBuilder().setStatusCode(response.statusCode());
+            convertHeaderMap_ListToStrArr(response.headers().map(), resp.getHeaderMap());
+        }
+
+        return resp;
     }
 
-    //converting  Map<String,Service.StrArr> to Map<String,List<String>
-    public void convertHeaderMap(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
-//        for(String key:srcMap.keySet()){
-//            srcMap.get(key).
-//            destMap.put(key,null);
-//        }
-        for(String key:srcMap.keySet()){
-           var value = srcMap.get(key);
-            List<String> headervalues = new ArrayList<>();
-            for (int i = 0;; i++) {
-                try {
-                    String v = value.getValue(i);
-                    headervalues.add(v);
-                }catch (Exception e){
-                    break;
-                }
+    //converting  Map<String,List<String>> to Map<String,Service.StrArr>
+    public void convertHeaderMap_ListToStrArr(Map<String, List<String>> srcMap, Map<String, Service.StrArr> destMap) {
+        for (String key : srcMap.keySet()) {
+            List<String> values = srcMap.get(key);
+            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+            for (int i = 0; i < values.size(); i++) {
+                builder.setValue(i, values.get(i));
             }
-            destMap.put(key,headervalues);
+            Service.StrArr value = builder.build();
+            destMap.put(key, value);
         }
     }
 
-    public void GetResp() {
+    //converting  Map<String,Service.StrArr> to Map<String,List<String>>
+    public void convertHeaderMap_StrArrToList(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
 
+        for (String key : srcMap.keySet()) {
+            var value = srcMap.get(key);
+            List<String> headervalues = new ArrayList<>();
+            for (int i = 0; ; i++) {
+                try {
+                    String v = value.getValue(i);
+                    headervalues.add(v);
+                } catch (Exception e) {
+                    break;
+                }
+            }
+            destMap.put(key, headervalues);
+        }
+    }
+
+    public Service.HttpResp GetResp(String id) {
+
+        Keploy k = KeployInstance.getInstance().getKeploy();
+
+        HttpServletResponse httpServletResponse = k.getResp().get(id);
+        if (httpServletResponse == null) {
+            return Service.HttpResp.newBuilder().build();
+        }
+
+        ByteArrayOutputStream byteArrayRes = new ByteArrayOutputStream();
+        byte[] resBody = byteArrayRes.toByteArray();
+        try {
+            ServletOutputStream resStream = httpServletResponse.getOutputStream();
+            resStream.write(resBody);
+
+        } catch (Exception e) {
+            logger.severe("Failed to get response ");
+        }
+        Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
+        Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
+
+        setResponseHeaderMap(httpServletResponse, headerMap);
+        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody.toString()).build();
+        return httpResp;
+    }
+
+    public void setResponseHeaderMap(HttpServletResponse httpServletResponse, Map<String, Service.StrArr> headerMap) {
+
+        List<String> headerNames = httpServletResponse.getHeaderNames().stream().collect(Collectors.toList());
+
+        for (String name : headerNames) {
+
+            List<String> values = httpServletResponse.getHeaders(name).stream().collect(Collectors.toList());
+            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+
+            for (int i = 0; i < values.size(); i++) {
+                builder.setValue(i, values.get(i));
+            }
+            Service.StrArr value = builder.build();
+
+            headerMap.put(name, value);
+        }
     }
 
     public void Test() {
