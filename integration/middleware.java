@@ -1,6 +1,10 @@
-import context.Context;
+import grpc.GrpcClient;
 import io.github.cdimascio.dotenv.Dotenv;
-import keploy.Keploy;
+import keploy.KeployInstance;
+import keploy.context.Context;
+import keploy.keploy.Keploy;
+import keploy.mode;
+import stubs.Service;
 
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
@@ -9,7 +13,10 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpServletResponseWrapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 
 public class middleware implements Filter {
@@ -28,10 +35,11 @@ public class middleware implements Filter {
 
         if (k == null || dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE").equals(new mode().getMode().MODE_OFF.getTypeName())) {
             filterChain.doFilter(servletRequest, servletResponse);
+            return;
         }
 
         //setting request context
-        Context.setCtx((HttpServletRequest)servletRequest);
+        Context.setCtx((HttpServletRequest) servletRequest);
 
         HttpServletRequestWrapper httpServletRequestWrapper = new HttpServletRequestWrapper((HttpServletRequest) servletRequest);
 
@@ -44,10 +52,12 @@ public class middleware implements Filter {
         reqStream.read(reqBody);
 
         //getting url params map
-        Map params = httpServletRequestWrapper.getParameterMap();
+
+        Map<String, String> urlParams = setUrlParams((Map<String, String>) httpServletRequestWrapper.getParameterMap());
 
         HttpServletResponseWrapper httpServletResponseWrapper = new HttpServletResponseWrapper((HttpServletResponse) servletResponse);
 
+        //calling next
         filterChain.doFilter(httpServletRequestWrapper, httpServletResponseWrapper);
 
         ServletOutputStream resStream = httpServletResponseWrapper.getOutputStream();
@@ -58,8 +68,51 @@ public class middleware implements Filter {
         //to capture response body
         resStream.write(resBody);
 
+        GrpcClient grpcClient = new GrpcClient();
 
+        Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
+        Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
+
+        setResponseHeaderMap(httpServletResponseWrapper, headerMap);
+        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(reqBody.toString()).build();
+
+        grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
     }
+
+    public void setResponseHeaderMap(HttpServletResponseWrapper httpServletResponseWrapper, Map<String, Service.StrArr> headerMap) {
+
+        List<String> headerNames = httpServletResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
+
+        for (String name : headerNames) {
+
+            List<String> values = httpServletResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
+            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+
+            for (int i = 0; i < values.size(); i++) {
+                builder.setValue(i, values.get(i));
+            }
+            Service.StrArr value = builder.build();
+
+            headerMap.put(name, value);
+        }
+    }
+
+    public Map<String, String> setUrlParams(Map<String, String> param) {
+        Map<String, String> urlParams = new HashMap<>();
+
+        for (String key : param.keySet()) {
+            String strings = param.get(key);
+
+//            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+//            for (int i = 0; i < strings.length; i++) {
+//                builder.setValue(i, strings[i]);
+//            }
+//            String value = builder.build();
+            urlParams.put(key, strings);
+        }
+        return urlParams;
+    }
+
 
     @Override
     public void destroy() {

@@ -1,4 +1,4 @@
-package keploy;
+package keploy.keploy;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -6,7 +6,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
-class Filter {
+public class Filter {
     private String UrlRegex;
     private String[] HeaderRegex;
 

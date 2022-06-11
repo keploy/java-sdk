@@ -1,4 +1,4 @@
-package context;
+package keploy.context;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;

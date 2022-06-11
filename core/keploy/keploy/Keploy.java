@@ -1,4 +1,4 @@
-package keploy;
+package keploy.keploy;
 
 import lombok.Getter;
 import lombok.Setter;

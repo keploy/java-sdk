@@ -1,4 +1,4 @@
-package keploy;
+package keploy.keploy;
 
 
 import lombok.Getter;
@@ -9,7 +9,7 @@ import java.time.Duration;
 @Getter
 @Setter
 @NoArgsConstructor
-class AppConfig {
+public class AppConfig {
 
     private String Name;
     private String Host = "0.0.0.0";

@@ -1,4 +1,4 @@
-package keploy;
+package keploy.keploy;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -6,7 +6,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
-class ServerConfig {
+public class ServerConfig {
     private String URL = "https://api.keploy.io";
     private String LicenseKey;
 

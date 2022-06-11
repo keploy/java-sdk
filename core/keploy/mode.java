@@ -1,3 +1,5 @@
+package keploy;
+
 public class mode {
 
     private ModeType Mode;
