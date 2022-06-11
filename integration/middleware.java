@@ -3,6 +3,7 @@ import keploy.Keploy;
 import keploy.KeployInstance;
 import keploy.context.Context;
 import keploy.mode;
+import org.springframework.stereotype.Component;
 import stubs.Service;
 
 import javax.servlet.*;
@@ -18,6 +19,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 
+@Component
 public class middleware implements Filter {
 
 
@@ -75,7 +77,11 @@ public class middleware implements Filter {
         setResponseHeaderMap(httpServletResponseWrapper, headerMap);
         Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(resBody.toString()).build();
 
-        grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
+        try {
+            grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public void setResponseHeaderMap(HttpServletResponseWrapper httpServletResponseWrapper, Map<String, Service.StrArr> headerMap) {

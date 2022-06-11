@@ -75,19 +75,8 @@ public class GrpcClient {
         testReqBuilder.setAppID(KeployInstance.getInstance().getKeploy().getCfg().getApp().getName());
         Service.TestReq bin2 = testReqBuilder.build();
 
-        String url = KeployInstance.getInstance().getKeploy().getCfg().getServer().getURL() + "/regression/denoise";
-        HttpRequest r = HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(bin2.toString())).setHeader("Content-Type", "application/json").build();
-
-
-        HttpClient client = HttpClient.newHttpClient();
-        HttpResponse<String> response;
-
-        try {
-            response = client.send(r, HttpResponse.BodyHandlers.ofString());
-        } catch (Exception e) {
-            logger.info("failed to send de-noise request to backend");
-            throw new Exception(e);
-        }
+        // send de-noise request to server
+        Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
     }
 
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
@@ -120,7 +109,6 @@ public class GrpcClient {
             resp.newBuilder().setStatusCode(response.statusCode());
             convertHeaderMap_ListToStrArr(response.headers().map(), resp.getHeaderMap());
         }
-
         return resp;
     }
 
@@ -204,7 +192,7 @@ public class GrpcClient {
         List<Service.getTCSResponse> tcs = fetch();
     }
 
-    public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) {
+    public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
 
         HttpServletRequest ctxReq = Context.getCtx();
         if (ctxReq == null) {
@@ -212,7 +200,7 @@ public class GrpcClient {
             return;
         }
 
-        Service.TestCaseReq.Builder testCaseBuilder = Service.TestCaseReq.newBuilder();
+        Service.TestCaseReq.Builder testCaseReqBuilder = Service.TestCaseReq.newBuilder();
         Keploy k = ki.getInstance().getKeploy();
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
@@ -226,13 +214,26 @@ public class GrpcClient {
         Service.HttpReq httpReq = httpReqBuilder.build();
 
 
-        testCaseBuilder.setAppID(k.getCfg().getApp().getName());
-        testCaseBuilder.setCaptured(Instant.now().getEpochSecond());
-        testCaseBuilder.setURI(ctxReq.getRequestURI());
-        testCaseBuilder.setHttpResp(httpResp);
-        testCaseBuilder.setHttpReq(httpReq);
+        testCaseReqBuilder.setAppID(k.getCfg().getApp().getName());
+        testCaseReqBuilder.setCaptured(Instant.now().getEpochSecond());
+        testCaseReqBuilder.setURI(ctxReq.getRequestURI());
+        testCaseReqBuilder.setHttpResp(httpResp);
+        testCaseReqBuilder.setHttpReq(httpReq);
 
-        blockingStub.postTC(testCaseBuilder.build());
+        Capture(testCaseReqBuilder.build());
+    }
+
+    public void Capture(Service.TestCaseReq testCaseReq) throws Exception {
+        put(testCaseReq);
+    }
+
+    public void put(Service.TestCaseReq testCaseReq) throws Exception {
+        Service.postTCResponse postTCResponse = blockingStub.postTC(testCaseReq);
+        Map<String, String> tcsId = postTCResponse.getTcsIdMap();
+        String id = tcsId.get("id");
+
+        if (id == null) return;
+        denoise(id, testCaseReq);
     }
 
 
