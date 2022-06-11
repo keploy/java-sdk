@@ -59,7 +59,7 @@ public class GrpcClient {
 
     }
 
-    public String denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
+    public void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
 
         Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
         testCaseBuilder.setId(id);
@@ -68,10 +68,27 @@ public class GrpcClient {
         testCaseBuilder.setHttpReq(testCaseReq.getHttpReq());
         Service.TestCase testCase = testCaseBuilder.build();
 
-        simulate(testCase);
+        Service.HttpResp resp2 = simulate(testCase);
+
+        Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
+        testReqBuilder.setAppID(id);
+        testReqBuilder.setResp(resp2);
+        testReqBuilder.setAppID(KeployInstance.getInstance().getKeploy().getCfg().getApp().getName());
+        Service.TestReq bin2 = testReqBuilder.build();
+
+        String url = KeployInstance.getInstance().getKeploy().getCfg().getServer().getURL() + "/regression/denoise";
+        HttpRequest r = HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.ofString(bin2.toString())).setHeader("Content-Type", "application/json").build();
 
 
-        return "denoise successfull";
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> response;
+
+        try {
+            response = client.send(r, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            logger.info("failed to send de-noise request to backend");
+            throw new Exception(e);
+        }
     }
 
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
