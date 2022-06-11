@@ -1,7 +1,4 @@
-package keploy;
-
-
-import keploy.keploy.Keploy;
+import keploy.Keploy;
 
 public class KeployInstance {
     private static keploy.Keploy keploy;
