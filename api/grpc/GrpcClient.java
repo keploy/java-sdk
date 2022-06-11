@@ -1,3 +1,5 @@
+package grpc;
+
 import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -72,7 +74,6 @@ public class GrpcClient {
 
     public String simulate(Service.TestCase testCase) throws Exception {
 
-
         String url = testCase.getHttpReq().getURL();
         String host = KeployInstance.getInstance().getKeploy().getCfg().getApp().getHost();
         String port = KeployInstance.getInstance().getKeploy().getCfg().getApp().getPort();
@@ -102,6 +103,19 @@ public class GrpcClient {
 //            srcMap.get(key).
 //            destMap.put(key,null);
 //        }
+        for(String key:srcMap.keySet()){
+           var value = srcMap.get(key);
+            List<String> headervalues = new ArrayList<>();
+            for (int i = 0;; i++) {
+                try {
+                    String v = value.getValue(i);
+                    headervalues.add(v);
+                }catch (Exception e){
+                    break;
+                }
+            }
+            destMap.put(key,headervalues);
+        }
     }
 
     public void GetResp() {
@@ -109,7 +123,8 @@ public class GrpcClient {
     }
 
     public void Test() {
-
+        logger.info("test starting in 5 sec");
+        List<Service.getTCSResponse> tcs = fetch();
     }
 
     public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) {
