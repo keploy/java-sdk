@@ -1,14 +1,17 @@
+import context.Context;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import keploy.Keploy;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import regression.KeployInstance;
-import regression.context.Context;
 import regression.keploy.Keploy;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
+import java.util.ArrayList;
+import java.util.List;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -19,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class GrpcClient {
@@ -43,9 +47,9 @@ public class GrpcClient {
 //    }
 
 
-    public List<Service.getTCSResponse> fetch() {
+    public List<Service.TestCase> fetch() {
 
-        List<Service.getTCSResponse> testCases = new ArrayList<>();
+        List<Service.TestCase> testCases = new ArrayList<>();
         for (int i = 0; ; i += 25) {
             try {
                 Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder().setApp("sample-url-shortener").setLimit("25").setOffset(String.valueOf(i)).build();
@@ -54,7 +58,8 @@ public class GrpcClient {
                 if (cnt == 0) {
                     break;
                 }
-                testCases.add(tcs);
+                List<Service.TestCase> tc = tcs.getTcsList();
+                testCases.addAll(tc);
             } catch (StatusRuntimeException e) {
                 logger.warn("RPC failed: {0}", e.getStatus());
                 return null;
@@ -193,9 +198,35 @@ public class GrpcClient {
         }
     }
 
-    public void Test() {
+    public void Test() throws Exception {
+        TimeUnit.SECONDS.sleep(5);
         logger.info("test starting in 5 sec");
-        List<Service.getTCSResponse> tcs = fetch();
+
+        List<Service.TestCase> tcs = fetch();
+        int total = tcs.size();
+        String id;
+        try {
+            id = start(total);
+        } catch (Exception e) {
+            logger.info("Failed to start test run ", e);
+            return;
+        }
+        logger.info("starting test execution " + "id: " + id + "total tests: " + total);
+        boolean ok = false;
+        for (int i = 0; i < tcs.size(); i++) {
+            Service.TestCase tc = tcs.get(i);
+            logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
+            Service.TestCase tcCopy = tc;
+            ok = check(id, tcCopy);
+            logger.info("Result", "testcase id ", tcCopy.getId(), "passed ", ok);
+        }
+        String msg = end(id, ok);
+        if (msg == null) {
+            logger.error("failed to end test run");
+            return;
+        }
+        logger.info("test run completed", "run id", id + "passed overall", ok);
+
     }
 
     public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
@@ -272,8 +303,15 @@ public class GrpcClient {
         return endResponse.getMessage();
     }
 
-    public void check() {
+    public boolean check(String runId, Service.TestCase tc) throws Exception {
+        Keploy k = ki.getInstance().getKeploy();
+        Service.HttpResp resp = simulate(tc);
+        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(KeployInstance.getKeploy().getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
+        Service.testResponse testResponse = blockingStub.test(testReq);
+        Map<String, Boolean> res = testResponse.getPassMap();
+        return res.get("pass");
 
+        return false;
     }
 
 //    public static void main(String[] args) {
