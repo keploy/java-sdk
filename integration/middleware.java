@@ -1,6 +1,6 @@
 import regression.context.Context;
 import io.github.cdimascio.dotenv.Dotenv;
-import keploy.Keploy;
+import regression.keploy.Keploy;
 import org.springframework.stereotype.Component;
 import regression.KeployInstance;
 import regression.mode;
