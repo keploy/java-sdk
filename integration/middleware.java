@@ -1,11 +1,10 @@
+import regression.context.Context;
 import io.github.cdimascio.dotenv.Dotenv;
 import keploy.Keploy;
-import keploy.KeployInstance;
-import keploy.context.Context;
-import keploy.mode;
 import org.springframework.stereotype.Component;
+import regression.KeployInstance;
+import regression.mode;
 import stubs.Service;
-
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
@@ -33,8 +32,9 @@ public class middleware implements Filter {
         Keploy k = ki.getKeploy();
 
         Dotenv dotenv = Dotenv.load();
+//        dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE")
 
-        if (k == null || dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE").equals(new mode().getMode().MODE_OFF.getTypeName())) {
+        if (k == null || ("record").equals(new mode().getMode().MODE_OFF.getTypeName())) {
             filterChain.doFilter(servletRequest, servletResponse);
             return;
         }

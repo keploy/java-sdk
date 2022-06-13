@@ -1,8 +1,9 @@
-package keploy;
+package regression.keploy;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+
 
 @Getter
 @Setter

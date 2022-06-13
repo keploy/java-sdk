@@ -1,5 +1,4 @@
-package keploy;
-
+package regression;
 public class mode {
 
     private ModeType Mode;

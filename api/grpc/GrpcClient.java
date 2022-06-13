@@ -1,11 +1,11 @@
-import context.Context;
-import io.grpc.Channel;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
-import keploy.Keploy;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import regression.KeployInstance;
+import regression.context.Context;
+import regression.keploy.Keploy;
 import stubs.RegressionServiceGrpc;
 import stubs.Service;
 
