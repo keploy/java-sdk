@@ -66,18 +66,18 @@
                             <includeMavenTypes>direct</includeMavenTypes>
 
                             <inputDirectories>
-                                <include>grpc/proto</include>
+                                <include>src/main/java/io/keploy/grpc/proto</include>
                             </inputDirectories>
 
                             <outputTargets>
                                 <outputTarget>
                                     <type>java</type>
-                                    <outputDirectory>grpc</outputDirectory>
+                                    <outputDirectory>src/main/java</outputDirectory>
                                 </outputTarget>
                                 <outputTarget>
                                     <type>grpc-java</type>
                                     <pluginArtifact>io.grpc:protoc-gen-grpc-java:1.45.0</pluginArtifact>
-                                    <outputDirectory>grpc</outputDirectory>
+                                    <outputDirectory>src/main/java</outputDirectory>
                                 </outputTarget>
                             </outputTargets>
                         </configuration>

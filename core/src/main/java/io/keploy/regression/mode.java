@@ -1,4 +1,4 @@
-package regression;
+package io.keploy.regression;
 public class mode {
 
     private ModeType Mode;

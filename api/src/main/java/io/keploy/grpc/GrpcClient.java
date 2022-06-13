@@ -1,14 +1,15 @@
-import context.Context;
+package io.keploy.grpc;
+
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
-import keploy.Keploy;
+import io.keploy.grpc.stubs.RegressionServiceGrpc;
+import io.keploy.grpc.stubs.Service;
+import io.keploy.regression.KeployInstance;
+import io.keploy.regression.context.Context;
+import io.keploy.regression.keploy.Keploy;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import regression.KeployInstance;
-import regression.keploy.Keploy;
-import stubs.RegressionServiceGrpc;
-import stubs.Service;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -304,14 +305,12 @@ public class GrpcClient {
     }
 
     public boolean check(String runId, Service.TestCase tc) throws Exception {
-        Keploy k = ki.getInstance().getKeploy();
+        Keploy k = KeployInstance.getInstance().getKeploy();
         Service.HttpResp resp = simulate(tc);
         Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(KeployInstance.getKeploy().getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();
         return res.get("pass");
-
-        return false;
     }
 
 //    public static void main(String[] args) {

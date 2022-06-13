@@ -1,4 +1,4 @@
-package regression.keploy;
+package io.keploy.regression.keploy;
 
 import lombok.Getter;
 import lombok.Setter;

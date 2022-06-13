@@ -1,4 +1,4 @@
-package regression.context;
+package io.keploy.regression.context;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;

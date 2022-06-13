@@ -1,5 +1,6 @@
-package regression;
-import regression.keploy.Keploy;
+package io.keploy.regression;
+import io.keploy.regression.keploy.Keploy;
+
 public class KeployInstance {
     private static Keploy keploy;
 

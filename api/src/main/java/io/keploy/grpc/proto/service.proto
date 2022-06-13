@@ -1,5 +1,5 @@
 syntax = "proto3";
-option java_package = "stubs";
+option java_package = "io.keploy.grpc.stubs";
 option go_package = "go.keploy.io/server/grpc/regression";
 package services;
 

@@ -1,10 +1,13 @@
-import regression.context.Context;
+package io.keploy;
+
+import io.keploy.grpc.GrpcClient;
+import io.keploy.grpc.stubs.Service;
+import io.keploy.regression.KeployInstance;
+import io.keploy.regression.context.Context;
+import io.keploy.regression.keploy.Keploy;
+import io.keploy.regression.mode;
 import io.github.cdimascio.dotenv.Dotenv;
-import regression.keploy.Keploy;
 import org.springframework.stereotype.Component;
-import regression.KeployInstance;
-import regression.mode;
-import stubs.Service;
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
