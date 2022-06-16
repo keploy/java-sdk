@@ -1,4 +1,4 @@
-package io.keploy;
+package io.keploy.servlet;
 
 import io.keploy.grpc.GrpcClient;
 import io.keploy.grpc.stubs.Service;
@@ -34,7 +34,10 @@ public class middleware implements Filter {
         KeployInstance ki = KeployInstance.getInstance();
         Keploy k = ki.getKeploy();
 
-        Dotenv dotenv = Dotenv.load();
+        System.out.println("Inside Keploy middleware: incoming request");
+        System.out.println("Keploy instance-> "+ k.getCfg().getApp().toString());
+
+//        Dotenv dotenv = Dotenv.load();
 //        dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE")
 
         if (k == null || ("record").equals(new mode().getMode().MODE_OFF.getTypeName())) {
@@ -79,6 +82,8 @@ public class middleware implements Filter {
 
         setResponseHeaderMap(httpServletResponseWrapper, headerMap);
         Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(resBody.toString()).build();
+
+        System.out.println("Inside Keploy middleware: outgoing response");
 
         try {
             grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
