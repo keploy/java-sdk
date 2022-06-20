@@ -15,10 +15,8 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
-import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -128,15 +126,17 @@ public class GrpcClient {
 
     //converting  Map<String,List<String>> to Map<String,Service.StrArr>
     public void convertHeaderMap_ListToStrArr(Map<String, List<String>> srcMap, Map<String, Service.StrArr> destMap) {
+        Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
             List<String> values = srcMap.get(key);
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
             for (int i = 0; i < values.size(); i++) {
-                builder.setValue(i, values.get(i));
+                builder.addValue(values.get(i));
             }
             Service.StrArr value = builder.build();
-            destMap.put(key, value);
+            map.put(key, value);
         }
+        destMap = map;
     }
 
     //converting  Map<String,Service.StrArr> to Map<String,List<String>>
@@ -179,13 +179,14 @@ public class GrpcClient {
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
-        setResponseHeaderMap(httpServletResponse, headerMap);
+        headerMap = getResponseHeaderMap(httpServletResponse);
         Service.HttpResp httpResp = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody).build();
         return httpResp;
     }
 
-    public void setResponseHeaderMap(HttpServletResponse httpServletResponse, Map<String, Service.StrArr> headerMap) {
+    public Map<String, Service.StrArr> getResponseHeaderMap(HttpServletResponse httpServletResponse) {
 
+        Map<String, Service.StrArr> map = new HashMap<>();
         List<String> headerNames = httpServletResponse.getHeaderNames().stream().collect(Collectors.toList());
 
         for (String name : headerNames) {
@@ -194,12 +195,13 @@ public class GrpcClient {
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (int i = 0; i < values.size(); i++) {
-                builder.setValue(i, values.get(i));
+                builder.addValue(values.get(i));
             }
             Service.StrArr value = builder.build();
 
-            headerMap.put(name, value);
+            map.put(name, value);
         }
+        return map;
     }
 
     public void Test() throws Exception {
@@ -250,7 +252,7 @@ public class GrpcClient {
         urlParamsMap = params;
 
         Map<String, Service.StrArr> headerMap = httpReqBuilder.getHeaderMap();
-        setRequestHeaderMap(ctxReq, headerMap);
+        headerMap = getRequestHeaderMap(ctxReq);
         httpReqBuilder.setBody(reqBody);
         Service.HttpReq httpReq = httpReqBuilder.build();
 
@@ -278,7 +280,9 @@ public class GrpcClient {
     }
 
 
-    public void setRequestHeaderMap(HttpServletRequest httpServletRequest, Map<String, Service.StrArr> headerMap) {
+    public Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
+
+        Map<String, Service.StrArr> map = new HashMap<>();
 
         List<String> headerNames = Collections.list(httpServletRequest.getHeaderNames());
         for (String name : headerNames) {
@@ -287,12 +291,13 @@ public class GrpcClient {
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (int i = 0; i < values.size(); i++) {
-                builder.setValue(i, values.get(i));
+                builder.addValue(values.get(i));
             }
             Service.StrArr value = builder.build();
 
-            headerMap.put(name, value);
+            map.put(name, value);
         }
+        return map;
     }
 
     public String start(int Total) {

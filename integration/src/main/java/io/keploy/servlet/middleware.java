@@ -13,7 +13,6 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpServletResponseWrapper;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
@@ -74,7 +73,7 @@ public class middleware implements Filter {
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
-        setResponseHeaderMap(responseWrapper, headerMap);
+        headerMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).build();
 
         System.out.println("Inside Keploy middleware: outgoing response");
@@ -86,7 +85,9 @@ public class middleware implements Filter {
         }
     }
 
-    public void setResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper, Map<String, Service.StrArr> headerMap) {
+    public Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
+
+        Map<String, Service.StrArr> map = new HashMap<>();
 
         List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
 
@@ -96,12 +97,14 @@ public class middleware implements Filter {
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (int i = 0; i < values.size(); i++) {
-                builder.setValue(i, values.get(i));
+                System.out.println("values-> " + values);
+                builder.addValue(values.get(i));
             }
             Service.StrArr value = builder.build();
 
-            headerMap.put(name, value);
+            map.put(name, value);
         }
+        return map;
     }
 
     public Map<String, String> setUrlParams(Map<String, String[]> param) {
