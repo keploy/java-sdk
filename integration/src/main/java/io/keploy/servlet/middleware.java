@@ -6,15 +6,16 @@ import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.mode;
-import io.github.cdimascio.dotenv.Dotenv;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.web.util.ContentCachingResponseWrapper;
+
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpServletResponseWrapper;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +36,7 @@ public class middleware implements Filter {
         Keploy k = ki.getKeploy();
 
         System.out.println("Inside Keploy middleware: incoming request");
-        System.out.println("Keploy instance-> "+ k.getCfg().getApp().toString());
+        System.out.println("Keploy instance-> " + k.getCfg().getApp().toString());
 
 //        Dotenv dotenv = Dotenv.load();
 //        dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE")
@@ -45,60 +46,53 @@ public class middleware implements Filter {
             return;
         }
 
+        HttpServletRequest request = (HttpServletRequest) servletRequest;
+        HttpServletResponse response = (HttpServletResponse) servletResponse;
+
         //setting request context
-        Context.setCtx((HttpServletRequest) servletRequest);
+        Context.setCtx(request);
 
-        HttpServletRequestWrapper httpServletRequestWrapper = new HttpServletRequestWrapper((HttpServletRequest) servletRequest);
 
-        ServletInputStream reqStream = httpServletRequestWrapper.getInputStream();
-        ByteArrayOutputStream byteArrayReq = new ByteArrayOutputStream();
+        ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
+        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
 
-        byte[] reqBody = byteArrayReq.toByteArray();
 
-        //to capture request body
-        reqStream.read(reqBody);
+        filterChain.doFilter(requestWrapper, responseWrapper);
 
-        //getting url params map
 
-        Map<String, String> urlParams = setUrlParams(httpServletRequestWrapper.getParameterMap());
+        String requestBody = this.getStringValue(requestWrapper.getContentAsByteArray(), request.getCharacterEncoding());
+        String responseBody = this.getStringValue(responseWrapper.getContentAsByteArray(), response.getCharacterEncoding());
+        System.out.println("Request-> " + requestBody);
+        System.out.println("Response-> " + responseBody);
+        responseWrapper.copyBodyToResponse();
 
-        HttpServletResponseWrapper httpServletResponseWrapper = new HttpServletResponseWrapper((HttpServletResponse) servletResponse);
+        Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
 
-        //calling next
-        filterChain.doFilter(httpServletRequestWrapper, httpServletResponseWrapper);
-
-        ServletOutputStream resStream = httpServletResponseWrapper.getOutputStream();
-
-        ByteArrayOutputStream byteArrayRes = new ByteArrayOutputStream();
-        byte[] resBody = byteArrayRes.toByteArray();
-
-        //to capture response body
-        resStream.write(resBody);
 
         GrpcClient grpcClient = new GrpcClient();
 
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
-        setResponseHeaderMap(httpServletResponseWrapper, headerMap);
-        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponseWrapper.getStatus()).setBody(resBody.toString()).build();
+        setResponseHeaderMap(responseWrapper, headerMap);
+        Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).build();
 
         System.out.println("Inside Keploy middleware: outgoing response");
 
         try {
-            grpcClient.CaptureTestCases(ki, reqBody, resBody, urlParams, httpResp);
+            grpcClient.CaptureTestCases(ki, requestBody, responseBody, urlParams, httpResp);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    public void setResponseHeaderMap(HttpServletResponseWrapper httpServletResponseWrapper, Map<String, Service.StrArr> headerMap) {
+    public void setResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper, Map<String, Service.StrArr> headerMap) {
 
-        List<String> headerNames = httpServletResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
+        List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
 
         for (String name : headerNames) {
 
-            List<String> values = httpServletResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
+            List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (int i = 0; i < values.size(); i++) {
@@ -119,6 +113,15 @@ public class middleware implements Filter {
             urlParams.put(key, value);
         }
         return urlParams;
+    }
+
+    private String getStringValue(byte[] contentAsByteArray, String characterEncoding) {
+        try {
+            return new String(contentAsByteArray, 0, contentAsByteArray.length, characterEncoding);
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        return "";
     }
 
     @Override

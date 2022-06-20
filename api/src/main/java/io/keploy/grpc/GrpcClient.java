@@ -10,7 +10,9 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.servlet.ServletOutputStream;
@@ -164,11 +166,12 @@ public class GrpcClient {
             return Service.HttpResp.newBuilder().build();
         }
 
-        ByteArrayOutputStream byteArrayRes = new ByteArrayOutputStream();
-        byte[] resBody = byteArrayRes.toByteArray();
+        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(httpServletResponse);
+
+        String resBody = "";
         try {
-            ServletOutputStream resStream = httpServletResponse.getOutputStream();
-            resStream.write(resBody);
+            resBody = this.getStringValue(responseWrapper.getContentAsByteArray(), httpServletResponse.getCharacterEncoding());
+            responseWrapper.copyBodyToResponse();
 
         } catch (Exception e) {
             logger.error("Failed to get response ", e.getMessage());
@@ -177,7 +180,7 @@ public class GrpcClient {
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
         setResponseHeaderMap(httpServletResponse, headerMap);
-        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody.toString()).build();
+        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody).build();
         return httpResp;
     }
 
@@ -230,7 +233,7 @@ public class GrpcClient {
 
     }
 
-    public void CaptureTestCases(KeployInstance ki, byte[] reqBody, byte[] resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
+    public void CaptureTestCases(KeployInstance ki, String reqBody, String resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
 
         HttpServletRequest ctxReq = Context.getCtx();
         if (ctxReq == null) {
@@ -248,7 +251,7 @@ public class GrpcClient {
 
         Map<String, Service.StrArr> headerMap = httpReqBuilder.getHeaderMap();
         setRequestHeaderMap(ctxReq, headerMap);
-        httpReqBuilder.setBody(reqBody.toString());
+        httpReqBuilder.setBody(reqBody);
         Service.HttpReq httpReq = httpReqBuilder.build();
 
 
@@ -312,6 +315,16 @@ public class GrpcClient {
         Map<String, Boolean> res = testResponse.getPassMap();
         return res.get("pass");
     }
+
+    private String getStringValue(byte[] contentAsByteArray, String characterEncoding) {
+        try {
+            return new String(contentAsByteArray, 0, contentAsByteArray.length, characterEncoding);
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+
 
 //    public static void main(String[] args) {
 ////        String target = "localhost:8081";
