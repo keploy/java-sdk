@@ -34,6 +34,8 @@ public class GrpcClient {
 
     private ManagedChannel channel;
 
+    private Keploy k;
+
     public GrpcClient() {
         this.channel = ManagedChannelBuilder.forTarget("localhost:8081")
                 // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
@@ -41,6 +43,7 @@ public class GrpcClient {
                 .usePlaintext()
                 .build();
         this.blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
+        this.k = KeployInstance.getInstance().getKeploy();
     }
 
 //    public GrpcClient(Channel channel) {
@@ -49,11 +52,12 @@ public class GrpcClient {
 
 
     public List<Service.TestCase> fetch() {
+        logger.info("inside fetch function");
 
         List<Service.TestCase> testCases = new ArrayList<>();
         for (int i = 0; ; i += 25) {
             try {
-                Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder().setApp("sample-url-shortener").setLimit("25").setOffset(String.valueOf(i)).build();
+                Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setLimit("25").setOffset(String.valueOf(i)).build();
                 Service.getTCSResponse tcs = blockingStub.getTCS(tcsRequest);
                 int cnt = tcs.getTcsCount();
                 if (cnt == 0) {
@@ -84,7 +88,7 @@ public class GrpcClient {
         Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
         testReqBuilder.setAppID(id);
         testReqBuilder.setResp(resp2);
-        testReqBuilder.setAppID(KeployInstance.getInstance().getKeploy().getCfg().getApp().getName());
+        testReqBuilder.setAppID(k.getCfg().getApp().getName());
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server
@@ -95,8 +99,8 @@ public class GrpcClient {
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
 
         String url = testCase.getHttpReq().getURL();
-        String host = KeployInstance.getInstance().getKeploy().getCfg().getApp().getHost();
-        String port = KeployInstance.getInstance().getKeploy().getCfg().getApp().getPort();
+        String host = k.getCfg().getApp().getHost();
+        String port = k.getCfg().getApp().getPort();
         String method = testCase.getHttpReq().getMethod();
         String body = testCase.getHttpReq().getBody();
 
@@ -160,8 +164,6 @@ public class GrpcClient {
 
     public Service.HttpResp.Builder GetResp(String id) {
 
-        Keploy k = KeployInstance.getInstance().getKeploy();
-
         HttpServletResponse httpServletResponse = k.getResp().get(id);
         if (httpServletResponse == null) {
             return Service.HttpResp.newBuilder();
@@ -213,7 +215,7 @@ public class GrpcClient {
         int total = tcs.size();
         String id;
         try {
-            id = start(total);
+            id = start(String.valueOf(total));
         } catch (Exception e) {
             logger.info("Failed to start test run ", e);
             return;
@@ -245,7 +247,6 @@ public class GrpcClient {
         }
 
         Service.TestCaseReq.Builder testCaseReqBuilder = Service.TestCaseReq.newBuilder();
-        Keploy k = ki.getInstance().getKeploy();
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
         httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
@@ -301,22 +302,21 @@ public class GrpcClient {
         return map;
     }
 
-    public String start(int Total) {
-        Service.startRequest startRequest = Service.startRequest.newBuilder().setApp("mhApp").setTotal("2").build();
+    public String start(String total) {
+        Service.startRequest startRequest = Service.startRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setTotal(total).build();
         Service.startResponse startResponse = blockingStub.start(startRequest);
         return startResponse.getId();
     }
 
     public String end(String id, boolean status) {
-        Service.endRequest endRequest = Service.endRequest.newBuilder().setId("123").setStatus("OK").build();
+        Service.endRequest endRequest = Service.endRequest.newBuilder().setId(id).setStatus(String.valueOf(status)).build();
         Service.endResponse endResponse = blockingStub.end(endRequest);
         return endResponse.getMessage();
     }
 
     public boolean check(String runId, Service.TestCase tc) throws Exception {
-        Keploy k = KeployInstance.getInstance().getKeploy();
         Service.HttpResp resp = simulate(tc);
-        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(KeployInstance.getKeploy().getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
+        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();
         return res.get("pass");
