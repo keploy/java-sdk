@@ -71,7 +71,7 @@ public class GrpcClient {
     }
 
     public void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
-
+        TimeUnit.SECONDS.sleep(3);
         Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
         testCaseBuilder.setId(id);
         testCaseBuilder.setCaptured(testCaseReq.getCaptured());
@@ -89,6 +89,7 @@ public class GrpcClient {
 
         // send de-noise request to server
         Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
+        System.out.println(deNoiseResponse.getMessage());
     }
 
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
@@ -99,7 +100,7 @@ public class GrpcClient {
         String method = testCase.getHttpReq().getMethod();
         String body = testCase.getHttpReq().getBody();
 
-        String targetUrl = "http://" + host + ":" + port + url;
+        String targetUrl = url;
 
         HttpRequest req = HttpRequest.newBuilder(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
 
@@ -114,14 +115,14 @@ public class GrpcClient {
             logger.info("failed sending testcase request to app");
             throw new Exception(e);
         }
-        Service.HttpResp resp = GetResp(testCase.getId());
+        Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
         if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.body())) {
-            resp.newBuilder().setBody(response.body());
-            resp.newBuilder().setStatusCode(response.statusCode());
+            resp.setBody(response.body());
+            resp.setStatusCode(response.statusCode());
             convertHeaderMap_ListToStrArr(response.headers().map(), resp.getHeaderMap());
         }
-        return resp;
+        return resp.build();
     }
 
     //converting  Map<String,List<String>> to Map<String,Service.StrArr>
@@ -157,13 +158,13 @@ public class GrpcClient {
         }
     }
 
-    public Service.HttpResp GetResp(String id) {
+    public Service.HttpResp.Builder GetResp(String id) {
 
         Keploy k = KeployInstance.getInstance().getKeploy();
 
         HttpServletResponse httpServletResponse = k.getResp().get(id);
         if (httpServletResponse == null) {
-            return Service.HttpResp.newBuilder().build();
+            return Service.HttpResp.newBuilder();
         }
 
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(httpServletResponse);
@@ -180,8 +181,8 @@ public class GrpcClient {
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
         headerMap = getResponseHeaderMap(httpServletResponse);
-        Service.HttpResp httpResp = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody).build();
-        return httpResp;
+        Service.HttpResp.Builder httpRespBuilder = builder.setStatusCode(httpServletResponse.getStatus()).setBody(resBody);
+        return httpRespBuilder;
     }
 
     public Map<String, Service.StrArr> getResponseHeaderMap(HttpServletResponse httpServletResponse) {

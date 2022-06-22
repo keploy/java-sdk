@@ -1,5 +1,6 @@
 package io.keploy.servlet;
 
+import io.github.cdimascio.dotenv.Dotenv;
 import io.keploy.grpc.GrpcClient;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -37,10 +38,9 @@ public class middleware implements Filter {
         System.out.println("Inside Keploy middleware: incoming request");
         System.out.println("Keploy instance-> " + k.getCfg().getApp().toString());
 
-//        Dotenv dotenv = Dotenv.load();
-//        dotenv.get("KEPLOY_MODE") != null && dotenv.get("KEPLOY_MODE")
-
-        if (k == null || ("record").equals(new mode().getMode().MODE_OFF.getTypeName())) {
+        Dotenv dotenv = Dotenv.load();
+        System.out.println("Keploy mode-> "+dotenv.get("KEPLOY_MODE"));
+        if (k == null || dotenv.get("KEPLOY_MODE") != null && (dotenv.get("KEPLOY_MODE")).equals(new mode().getMode().MODE_OFF.getTypeName())) {
             filterChain.doFilter(servletRequest, servletResponse);
             return;
         }
@@ -64,6 +64,10 @@ public class middleware implements Filter {
         System.out.println("Request-> " + requestBody);
         System.out.println("Response-> " + responseBody);
         responseWrapper.copyBodyToResponse();
+
+        if (request.getHeader("KEPLOY_TEST_ID") != null) {
+            return;
+        }
 
         Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
 
