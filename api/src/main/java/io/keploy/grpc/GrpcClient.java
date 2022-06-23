@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.io.UnsupportedEncodingException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import javax.servlet.http.HttpServletRequest;
@@ -86,7 +87,7 @@ public class GrpcClient {
         Service.HttpResp resp2 = simulate(testCase);
 
         Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
-        testReqBuilder.setAppID(id);
+        testReqBuilder.setID(id);
         testReqBuilder.setResp(resp2);
         testReqBuilder.setAppID(k.getCfg().getApp().getName());
         Service.TestReq bin2 = testReqBuilder.build();
@@ -106,13 +107,13 @@ public class GrpcClient {
 
         String targetUrl = url;
 
-        HttpRequest req = HttpRequest.newBuilder(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).setHeader("Content-Type", "application/json").method(method, HttpRequest.BodyPublishers.ofString(body)).build();
 
         Map<String, List<String>> headerMap = req.headers().map();
         convertHeaderMap_StrArrToList(testCase.getHttpReq().getHeaderMap(), headerMap);
 
-        HttpClient client = HttpClient.newHttpClient();
-        HttpResponse<String> response;
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        HttpResponse<String> response = null;
         try {
             response = client.send(req, HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
