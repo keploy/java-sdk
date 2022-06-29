@@ -7,6 +7,8 @@ import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.mode;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
@@ -25,6 +27,7 @@ import java.util.stream.Collectors;
 @Component
 public class middleware implements Filter {
 
+    private static final Logger logger = LogManager.getLogger("Filter");
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
@@ -36,11 +39,8 @@ public class middleware implements Filter {
         Keploy k = ki.getKeploy();
 
         System.out.println("Inside Keploy middleware: incoming request");
-        System.out.println("Keploy instance-> " + k.getCfg().getApp().toString());
-
 
         Dotenv dotenv = Dotenv.load();
-        System.out.println("Keploy mode-> " + dotenv.get("KEPLOY_MODE"));
         if (k == null || dotenv.get("KEPLOY_MODE") != null && (dotenv.get("KEPLOY_MODE")).equals(new mode().getMode().MODE_OFF.getTypeName())) {
             filterChain.doFilter(servletRequest, servletResponse);
             return;
@@ -57,7 +57,7 @@ public class middleware implements Filter {
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
 
-
+        //calling next
         filterChain.doFilter(requestWrapper, responseWrapper);
 
 
@@ -80,11 +80,13 @@ public class middleware implements Filter {
         Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).build();
 
         System.out.println("Inside Keploy middleware: outgoing response");
+
         GrpcClient grpcClient = new GrpcClient();
 
         try {
             grpcClient.CaptureTestCases(ki, requestBody, responseBody, urlParams, httpResp);
         } catch (Exception e) {
+            logger.error("failed to capture testCases");
             throw new RuntimeException(e);
         }
     }
@@ -101,7 +103,6 @@ public class middleware implements Filter {
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (int i = 0; i < values.size(); i++) {
-                System.out.println("values-> " + values);
                 builder.addValue(values.get(i));
             }
             Service.StrArr value = builder.build();
