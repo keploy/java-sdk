@@ -159,6 +159,7 @@ public class GrpcClient {
             return Service.HttpResp.newBuilder();
         }
 
+
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(httpServletResponse);
 
         String resBody = "";
@@ -179,6 +180,7 @@ public class GrpcClient {
 
     public void Test() throws Exception {
         TimeUnit.SECONDS.sleep(5);
+        System.out.println("Hi in the test mode");
         logger.info("test starting in 5 sec");
 
         List<Service.TestCase> tcs = fetch();
@@ -190,21 +192,21 @@ public class GrpcClient {
             logger.info("Failed to start test run ", e);
             return;
         }
-        logger.info("starting test execution " + "id: " + id + "total tests: " + total);
+        logger.info("starting test execution " + "id: " + id + " total tests: " + total);
         boolean ok = false;
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
             logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
             Service.TestCase tcCopy = tc;
             ok = check(id, tcCopy);
-            logger.info("Result", "testcase id ", tcCopy.getId(), "passed ", ok);
+            logger.info("Result : " + " testcase id " + tcCopy.getId() +  " passed ", ok);
         }
         String msg = end(id, ok);
         if (msg == null) {
             logger.error("failed to end test run");
             return;
         }
-        logger.info("test run completed", "run id", id + "passed overall", ok);
+        logger.info("test run completed : " + " run id " + id + "\n passed overall " + ok);
     }
 
     public String start(String total) {
