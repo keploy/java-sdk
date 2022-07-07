@@ -31,6 +31,7 @@ public class middleware implements Filter {
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
+
     }
 
     @Override
@@ -40,8 +41,8 @@ public class middleware implements Filter {
 
         System.out.println("Inside Keploy middleware: incoming request");
 
-        Dotenv dotenv = Dotenv.load();
-        if (k == null || dotenv.get("KEPLOY_MODE") != null && (dotenv.get("KEPLOY_MODE")).equals(new mode().getMode().MODE_OFF.getTypeName())) {
+        System.out.println(mode.getMode());
+        if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(servletRequest, servletResponse);
             return;
         }

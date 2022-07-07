@@ -1,7 +1,7 @@
 package io.keploy.regression;
 public class mode {
 
-    private ModeType Mode;
+    private static ModeType Mode;
 
     public mode() {
 
@@ -11,11 +11,11 @@ public class mode {
         Mode = mode;
     }
 
-    public ModeType getMode() {
+    public static ModeType getMode() {
         return Mode;
     }
 
-    public void setMode(ModeType mode) {
+    public static void setMode(ModeType mode) {
         Mode = mode;
     }
 
@@ -26,7 +26,7 @@ public class mode {
         return false;
     }
 
-    public void setTestMode() {
+    public static void setTestMode() {
         setMode(ModeType.MODE_TEST);
     }
 
