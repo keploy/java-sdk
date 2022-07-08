@@ -1,5 +1,6 @@
 package io.keploy.grpc;
 
+import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
@@ -55,12 +56,17 @@ public class GrpcClient {
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
         httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
-        Map<String, String> urlParamsMap = httpReqBuilder.getURLParamsMap();
-        urlParamsMap = params;
-
-        Map<String, Service.StrArr> headerMap = httpReqBuilder.getHeaderMap();
-        headerMap = getRequestHeaderMap(ctxReq);
+        Map<String, String> urlParamsMap = params;
+//        urlParamsMap = params;
+        httpReqBuilder.putAllURLParams(urlParamsMap);
+        System.out.println("urlParamsMap---> " + urlParamsMap);
+        Map<String, Service.StrArr> headerMap = getRequestHeaderMap(ctxReq);
+        httpReqBuilder.putAllHeader(headerMap);
+        System.out.println("headerMap----> " + headerMap);
         httpReqBuilder.setBody(reqBody);
+        httpReqBuilder.setProtoMajor(2);
+        httpReqBuilder.setProtoMinor(1);
+
         Service.HttpReq httpReq = httpReqBuilder.build();
 
 
@@ -129,10 +135,12 @@ public class GrpcClient {
         String method = testCase.getHttpReq().getMethod();
         String body = testCase.getHttpReq().getBody();
 
-        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).setHeader("Content-Type", "application/json").method(method, HttpRequest.BodyPublishers.ofString(body)).build();
 
-        Map<String, List<String>> headerMap = req.headers().map();
-        convertHeaderMap_StrArrToList(testCase.getHttpReq().getHeaderMap(), headerMap);
+        HttpRequest.Builder headerBuilder = setReqHeaderMap(testCase.getHttpReq().getHeaderMap(), HttpRequest.newBuilder());
+        final HttpRequest req = headerBuilder.uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).setHeader("Content-Type", "application/json").method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+
+        System.out.println("Simulate : req Header map \n " + req.headers().map());
+//        final Map<String, List<String>> headerMap = convertHeaderMap_StrArrToList(testCase.getHttpReq().getHeaderMap(), new HashMap<>());
 
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         HttpResponse<String> response = null;
@@ -147,8 +155,14 @@ public class GrpcClient {
         if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.body())) {
             resp.setBody(response.body());
             resp.setStatusCode(response.statusCode());
-            convertHeaderMap_ListToStrArr(response.headers().map(), resp.getHeaderMap());
+//            convertHeaderMap_ListToStrArr(response.headers().map(), resp.getHeaderMap());
         }
+        var res = response.headers().map();
+        Map<String, Service.StrArr> resHeader = convertHeaderMap_ListToStrArr(res);
+        logger.info("inside simulate after converting resHeader");
+        resp.putAllHeader(resHeader);
+        System.out.println("response headers map : " + response.headers().map());
+        System.out.println("response get Headers : " + resp.getHeaderMap());
         return resp.build();
     }
 
@@ -199,7 +213,7 @@ public class GrpcClient {
             logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
             Service.TestCase tcCopy = tc;
             ok = check(id, tcCopy);
-            logger.info("Result : " + " testcase id " + tcCopy.getId() +  " passed ", ok);
+            logger.info("Result : " + " testcase id " + tcCopy.getId() + " passed ", ok);
         }
         String msg = end(id, ok);
         if (msg == null) {
@@ -251,11 +265,12 @@ public class GrpcClient {
         Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();
+        System.out.println(res);
         return res.get("pass");
     }
 
     //converting  Map<String,List<String>> to Map<String,Service.StrArr>
-    public void convertHeaderMap_ListToStrArr(Map<String, List<String>> srcMap, Map<String, Service.StrArr> destMap) {
+    private Map<String, Service.StrArr> convertHeaderMap_ListToStrArr(Map<String, List<String>> srcMap) {
         Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
             List<String> headerValues = srcMap.get(key);
@@ -266,31 +281,39 @@ public class GrpcClient {
             Service.StrArr value = builder.build();
             map.put(key, value);
         }
-        destMap = map;
+//        destMap.putAll(map);
+        System.out.println("This is converted MAp : " + map);
+        return map;
     }
 
-    //converting  Map<String,Service.StrArr> to Map<String,List<String>>
-    public void convertHeaderMap_StrArrToList(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
-
-        for (String key : srcMap.keySet()) {
-            var value = srcMap.get(key);
-            List<String> headervalues = new ArrayList<>();
-            int i = 0;
-            while (true) {
-                try {
-                    String v = value.getValue(i);
-                    headervalues.add(v);
-                } catch (Exception e) {
-                    logger.error("failed to convert HeaderMap StrArr to List");
-                    break;
-                }
-                i++;
-            }
-            destMap.put(key, headervalues);
+    private HttpRequest.Builder setReqHeaderMap(Map<String, Service.StrArr> srcMap, HttpRequest.Builder reqBuilder) {
+        for(String key:srcMap.keySet()){
+             ProtocolStringList valueList = srcMap.get(key).getValueList();
+             for(String val:valueList){
+                 reqBuilder
+             }
         }
+        return reqBuilder;
     }
+//    private Map<String, List<String>> convertHeaderMap_StrArrToList(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
+//
+//        System.out.println(srcMap);
+//
+//        for (String key : srcMap.keySet()) {
+//            Service.StrArr values = srcMap.get(key);
+//            List<String> headervalues = new ArrayList<>();
+//            int i = 0;
+//            ProtocolStringList valueList = values.getValueList();
+//            for (String val : valueList) {
+//                headervalues.add(val);
+//
+//            }
+//            destMap.put(key, headervalues);
+//        }
+//        return destMap;
+//    }
 
-    public Map<String, Service.StrArr> getResponseHeaderMap(HttpServletResponse httpServletResponse) {
+    private Map<String, Service.StrArr> getResponseHeaderMap(HttpServletResponse httpServletResponse) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
         List<String> headerNames = httpServletResponse.getHeaderNames().stream().collect(Collectors.toList());
@@ -310,7 +333,7 @@ public class GrpcClient {
         return map;
     }
 
-    public Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
+    private Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 

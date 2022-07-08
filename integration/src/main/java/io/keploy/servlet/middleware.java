@@ -78,7 +78,7 @@ public class middleware implements Filter {
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
 
         headerMap = getResponseHeaderMap(responseWrapper);
-        Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).build();
+        Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
         System.out.println("Inside Keploy middleware: outgoing response");
 
