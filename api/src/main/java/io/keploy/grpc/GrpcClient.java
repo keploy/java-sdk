@@ -287,12 +287,25 @@ public class GrpcClient {
     }
 
     private HttpRequest.Builder setReqHeaderMap(Map<String, Service.StrArr> srcMap, HttpRequest.Builder reqBuilder) {
+//        for(String key:srcMap.keySet()){
+//             ProtocolStringList valueList = srcMap.get(key).getValueList();
+//             for(String val:valueList){
+//                 reqBuilder
+//             }
+//        }
+        Map<String,List<String>>headerMap = new HashMap<>();
+
         for(String key:srcMap.keySet()){
-             ProtocolStringList valueList = srcMap.get(key).getValueList();
-             for(String val:valueList){
-                 reqBuilder
-             }
+            Service.StrArr values = srcMap.get(key);
+            List<String> headerValues = new ArrayList<>();
+            ProtocolStringList valueList = values.getValueList();
+            for(String val:valueList){
+                headerValues.add(val);
+            }
+            headerMap.put(key,headerValues);
         }
+
+        headerMap.forEach((headerKey,headerValues)->headerValues.forEach(value->reqBuilder.header(headerKey,value))) ;
         return reqBuilder;
     }
 //    private Map<String, List<String>> convertHeaderMap_StrArrToList(Map<String, Service.StrArr> srcMap, Map<String, List<String>> destMap) {
