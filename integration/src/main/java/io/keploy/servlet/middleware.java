@@ -1,7 +1,6 @@
 package io.keploy.servlet;
 
-import io.github.cdimascio.dotenv.Dotenv;
-import io.keploy.grpc.GrpcClient;
+import io.keploy.client.GrpcClient;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
@@ -64,11 +63,17 @@ public class middleware implements Filter {
 
         String requestBody = this.getStringValue(requestWrapper.getContentAsByteArray(), request.getCharacterEncoding());
         String responseBody = this.getStringValue(responseWrapper.getContentAsByteArray(), response.getCharacterEncoding());
-        System.out.println("Request-> " + requestBody);
-        System.out.println("Response-> " + responseBody);
+
         responseWrapper.copyBodyToResponse();
 
-        if (request.getHeader("KEPLOY_TEST_ID") != null) {
+        System.out.println("Request-> " + requestBody);
+        System.out.println("Response-> " + responseBody);
+
+        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(getResponseHeaderMap(responseWrapper)).build();
+
+        String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
+        if (keploy_test_id != null) {
+            k.getResp().put(keploy_test_id, simulateResponse);
             return;
         }
 
@@ -76,6 +81,7 @@ public class middleware implements Filter {
 
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
         Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
+
 
         headerMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
@@ -99,6 +105,8 @@ public class middleware implements Filter {
         List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
 
         for (String name : headerNames) {
+
+            if (name.equals("Date")) continue;
 
             List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();

@@ -1,11 +1,10 @@
 package io.keploy.regression.keploy;
-
 import io.github.cdimascio.dotenv.Dotenv;
 import io.keploy.regression.mode;
+import io.keploy.grpc.stubs.Service;
 import lombok.Getter;
 import lombok.Setter;
 
-import javax.servlet.http.HttpServletResponse;
 import java.util.concurrent.ConcurrentHashMap;
 
 
@@ -14,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Keploy {
 
     private Config cfg;
-    private ConcurrentHashMap<String, HttpServletResponse> resp;
+    private ConcurrentHashMap<String, Service.HttpResp> resp;
 
     public Keploy() {
         resp = new ConcurrentHashMap<>();
@@ -40,3 +39,4 @@ public class Keploy {
     }
 
 }
+

@@ -15,6 +15,7 @@
         <module>integration</module>
         <module>common</module>
         <module>java-sdk-test-module</module>
+        <module>models</module>
     </modules>
 
     <properties>
