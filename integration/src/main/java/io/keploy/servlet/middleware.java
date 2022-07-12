@@ -38,7 +38,7 @@ public class middleware implements Filter {
         KeployInstance ki = KeployInstance.getInstance();
         Keploy k = ki.getKeploy();
 
-        System.out.println("Inside Keploy middleware: incoming request");
+        logger.debug("inside middleware: incoming request");
 
         System.out.println(mode.getMode());
         if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
@@ -66,9 +66,6 @@ public class middleware implements Filter {
 
         responseWrapper.copyBodyToResponse();
 
-        System.out.println("Request-> " + requestBody);
-        System.out.println("Response-> " + responseBody);
-
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(getResponseHeaderMap(responseWrapper)).build();
 
         String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
@@ -86,7 +83,7 @@ public class middleware implements Filter {
         headerMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
-        System.out.println("Inside Keploy middleware: outgoing response");
+        logger.debug("inside middleware: outgoing response");
 
         GrpcClient grpcClient = new GrpcClient();
 

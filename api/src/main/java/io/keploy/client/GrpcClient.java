@@ -134,8 +134,6 @@ public class GrpcClient {
         HttpRequest.Builder headerBuilder = setReqHeaderMap(testCase.getHttpReq().getHeaderMap(), HttpRequest.newBuilder());
         final HttpRequest req = headerBuilder.uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
 
-        System.out.println("Simulate : req Header map \n " + req.headers().map());
-
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         HttpResponse<String> response = null;
         try {
@@ -170,7 +168,7 @@ public class GrpcClient {
         try {
             respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
-            logger.error("Failed to get response ", e.getMessage());
+            logger.error("failed to get response ", e.getMessage());
             throw new Exception(e);
         }
         return respBuilder;
@@ -178,7 +176,7 @@ public class GrpcClient {
 
     public void Test() throws Exception {
         TimeUnit.SECONDS.sleep(5);
-        System.out.println("Hi in the test mode");
+        logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
 
         List<Service.TestCase> tcs = fetch();
@@ -187,7 +185,7 @@ public class GrpcClient {
         try {
             id = start(String.valueOf(total));
         } catch (Exception e) {
-            logger.info("Failed to start test run ", e);
+            logger.info("failed to start test run ", e);
             return;
         }
         logger.info("starting test execution " + "id: " + id + " total tests: " + total);
@@ -197,7 +195,7 @@ public class GrpcClient {
             logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
             Service.TestCase tcCopy = tc;
             ok = check(id, tcCopy);
-            logger.info("Result : " + " testcase id " + tcCopy.getId() + " passed ", ok);
+            logger.info("result : " + " testcase id " + tcCopy.getId() + " passed ", ok);
         }
         String msg = end(id, ok);
         if (msg == null) {
@@ -278,7 +276,6 @@ public class GrpcClient {
                     map.put(key, value);
             }
         }
-        System.out.println("This is converted MAp : " + map);
         return map;
     }
 
@@ -330,26 +327,6 @@ public class GrpcClient {
         }
         return true;
     }
-
-//    private Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper responseWrapper) {
-//
-//        Map<String, Service.StrArr> map = new HashMap<>();
-//        List<String> headerNames = responseWrapper.getHeaderNames().stream().collect(Collectors.toList());
-//
-//        for (String name : headerNames) {
-//
-//            List<String> values = responseWrapper.getHeaders(name).stream().collect(Collectors.toList());
-//            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
-//
-//            for (int i = 0; i < values.size(); i++) {
-//                builder.addValue(values.get(i));
-//            }
-//            Service.StrArr value = builder.build();
-//
-//            map.put(name, value);
-//        }
-//        return map;
-//    }
 
     private Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
 
