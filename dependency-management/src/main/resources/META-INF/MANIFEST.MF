@@ -1,0 +1,37 @@
+Manifest-Version: 1.0
+Main-Class: 
+Class-Path: antlr-2.7.2.jar struts-core-1.3.8.jar surefire-logger-api-2.
+ 22.2.jar commons-collections-3.2.1.jar guava-31.0.1-android.jar maven-r
+ epository-metadata-2.2.1.jar j2objc-annotations-1.3.jar httpcore-4.0.1.
+ jar maven-reporting-impl-2.4.jar proto-google-common-protos-2.0.1.jar m
+ aven-profile-2.2.1.jar maven-surefire-report-plugin-2.22.2.jar maven-ar
+ tifact-2.2.1.jar velocity-tools-2.0.jar kotlin-stdlib-1.4.0.jar xercesI
+ mpl-2.9.1.jar checker-compat-qual-2.5.5.jar junit-3.8.1.jar animal-snif
+ fer-annotations-1.19.jar commons-digester-1.8.1.jar spring-beans-5.3.20
+ .jar spring-expression-5.3.20.jar maven-model-2.2.1.jar struts-taglib-1
+ .3.8.jar doxia-core-1.6.jar doxia-decoration-model-1.6.jar kotlin-stdli
+ b-common-1.4.0.jar grpc-stub-1.45.1.jar maven-artifact-manager-2.2.1.ja
+ r log4j-api-2.17.2.jar surefire-report-parser-2.22.2.jar grpc-netty-sha
+ ded-1.45.1.jar plexus-i18n-1.0-beta-7.jar spring-context-5.3.20.jar xml
+ -apis-1.3.04.jar doxia-sink-api-1.6.jar failureaccess-1.0.1.jar doxia-l
+ ogging-api-1.6.jar checker-qual-3.12.0.jar struts-tiles-1.3.8.jar log4j
+ -core-2.17.2.jar jsr305-3.0.2.jar commons-codec-1.3.jar commons-validat
+ or-1.4.1.jar oro-2.0.8.jar maven-plugin-registry-2.2.1.jar sslext-1.2-0
+ .jar annotations-4.1.1.4.jar grpc-api-1.45.1.jar doxia-module-xhtml-1.6
+ .jar maven-reporting-api-3.0.jar javax.annotation-api-1.3.2.jar java-do
+ tenv-5.2.2.jar httpclient-4.0.2.jar commons-beanutils-1.8.3.jar perfmar
+ k-api-0.23.0.jar dom4j-1.1.jar commons-chain-1.1.jar doxia-site-rendere
+ r-1.6.jar maven-project-2.2.1.jar grpc-protobuf-lite-1.45.1.jar maven-s
+ ettings-2.2.1.jar grpc-protobuf-1.45.1.jar velocity-1.5.jar spring-core
+ -5.3.20.jar plexus-velocity-1.1.7.jar spring-web-5.3.20.jar gson-2.8.9.
+ jar spring-jcl-5.3.20.jar commons-lang-2.4.jar protobuf-java-3.19.2.jar
+  doxia-module-fml-1.6.jar plexus-container-default-1.0-alpha-9-stable-1
+ .jar maven-plugin-api-2.2.1.jar commons-logging-1.2.jar plexus-componen
+ t-annotations-1.5.5.jar plexus-utils-3.0.15.jar listenablefuture-9999.0
+ -empty-to-avoid-conflict-with-guava.jar plexus-interpolation-1.11.jar b
+ ackport-util-concurrent-3.1.jar classworlds-1.1-alpha-2.jar annotations
+ -13.0.jar grpc-core-1.45.1.jar maven-shared-utils-0.6.jar maven-plugin-
+ annotations-3.5.2.jar grpc-context-1.45.1.jar spring-aop-5.3.20.jar err
+ or_prone_annotations-2.10.0.jar wagon-provider-api-1.0-beta-6.jar xmlun
+ it-1.5.jar
+

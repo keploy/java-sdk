@@ -134,7 +134,7 @@ public class GrpcClient {
         HttpRequest.Builder headerBuilder = setReqHeaderMap(testCase.getHttpReq().getHeaderMap(), HttpRequest.newBuilder());
         final HttpRequest req = headerBuilder.uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
 
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(40)).build();
         HttpResponse<String> response = null;
         try {
             response = client.send(req, HttpResponse.BodyHandlers.ofString());

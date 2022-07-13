@@ -4,7 +4,10 @@ import io.keploy.client.GrpcClient;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
+import io.keploy.regression.keploy.AppConfig;
+import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
+import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -30,7 +33,38 @@ public class middleware implements Filter {
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
+        System.out.println("INIT METHOD OF FILTER");
+        KeployInstance ki = KeployInstance.getInstance();
+        Keploy kp = new Keploy();
+        Config cfg = new Config();
+        AppConfig appConfig = new AppConfig();
+        appConfig.setName(System.getenv("APP_NAME"));
+        appConfig.setPort(System.getenv("KEPLOY_CLIENT_PORT"));
+        ServerConfig serverConfig = new ServerConfig();
+        serverConfig.setURL("http://localhost:"+System.getenv("KEPLOY_SERVER_PORT")+"/api");
+        cfg.setApp(appConfig);
+        cfg.setServer(serverConfig);
+        kp.setCfg(cfg);
+        ki.setKeploy(kp);
 
+        GrpcClient grpcClient = new GrpcClient();
+        String KEPLOY_MODE  = System.getenv("KEPLOY_MODE");
+
+        Map<String, String> env = System.getenv();
+        for (String envName : env.keySet()) {
+            System.out.format("This will list all env variables %s=%s%n", envName, env.get(envName));
+        }
+
+        if (kp != null && KEPLOY_MODE != null && KEPLOY_MODE.equals(new mode().getMode().MODE_TEST.getTypeName())) {
+            try {
+                System.out.println("CAlll TEsT mode");
+                grpcClient.Test();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            System.out.println("TEsT mode");
+            return;
+        }
     }
 
     @Override

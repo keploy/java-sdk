@@ -21,8 +21,7 @@ public class Keploy {
     }
 
     public void initMode() {
-        Dotenv dotenv = Dotenv.load();
-        String envMode = dotenv.get("KEPLOY_MODE");
+        String envMode = System.getenv("KEPLOY_MODE");
 
         switch (envMode) {
             case "record":
