@@ -54,7 +54,7 @@ public class GrpcClient {
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
         httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
-        Map<String, String> urlParamsMap = params;
+        Map<String,String> urlParamsMap = params;
         httpReqBuilder.putAllURLParams(urlParamsMap);
         Map<String, Service.StrArr> headerMap = getRequestHeaderMap(ctxReq);
         httpReqBuilder.putAllHeader(headerMap);
@@ -105,7 +105,7 @@ public class GrpcClient {
         testCaseBuilder.setHttpReq(testCaseReq.getHttpReq());
         Service.TestCase testCase = testCaseBuilder.build();
 
-        Service.HttpResp resp2 = simulate(testCase, testCaseReq.getHttpResp().getHeaderMap());
+        Service.HttpResp resp2 = simulate(testCase);
 
         Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
         testReqBuilder.setID(id);
@@ -122,7 +122,7 @@ public class GrpcClient {
         }
     }
 
-    public Service.HttpResp simulate(Service.TestCase testCase, Map<String, Service.StrArr> Map_for_testing) throws Exception {
+    public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
 
         String targetUrl = testCase.getHttpReq().getURL();
         String host = k.getCfg().getApp().getHost();
@@ -175,7 +175,7 @@ public class GrpcClient {
     }
 
     public void Test() throws Exception {
-        TimeUnit.SECONDS.sleep(5);
+        TimeUnit.SECONDS.sleep(10);
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
 
@@ -189,12 +189,12 @@ public class GrpcClient {
             return;
         }
         logger.info("starting test execution " + "id: " + id + " total tests: " + total);
-        boolean ok = false;
+        boolean ok = true;
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
             logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
             Service.TestCase tcCopy = tc;
-            ok = check(id, tcCopy);
+            ok &= check(id, tcCopy);
             logger.info("result : " + " testcase id " + tcCopy.getId() + " passed ", ok);
         }
         String msg = end(id, ok);
@@ -202,7 +202,7 @@ public class GrpcClient {
             logger.error("failed to end test run");
             return;
         }
-        logger.info("test run completed : " + " run id " + id + "\n passed overall " + ok);
+        logger.info("test run completed : " + " with run id " + id + "\n || passed overall " + String.valueOf(ok).toUpperCase()+" ||");
     }
 
     public String start(String total) {
@@ -243,7 +243,7 @@ public class GrpcClient {
     }
 
     public boolean check(String runId, Service.TestCase tc) throws Exception {
-        Service.HttpResp resp = simulate(tc, null);
+        Service.HttpResp resp = simulate(tc);
         Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();

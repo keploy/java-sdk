@@ -33,38 +33,36 @@ public class middleware implements Filter {
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
-        System.out.println("INIT METHOD OF FILTER");
-        KeployInstance ki = KeployInstance.getInstance();
-        Keploy kp = new Keploy();
-        Config cfg = new Config();
-        AppConfig appConfig = new AppConfig();
-        appConfig.setName(System.getenv("APP_NAME"));
-        appConfig.setPort(System.getenv("KEPLOY_CLIENT_PORT"));
-        ServerConfig serverConfig = new ServerConfig();
-        serverConfig.setURL("http://localhost:"+System.getenv("KEPLOY_SERVER_PORT")+"/api");
-        cfg.setApp(appConfig);
-        cfg.setServer(serverConfig);
-        kp.setCfg(cfg);
-        ki.setKeploy(kp);
+      logger.debug("Initializing Keploy Instance");
 
-        GrpcClient grpcClient = new GrpcClient();
-        String KEPLOY_MODE  = System.getenv("KEPLOY_MODE");
+      new Thread(()->{
+          KeployInstance ki = KeployInstance.getInstance();
+          Keploy kp = new Keploy();
+          Config cfg = new Config();
+          AppConfig appConfig = new AppConfig();
+          appConfig.setName(System.getenv("APP_NAME"));
+          appConfig.setPort(System.getenv("KEPLOY_CLIENT_PORT"));
+          ServerConfig serverConfig = new ServerConfig();
+          serverConfig.setURL("http://localhost:"+System.getenv("KEPLOY_SERVER_PORT")+"/api");
+          cfg.setApp(appConfig);
+          cfg.setServer(serverConfig);
+          kp.setCfg(cfg);
+          ki.setKeploy(kp);
 
-        Map<String, String> env = System.getenv();
-        for (String envName : env.keySet()) {
-            System.out.format("This will list all env variables %s=%s%n", envName, env.get(envName));
-        }
+          GrpcClient grpcClient = new GrpcClient();
+          String KEPLOY_MODE  = System.getenv("KEPLOY_MODE");
 
-        if (kp != null && KEPLOY_MODE != null && KEPLOY_MODE.equals(new mode().getMode().MODE_TEST.getTypeName())) {
-            try {
-                System.out.println("CAlll TEsT mode");
-                grpcClient.Test();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-            System.out.println("TEsT mode");
-            return;
-        }
+          if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
+              try {
+                  logger.debug("calling test Method");
+                  grpcClient.Test();
+              } catch (Exception e) {
+                  throw new RuntimeException(e);
+              }
+          }
+
+
+      }).start();
     }
 
     @Override
