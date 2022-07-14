@@ -1,5 +1,4 @@
 package io.keploy.regression.keploy;
-import io.github.cdimascio.dotenv.Dotenv;
 import io.keploy.regression.mode;
 import io.keploy.grpc.stubs.Service;
 import lombok.Getter;

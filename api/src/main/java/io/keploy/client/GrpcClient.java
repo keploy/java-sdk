@@ -24,7 +24,6 @@ import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 public class GrpcClient {
 
@@ -54,7 +53,7 @@ public class GrpcClient {
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
         httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
-        Map<String,String> urlParamsMap = params;
+        Map<String, String> urlParamsMap = params;
         httpReqBuilder.putAllURLParams(urlParamsMap);
         Map<String, Service.StrArr> headerMap = getRequestHeaderMap(ctxReq);
         httpReqBuilder.putAllHeader(headerMap);
@@ -202,7 +201,7 @@ public class GrpcClient {
             logger.error("failed to end test run");
             return;
         }
-        logger.info("test run completed : " + " with run id " + id + "\n || passed overall " + String.valueOf(ok).toUpperCase()+" ||");
+        logger.info("test run completed : " + " with run id " + id + "\n || passed overall " + String.valueOf(ok).toUpperCase() + " ||");
     }
 
     public String start(String total) {
