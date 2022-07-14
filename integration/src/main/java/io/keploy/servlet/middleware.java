@@ -59,9 +59,9 @@ public class middleware implements Filter {
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
+                System.exit(0);
             }
 
-            System.exit(0);
         }).start();
     }
 
@@ -72,7 +72,8 @@ public class middleware implements Filter {
 
         logger.debug("inside middleware: incoming request");
 
-        System.out.println(mode.getMode());
+        logger.debug(mode.getMode());
+
         if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(servletRequest, servletResponse);
             return;
