@@ -13,14 +13,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
-import java.io.UnsupportedEncodingException;
-import java.time.Duration;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -130,25 +128,56 @@ public class GrpcClient {
         String body = testCase.getHttpReq().getBody();
 
 
-        HttpRequest.Builder headerBuilder = setReqHeaderMap(testCase.getHttpReq().getHeaderMap(), HttpRequest.newBuilder());
-        final HttpRequest req = headerBuilder.uri(URI.create(targetUrl)).setHeader("KEPLOY_TEST_ID", testCase.getId()).method(method, HttpRequest.BodyPublishers.ofString(body)).build();
+        URL url = null;
+        HttpURLConnection connection = null;
+        int statusCode;
+        StringBuilder response = new StringBuilder();
 
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(40)).build();
-        HttpResponse<String> response = null;
         try {
-            response = client.send(req, HttpResponse.BodyHandlers.ofString());
-        } catch (Exception e) {
+            url = new URL(targetUrl);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setRequestMethod(method);
+            connection.setRequestProperty("content-type", "application/json");
+            connection.setRequestProperty("accept", "application/json");
+            connection.setRequestProperty("KEPLOY_TEST_ID", testCase.getId());
+            setCustomRequestHeaderMap(connection, testCase.getHttpReq().getHeaderMap());
+
+            if (!method.equals("GET") && !method.equals("DELETE")) {
+                connection.setDoOutput(true);
+                setCustomRequestBody(connection, body);
+            }
+
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(connection.getInputStream(), "utf-8"))) {
+                String responseLine = null;
+                while ((responseLine = br.readLine()) != null) {
+                    response.append(responseLine.trim());
+                }
+                System.out.println(response.toString());
+            }
+
+            statusCode = connection.getResponseCode();
+
+        } catch (MalformedURLException e) {
             logger.info("failed sending testcase request to app");
-            throw new Exception(e);
+            throw new RuntimeException(e);
+        } catch (IOException e) {
+            logger.info("failed sending testcase request to app");
+            throw new RuntimeException(e);
         }
+
+        Map<String, List<String>> responseHeaders = connection.getHeaderFields();
+
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
-        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.body())) {
-            resp.setBody(response.body());
-            resp.setStatusCode(response.statusCode());
-            Map<String, List<String>> res = response.headers().map();
-            Map<String, Service.StrArr> resHeader = convertHeaderMap_ListToStrArr(res);
-            resp.putAllHeader(resHeader);
+        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.toString())) {
+            resp.setBody(response.toString());
+            resp.setStatusCode(statusCode);
+            connection.getHeaderFields();
+            Map<String, Service.StrArr> resHeaders = getResponseHeaderMap(responseHeaders);
+            resp.putAllHeader(resHeaders);
         }
 
         return resp.build();
@@ -250,12 +279,9 @@ public class GrpcClient {
         return res.get("pass");
     }
 
-    //converting  Map<String,List<String>> to Map<String,Service.StrArr>
-    private Map<String, Service.StrArr> convertHeaderMap_ListToStrArr(Map<String, List<String>> srcMap) {
+    private Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
         Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
-
-            if (key.equals("date")) continue;
 
             List<String> headerValues = srcMap.get(key);
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
@@ -263,47 +289,32 @@ public class GrpcClient {
                 builder.addValue(headerValues.get(i));
             }
             Service.StrArr value = builder.build();
-
-            switch (key) {
-                case "content-type":
-                    map.put("Content-Type", value);
-                    break;
-                case "content-length":
-                    map.put("Content-Length", value);
-                    break;
-                default:
-                    map.put(key, value);
-            }
+            map.put(key, value);
         }
         return map;
     }
 
-    private HttpRequest.Builder setReqHeaderMap(Map<String, Service.StrArr> srcMap, HttpRequest.Builder reqBuilder) {
+    private void setCustomRequestHeaderMap(HttpURLConnection connection, Map<String, Service.StrArr> srcMap) {
         Map<String, List<String>> headerMap = new HashMap<>();
 
         for (String key : srcMap.keySet()) {
             Service.StrArr values = srcMap.get(key);
-            List<String> headerValues = new ArrayList<>();
             ProtocolStringList valueList = values.getValueList();
-            for (String val : valueList) {
-                headerValues.add(val);
-            }
+            List<String> headerValues = new ArrayList<>(valueList);
             headerMap.put(key, headerValues);
         }
-
 
         for (String key : headerMap.keySet()) {
             if (isModifiable(key)) {
                 List<String> values = headerMap.get(key);
                 for (String value : values) {
-                    reqBuilder.setHeader(key, value);
+                    connection.setRequestProperty(key, value);
                 }
             }
         }
-        return reqBuilder;
     }
 
-    public boolean isModifiable(String key) {
+    private boolean isModifiable(String key) {
         switch (key) {
             case "connection":
                 return false;
@@ -327,6 +338,17 @@ public class GrpcClient {
         return true;
     }
 
+    private void setCustomRequestBody(HttpURLConnection connection, String body) {
+        try (OutputStream os = connection.getOutputStream()) {
+            byte[] input = body.getBytes("utf-8");
+            os.write(input, 0, input.length);
+        } catch (UnsupportedEncodingException e) {
+            throw new RuntimeException(e);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
@@ -345,14 +367,5 @@ public class GrpcClient {
             map.put(name, value);
         }
         return map;
-    }
-
-    private String getStringValue(byte[] contentAsByteArray, String characterEncoding) {
-        try {
-            return new String(contentAsByteArray, 0, contentAsByteArray.length, characterEncoding);
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
-        return "";
     }
 }

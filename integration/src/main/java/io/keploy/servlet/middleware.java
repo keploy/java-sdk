@@ -136,8 +136,6 @@ public class middleware implements Filter {
 
         for (String name : headerNames) {
 
-            if (name.equals("Date")) continue;
-
             List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
