@@ -14,7 +14,7 @@
         <module>integration</module>
         <module>core</module>
         <module>common</module>
-        <module>java-sdk-test-module</module>
+        <module>test-module</module>
     </modules>
 
     <properties>
