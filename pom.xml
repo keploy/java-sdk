@@ -17,6 +17,7 @@
         <module>test-module</module>
         <module>models</module>
         <module>keploy-sdk</module>
+
     </modules>
 
     <properties>
