@@ -57,7 +57,7 @@ or to *build.gradle*:
 - Configure Environment Variables
     - `APP_NAME`           (eg: APP_NAME = myApp)
     - `APP_PORT`           (eg: APP_PORT = 8080)
-    - `KEPLOY_URL`         (eg: KEPLOY_URL = http://localhost:8081)
+    - `KEPLOY_URL`         (eg: KEPLOY_URL = http://localhost:8081/api)
     - `KEPLOY_MODE`        (eg: KEPLOY_MODE = record/test)
 
 
