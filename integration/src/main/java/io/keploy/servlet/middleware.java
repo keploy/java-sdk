@@ -40,17 +40,31 @@ public class middleware implements Filter {
             Keploy kp = new Keploy();
             Config cfg = new Config();
             AppConfig appConfig = new AppConfig();
-            appConfig.setName(System.getenv("APP_NAME"));
-            appConfig.setPort(System.getenv("KEPLOY_CLIENT_PORT"));
+            if (System.getenv("APP_NAME") != null) {
+                appConfig.setName(System.getenv("APP_NAME"));
+            }
+            if (System.getenv("APP_PORT") != null) {
+                appConfig.setPort(System.getenv("APP_PORT"));
+            }
+
             ServerConfig serverConfig = new ServerConfig();
-            serverConfig.setURL("http://localhost:" + System.getenv("KEPLOY_SERVER_PORT") + "/api");
+
+            if (System.getenv("KEPLOY_URL") != null) {
+                serverConfig.setURL(System.getenv("KEPLOY_URL"));
+            }
+
             cfg.setApp(appConfig);
             cfg.setServer(serverConfig);
             kp.setCfg(cfg);
             ki.setKeploy(kp);
 
             GrpcClient grpcClient = new GrpcClient();
-            String KEPLOY_MODE = System.getenv("KEPLOY_MODE");
+
+            String KEPLOY_MODE = "record";
+            if (System.getenv("KEPLOY_MODE") != null) {
+                KEPLOY_MODE = System.getenv("KEPLOY_MODE");
+            }
+
 
             if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
                 try {

@@ -20,7 +20,12 @@ public class Keploy {
     }
 
     public void initMode() {
-        String envMode = System.getenv("KEPLOY_MODE");
+
+        String envMode = "record";
+        if (System.getenv("KEPLOY_MODE") != null) {
+            envMode = System.getenv("KEPLOY_MODE");
+        }
+
 
         switch (envMode) {
             case "record":
