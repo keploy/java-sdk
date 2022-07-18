@@ -11,9 +11,9 @@ import java.time.Duration;
 @NoArgsConstructor
 public class AppConfig {
 
-    private String Name;
+    private String Name = "myApp";
     private String Host = "0.0.0.0";
-    private String Port;
+    private String Port = "8080";
     private Duration Delay = Duration.ofSeconds(5);
     private Duration Timeout = Duration.ofSeconds(60);
     private Filter Filter;
