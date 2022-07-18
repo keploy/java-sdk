@@ -34,37 +34,33 @@ public class middleware implements Filter {
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
         logger.debug("Initializing Keploy Instance");
+        KeployInstance ki = KeployInstance.getInstance();
+        Keploy kp = new Keploy();
+        Config cfg = new Config();
+        AppConfig appConfig = new AppConfig();
+        if (System.getenv("APP_NAME") != null) {
+            appConfig.setName(System.getenv("APP_NAME"));
+        }
+        if (System.getenv("APP_PORT") != null) {
+            appConfig.setPort(System.getenv("APP_PORT"));
+        }
+
+        ServerConfig serverConfig = new ServerConfig();
+
+        if (System.getenv("KEPLOY_URL") != null) {
+            serverConfig.setURL(System.getenv("KEPLOY_URL"));
+        }
+
+        cfg.setApp(appConfig);
+        cfg.setServer(serverConfig);
+        kp.setCfg(cfg);
+        ki.setKeploy(kp);
+
+        GrpcClient grpcClient = new GrpcClient();
+        String kmode = System.getenv("KEPLOY_MODE");
+        final String KEPLOY_MODE = (kmode != null) ? kmode : "record";
 
         new Thread(() -> {
-            KeployInstance ki = KeployInstance.getInstance();
-            Keploy kp = new Keploy();
-            Config cfg = new Config();
-            AppConfig appConfig = new AppConfig();
-            if (System.getenv("APP_NAME") != null) {
-                appConfig.setName(System.getenv("APP_NAME"));
-            }
-            if (System.getenv("APP_PORT") != null) {
-                appConfig.setPort(System.getenv("APP_PORT"));
-            }
-
-            ServerConfig serverConfig = new ServerConfig();
-
-            if (System.getenv("KEPLOY_URL") != null) {
-                serverConfig.setURL(System.getenv("KEPLOY_URL"));
-            }
-
-            cfg.setApp(appConfig);
-            cfg.setServer(serverConfig);
-            kp.setCfg(cfg);
-            ki.setKeploy(kp);
-
-            GrpcClient grpcClient = new GrpcClient();
-
-            String KEPLOY_MODE = "record";
-            if (System.getenv("KEPLOY_MODE") != null) {
-                KEPLOY_MODE = System.getenv("KEPLOY_MODE");
-            }
-
 
             if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
                 try {
@@ -113,7 +109,8 @@ public class middleware implements Filter {
 
         responseWrapper.copyBodyToResponse();
 
-        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(getResponseHeaderMap(responseWrapper)).build();
+        Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
+        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
 
         String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
         if (keploy_test_id != null) {
@@ -124,10 +121,7 @@ public class middleware implements Filter {
         Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
 
         Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
-        Map<String, Service.StrArr> headerMap = builder.getHeaderMap();
-
-
-        headerMap = getResponseHeaderMap(responseWrapper);
+        Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
         logger.debug("inside middleware: outgoing response");

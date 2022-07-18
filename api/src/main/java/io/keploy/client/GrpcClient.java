@@ -113,7 +113,7 @@ public class GrpcClient {
         // send de-noise request to server
         try {
             Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
-            System.out.println(deNoiseResponse.getMessage());
+            logger.debug("denoise message received from server", deNoiseResponse.getMessage());
         } catch (Exception e) {
             logger.error("failed to send de-noise request to backend");
         }
@@ -136,8 +136,8 @@ public class GrpcClient {
         try {
             url = new URL(targetUrl);
             connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(10000);
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(15000);
             connection.setRequestMethod(method);
             connection.setRequestProperty("content-type", "application/json");
             connection.setRequestProperty("accept", "application/json");
@@ -155,7 +155,7 @@ public class GrpcClient {
                 while ((responseLine = br.readLine()) != null) {
                     response.append(responseLine.trim());
                 }
-                System.out.println(response.toString());
+                logger.debug("simulate response", response.toString());
             }
 
             statusCode = connection.getResponseCode();
@@ -171,13 +171,15 @@ public class GrpcClient {
         Map<String, List<String>> responseHeaders = connection.getHeaderFields();
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
-
         if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.toString())) {
             resp.setBody(response.toString());
             resp.setStatusCode(statusCode);
-            connection.getHeaderFields();
             Map<String, Service.StrArr> resHeaders = getResponseHeaderMap(responseHeaders);
-            resp.putAllHeader(resHeaders);
+            try {
+                resp.putAllHeader(resHeaders);
+            } catch (Exception e) {
+                logger.error("unable to put headers", e);
+            }
         }
 
         return resp.build();
@@ -186,7 +188,6 @@ public class GrpcClient {
     public Service.HttpResp.Builder GetResp(String id) throws Exception {
 
         Service.HttpResp httpResp = k.getResp().get(id);
-
         if (httpResp == null) {
             return Service.HttpResp.newBuilder();
         }
@@ -203,7 +204,7 @@ public class GrpcClient {
     }
 
     public void Test() throws Exception {
-        TimeUnit.SECONDS.sleep(10);
+        TimeUnit.SECONDS.sleep(7);
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
 
@@ -275,13 +276,14 @@ public class GrpcClient {
         Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();
-        System.out.println(res);
         return res.get("pass");
     }
 
     private Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
         Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
+            //when use java.net.HttpURLConnection, one of the response headers has key = null.
+            if (key == null) continue;
 
             List<String> headerValues = srcMap.get(key);
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
