@@ -51,14 +51,14 @@ or to *build.gradle*:
 
 ## Usage
 
-- Replace `@SpringBootApplication` with `@SpringBootApplication(scanBasePackages = {"<your base package>", "io.keploy.servlet"}).` in your main class.
+- **Replace** `@SpringBootApplication` with `@SpringBootApplication(scanBasePackages = {"<your base package>", "io.keploy.servlet"}).` in your main class.
 
 
-- Configure Environment Variables
-    - `APP_NAME`           (eg: APP_NAME = myApp)
-    - `APP_PORT`           (eg: APP_PORT = 8080)
-    - `KEPLOY_URL`         (eg: KEPLOY_URL = http://localhost:8081/api)
-    - `KEPLOY_MODE`        (eg: KEPLOY_MODE = record/test)
+- **Configure Environment Variables**
+    - `APP_NAME`           (default APP_NAME = myApp)
+    - `APP_PORT`           (default APP_PORT = 8080)
+    - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:8081/api)
+    - `KEPLOY_MODE`        (default KEPLOY_MODE = record/test)
 
 
 - **Generate testcases**
@@ -70,7 +70,7 @@ or to *build.gradle*:
 - **Run the testcases**
     - **Note:** Before running tests stop the sample application.
         - Using environment variable
-            1. Set `KEPLOY_MODE = test`
+            1. Set `KEPLOY_MODE = test` (default "record")
             2. Run your application.
             3. You can also run the application with coverage to see the test coverage.
         - Using command line - (***WIP***)
@@ -93,7 +93,7 @@ We'd love to collaborate with you to make Keploy great. To get started:
 
 * [Slack](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA) - Discussions with the
   community and the team.
-* [GitHub](https://github.com/keploy/keploy/issues) - For bug reports and feature requests.
+* [GitHub](https://github.com/keploy/java-sdk/issues) - For bug reports and feature requests.
 
 
 ## Documentation(WIP):
