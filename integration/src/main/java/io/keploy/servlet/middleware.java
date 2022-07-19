@@ -57,12 +57,10 @@ public class middleware implements Filter {
         ki.setKeploy(kp);
 
         GrpcClient grpcClient = new GrpcClient();
-        String kmode = System.getenv("KEPLOY_MODE");
-        final String KEPLOY_MODE = (kmode != null) ? kmode : "record";
 
         new Thread(() -> {
 
-            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
+            if (mode.getMode() != null && mode.getMode().equals(mode.ModeType.MODE_TEST)) {
                 try {
                     logger.debug("calling test Method");
                     grpcClient.Test();
