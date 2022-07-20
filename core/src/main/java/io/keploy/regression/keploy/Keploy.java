@@ -1,4 +1,5 @@
 package io.keploy.regression.keploy;
+
 import io.keploy.regression.mode;
 import io.keploy.grpc.stubs.Service;
 import lombok.Getter;
@@ -21,24 +22,26 @@ public class Keploy {
 
     public void initMode() {
 
-        String envMode = "record";
-        if (System.getenv("KEPLOY_MODE") != null) {
-            envMode = System.getenv("KEPLOY_MODE");
+        // checking because user may be setting while running in test mode
+        if (mode.getMode() == null) {
+            String envMode = "record";
+            if (System.getenv("KEPLOY_MODE") != null) {
+                envMode = System.getenv("KEPLOY_MODE");
+            }
+
+
+            switch (envMode) {
+                case "record":
+                    new mode().setMode(mode.ModeType.MODE_RECORD);
+                    break;
+                case "test":
+                    new mode().setMode(mode.ModeType.MODE_TEST);
+                    break;
+                case "off":
+                    new mode().setMode(mode.ModeType.MODE_OFF);
+                    break;
+            }
         }
-
-
-        switch (envMode) {
-            case "record":
-                new mode().setMode(mode.ModeType.MODE_RECORD);
-                break;
-            case "test":
-                new mode().setMode(mode.ModeType.MODE_TEST);
-                break;
-            case "off":
-                new mode().setMode(mode.ModeType.MODE_OFF);
-                break;
-        }
-
     }
 
 }
