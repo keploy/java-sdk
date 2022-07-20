@@ -48,7 +48,7 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
 
 or to *build.gradle*:
 
-    compile 'io.keploy:keploy-sdk:1.0.5'
+    implementation 'io.keploy:keploy-sdk:1.0.5'
 
 ## Usage
 
