@@ -1,4 +1,4 @@
-package io.keploy.client;
+package io.keploy.service;
 
 import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
@@ -23,13 +23,13 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-public class GrpcClient {
+public class GrpcService {
 
-    private static final Logger logger = LogManager.getLogger("GrpcClient");
+    private static final Logger logger = LogManager.getLogger("GrpcService");
     private final RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
     private final Keploy k;
 
-    public GrpcClient() {
+    public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
         ManagedChannel channel = ManagedChannelBuilder.forTarget("localhost:8081")

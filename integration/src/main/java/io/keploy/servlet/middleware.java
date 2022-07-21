@@ -1,6 +1,6 @@
 package io.keploy.servlet;
 
-import io.keploy.client.GrpcClient;
+import io.keploy.service.GrpcService;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
@@ -9,6 +9,7 @@ import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
+import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
@@ -23,6 +24,7 @@ import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 
 
@@ -33,6 +35,9 @@ public class middleware implements Filter {
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
+        //just like wait groups, used in testfile
+        CountDownLatch countDownLatch = HaltThread.getInstance().getCountDownLatch();
+
         logger.debug("Initializing Keploy Instance");
         KeployInstance ki = KeployInstance.getInstance();
         Keploy kp = new Keploy();
@@ -56,20 +61,20 @@ public class middleware implements Filter {
         kp.setCfg(cfg);
         ki.setKeploy(kp);
 
-        GrpcClient grpcClient = new GrpcClient();
+        GrpcService grpcService = new GrpcService();
+        String kmode = System.getenv("KEPLOY_MODE");
+        final String KEPLOY_MODE = (kmode != null) ? kmode : "record";
 
         new Thread(() -> {
-
-            if (mode.getMode() != null && mode.getMode().equals(mode.ModeType.MODE_TEST)) {
+            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
                 try {
                     logger.debug("calling test Method");
-                    grpcClient.Test();
+                    grpcService.Test();
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
-                System.exit(0);
             }
-
+            countDownLatch.countDown();
         }).start();
     }
 
@@ -124,10 +129,10 @@ public class middleware implements Filter {
 
         logger.debug("inside middleware: outgoing response");
 
-        GrpcClient grpcClient = new GrpcClient();
+        GrpcService grpcService = new GrpcService();
 
         try {
-            grpcClient.CaptureTestCases(ki, requestBody, responseBody, urlParams, httpResp);
+            grpcService.CaptureTestCases(ki, requestBody, responseBody, urlParams, httpResp);
         } catch (Exception e) {
             logger.error("failed to capture testCases");
             throw new RuntimeException(e);
