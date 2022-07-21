@@ -72,7 +72,7 @@ or to *build.gradle*:
     - **Note:** Before running tests stop the sample application.
 
     - Set `KEPLOY_MODE = test` (default "record")
-        - Using environment variable
+        - Using IDE 
             1. Run your application.
             2. You can also run the application with coverage to see the test coverage.
 
