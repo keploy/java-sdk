@@ -25,6 +25,12 @@
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
+            <artifactId>common</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.keploy</groupId>
             <artifactId>models</artifactId>
             <version>1.0.0-SNAPSHOT</version>
             <scope>compile</scope>
