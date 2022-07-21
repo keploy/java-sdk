@@ -43,12 +43,12 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>1.0.5</version>
+      <version>N.N.N</version> (eg: 1.0.6)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:1.0.5'
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.0.6)
 
 ## Usage
 
