@@ -1,4 +1,7 @@
 package io.keploy.regression;
+
+import io.keploy.regression.context.Context;
+
 public class mode {
 
     private static ModeType Mode;
@@ -16,10 +19,13 @@ public class mode {
     }
 
     public static void setMode(ModeType mode) {
+        if (!isValid(mode)) {
+            return;
+        }
         Mode = mode;
     }
 
-    public boolean isValid(ModeType mode) {
+    public static boolean isValid(ModeType mode) {
         if (mode == ModeType.MODE_RECORD || mode == ModeType.MODE_TEST || mode == ModeType.MODE_OFF) {
             return true;
         }
@@ -30,9 +36,12 @@ public class mode {
         setMode(ModeType.MODE_TEST);
     }
 
-//    public ModeType getModeFromContext(Context ctx){
-//        return ModeType.MODE_OFF;
-//    }
+    public ModeType getModeFromContext(Context ctx) {
+        if (Context.getCtx() == null) {
+            return ModeType.MODE_OFF;
+        }
+        return Context.getCtx().getMode();
+    }
 
     public enum ModeType {
         MODE_RECORD,

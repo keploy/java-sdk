@@ -1,6 +1,8 @@
 package io.keploy.servlet;
 
 import com.google.protobuf.ProtocolStringList;
+import io.keploy.regression.context.Kcontext;
+
 import io.keploy.service.GrpcService;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -99,7 +101,7 @@ public class middleware implements Filter {
         HttpServletResponse response = (HttpServletResponse) servletResponse;
 
         //setting request context
-        Context.setCtx(request);
+        Context.setCtx(new Kcontext(request, null, null, null));
 
 
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);

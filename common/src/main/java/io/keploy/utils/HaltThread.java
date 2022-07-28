@@ -6,6 +6,7 @@ public class HaltThread {
     private static HaltThread haltThread;
     private static CountDownLatch countDownLatch;
 
+
     private HaltThread() {
 
     }
