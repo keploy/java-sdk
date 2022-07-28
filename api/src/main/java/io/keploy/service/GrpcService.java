@@ -170,12 +170,6 @@ public class GrpcService {
             throw new RuntimeException(e);
         }
 
-        //wait so that simulate request could be completed.
-        while (k.getResp().get(testCase.getId()) == null) {
-
-        }
-
-
         Map<String, List<String>> responseHeaders = connection.getHeaderFields();
 
 
