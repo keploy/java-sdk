@@ -1,5 +1,6 @@
 package io.keploy.servlet;
 
+import com.google.protobuf.ProtocolStringList;
 import io.keploy.service.GrpcService;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -31,14 +32,14 @@ import java.util.stream.Collectors;
 @Component
 public class middleware implements Filter {
 
-    private static final Logger logger = LogManager.getLogger("Filter");
+    private static final Logger logger = LogManager.getLogger(Filter.class);
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
         //just like wait groups, used in testfile
         CountDownLatch countDownLatch = HaltThread.getInstance().getCountDownLatch();
 
-        logger.debug("Initializing Keploy Instance");
+        logger.debug("initializing keploy");
         KeployInstance ki = KeployInstance.getInstance();
         Keploy kp = new Keploy();
         Config cfg = new Config();
@@ -62,19 +63,20 @@ public class middleware implements Filter {
         ki.setKeploy(kp);
 
         GrpcService grpcService = new GrpcService();
-        String kmode = System.getenv("KEPLOY_MODE");
-        final String KEPLOY_MODE = (kmode != null) ? kmode : "record";
+
+        final mode.ModeType KEPLOY_MODE = mode.getMode();
 
         new Thread(() -> {
-            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST.getTypeName())) {
+            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST)) {
                 try {
                     logger.debug("calling test Method");
                     grpcService.Test();
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
+                //to stop after running all tests
+                countDownLatch.countDown(); // when running tests using cmd
             }
-            countDownLatch.countDown();
         }).start();
     }
 
@@ -85,7 +87,7 @@ public class middleware implements Filter {
 
         logger.debug("inside middleware: incoming request");
 
-        logger.debug(mode.getMode());
+        logger.debug("mode: {}", mode.getMode());
 
         if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(servletRequest, servletResponse);
@@ -115,9 +117,15 @@ public class middleware implements Filter {
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
 
+        logger.debug("response in middleware: {}", simulateResponse);
+
         String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
+
+        logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
+
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
+            logger.debug("response in keploy resp map: {} ", k.getResp().get(keploy_test_id));
             return;
         }
 

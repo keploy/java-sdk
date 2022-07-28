@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
 
 public class GrpcService {
 
-    private static final Logger logger = LogManager.getLogger("GrpcService");
+    private static final Logger logger = LogManager.getLogger(GrpcService.class);
     private final RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
     private final Keploy k;
 
@@ -40,6 +40,7 @@ public class GrpcService {
     }
 
     public void CaptureTestCases(KeployInstance ki, String reqBody, String resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
+        logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx();
         if (ctxReq == null) {
@@ -113,13 +114,14 @@ public class GrpcService {
         // send de-noise request to server
         try {
             Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
-            logger.debug("denoise message received from server", deNoiseResponse.getMessage());
+            logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
         } catch (Exception e) {
-            logger.error("failed to send de-noise request to backend");
+            logger.error("failed to send de-noise request to backend", e);
         }
     }
 
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
+        logger.debug("inside simulate");
 
         String targetUrl = testCase.getHttpReq().getURL();
         String host = k.getCfg().getApp().getHost();
@@ -155,7 +157,7 @@ public class GrpcService {
                 while ((responseLine = br.readLine()) != null) {
                     response.append(responseLine.trim());
                 }
-                logger.debug("simulate response", response.toString());
+                logger.debug("simulate request's response: {} ", response.toString());
             }
 
             statusCode = connection.getResponseCode();
@@ -170,11 +172,17 @@ public class GrpcService {
 
         Map<String, List<String>> responseHeaders = connection.getHeaderFields();
 
+
+        logger.debug("response headers from custom request inside simulate: {}", responseHeaders);
+
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
         if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.toString())) {
             resp.setBody(response.toString());
             resp.setStatusCode(statusCode);
             Map<String, Service.StrArr> resHeaders = getResponseHeaderMap(responseHeaders);
+
+            logger.debug("response headers from GetResp: {}", resHeaders);
+
             try {
                 resp.putAllHeader(resHeaders);
             } catch (Exception e) {
@@ -186,20 +194,25 @@ public class GrpcService {
     }
 
     public Service.HttpResp.Builder GetResp(String id) throws Exception {
-
+        logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
+            System.out.println("CAN NOT GET RESPONSE FROM KEPLOY MAP");
+            logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
-
         Service.HttpResp.Builder respBuilder = Service.HttpResp.newBuilder();
 
         try {
             respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
-            logger.error("failed to get response ", e.getMessage());
+            logger.error("failed to get response", e);
             throw new Exception(e);
         }
+
+        System.out.println("getting response from keploy resp map");
+
+        logger.debug("response from keploy resp map");
         return respBuilder;
     }
 
@@ -217,21 +230,22 @@ public class GrpcService {
             logger.info("failed to start test run ", e);
             return;
         }
-        logger.info("starting test execution " + "id: " + id + " total tests: " + total);
+        logger.info("starting test execution id: {} total tests: {}", id, total);
         boolean ok = true;
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
-            logger.info("testing " + (i + 1) + " of " + total + " testcase id : " + tc.getId());
+            logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
             Service.TestCase tcCopy = tc;
             ok &= check(id, tcCopy);
-            logger.info("result : " + " testcase id " + tcCopy.getId() + " passed ", ok);
+            logger.info("result : testcase id: [{}]  passed: {}", tcCopy.getId(), ok);
         }
         String msg = end(id, ok);
         if (msg == null) {
             logger.error("failed to end test run");
             return;
         }
-        logger.info("test run completed : " + " with run id " + id + "\n || passed overall " + String.valueOf(ok).toUpperCase() + " ||");
+        logger.info("test run completed with run id [{}]", id);
+        logger.info("|| passed overall: {} ||", String.valueOf(ok).toUpperCase());
     }
 
     public String start(String total) {
@@ -262,7 +276,7 @@ public class GrpcService {
                 List<Service.TestCase> tc = tcs.getTcsList();
                 testCases.addAll(tc);
             } catch (StatusRuntimeException e) {
-                logger.warn("RPC failed: {0}", e.getStatus());
+                logger.warn("RPC failed: {}", e.getStatus());
                 return null;
             }
             i += 25;
@@ -271,11 +285,14 @@ public class GrpcService {
 
     }
 
-    public boolean check(String runId, Service.TestCase tc) throws Exception {
+    public boolean check(String testrunId, Service.TestCase tc) throws Exception {
+        logger.debug("running test case with [{}] testrunId ", testrunId);
+
         Service.HttpResp resp = simulate(tc);
-        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(runId).setResp(resp).build();
+        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(testrunId).setResp(resp).build();
         Service.testResponse testResponse = blockingStub.test(testReq);
         Map<String, Boolean> res = testResponse.getPassMap();
+        logger.info("test result of testrunId [{}]: {} ", testrunId, res.get("pass"));
         return res.get("pass");
     }
 
@@ -345,8 +362,10 @@ public class GrpcService {
             byte[] input = body.getBytes("utf-8");
             os.write(input, 0, input.length);
         } catch (UnsupportedEncodingException e) {
+            logger.error("unable to set custom request body", e);
             throw new RuntimeException(e);
         } catch (IOException e) {
+            logger.error("unable to set custom request body", e);
             throw new RuntimeException(e);
         }
     }
