@@ -5,7 +5,10 @@ import io.keploy.grpc.stubs.Service;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 
 @Getter
@@ -13,10 +16,19 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Keploy {
 
     private Config cfg;
-    private ConcurrentHashMap<String, Service.HttpResp> resp;
+    private Map<String, Service.HttpResp> resp;
+
+    private Map<String, Service.Dependency> deps;
+
+    private Map<String, Long> mocktime;
+
+
 
     public Keploy() {
-        resp = new ConcurrentHashMap<>();
+        resp = Collections.synchronizedMap(new HashMap<>());
+        deps = Collections.synchronizedMap(new HashMap<>());
+        mocktime = Collections.synchronizedMap(new HashMap<>());
+
         initMode();
     }
 

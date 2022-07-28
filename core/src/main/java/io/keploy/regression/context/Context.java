@@ -10,15 +10,17 @@ import javax.servlet.http.HttpServletRequest;
 @Setter
 @NoArgsConstructor
 public class Context {
-    private static ThreadLocal<HttpServletRequest> ctx = new ThreadLocal<>();
+    private static ThreadLocal<Kcontext> ctx = new ThreadLocal<>();
 
-    public static void setCtx(HttpServletRequest httpServletRequest){
-        ctx.set(httpServletRequest);
+    public static void setCtx(Kcontext kcontext) {
+        ctx.set(kcontext);
     }
-    public static HttpServletRequest getCtx(){
+
+    public static Kcontext getCtx() {
         return ctx.get();
     }
-    public static void cleanup(){
+
+    public static void cleanup() {
         ctx.set(null);
     }
 }

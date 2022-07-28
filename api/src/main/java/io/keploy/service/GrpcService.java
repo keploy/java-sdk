@@ -9,6 +9,7 @@ import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
+import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 public class GrpcService {
@@ -42,7 +44,7 @@ public class GrpcService {
     public void CaptureTestCases(KeployInstance ki, String reqBody, String resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
         logger.debug("inside CaptureTestCases");
 
-        HttpServletRequest ctxReq = Context.getCtx();
+        HttpServletRequest ctxReq = Context.getCtx().getRequest();
         if (ctxReq == null) {
             logger.warn("failed to get keploy context");
             return;
@@ -139,8 +141,8 @@ public class GrpcService {
         try {
             url = new URL(targetUrl);
             connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(15000);
-            connection.setReadTimeout(15000);
+            connection.setConnectTimeout(45000);
+            connection.setReadTimeout(45000);
             connection.setRequestMethod(method);
             connection.setRequestProperty("content-type", "application/json");
             connection.setRequestProperty("accept", "application/json");
@@ -169,11 +171,6 @@ public class GrpcService {
         } catch (IOException e) {
             logger.info("failed sending testcase request to app");
             throw new RuntimeException(e);
-        }
-
-        //wait so that simulate request could be completed.
-        while (k.getResp().get(testCase.getId()) == null) {
-
         }
 
 
