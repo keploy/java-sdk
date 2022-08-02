@@ -9,20 +9,17 @@ import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
-import io.keploy.utils.HaltThread;
+import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 public class GrpcService {
@@ -41,7 +38,7 @@ public class GrpcService {
         this.k = KeployInstance.getInstance().getKeploy();
     }
 
-    public void CaptureTestCases(KeployInstance ki, String reqBody, String resBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
+    public void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -53,9 +50,11 @@ public class GrpcService {
         Service.TestCaseReq.Builder testCaseReqBuilder = Service.TestCaseReq.newBuilder();
 
         Service.HttpReq.Builder httpReqBuilder = Service.HttpReq.newBuilder();
-        httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(ctxReq.getRequestURL().toString());
-        Map<String, String> urlParamsMap = params;
-        httpReqBuilder.putAllURLParams(urlParamsMap);
+        String url = ctxReq.getQueryString() == null ? ctxReq.getRequestURI() :
+                ctxReq.getRequestURI() + "?" + ctxReq.getQueryString();
+
+        httpReqBuilder.setMethod(ctxReq.getMethod()).setURL(url);
+        httpReqBuilder.putAllURLParams(params);
         Map<String, Service.StrArr> headerMap = getRequestHeaderMap(ctxReq);
         httpReqBuilder.putAllHeader(headerMap);
         httpReqBuilder.setBody(reqBody);
@@ -64,9 +63,18 @@ public class GrpcService {
 
         Service.HttpReq httpReq = httpReqBuilder.build();
 
-
         testCaseReqBuilder.setAppID(k.getCfg().getApp().getName());
         testCaseReqBuilder.setCaptured(Instant.now().getEpochSecond());
+
+        /*
+         * The order of path parameters, we are getting from request is not proper.
+         * Storing in different order will not block the existing functionality.
+         * It's only for grouping the testcases.
+         * Below code gives unordered mapping of path variables or path parameters
+         * Map<String, String> pathVariables = ((Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE));
+         * Hence we are storing the actual Uri not according to the routing patter.
+         * */
+
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
         testCaseReqBuilder.setHttpResp(httpResp);
         testCaseReqBuilder.setHttpReq(httpReq);
@@ -125,68 +133,49 @@ public class GrpcService {
     public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
         logger.debug("inside simulate");
 
-        String targetUrl = testCase.getHttpReq().getURL();
-        String host = k.getCfg().getApp().getHost();
-        String port = k.getCfg().getApp().getPort();
-        String method = testCase.getHttpReq().getMethod();
-        String body = testCase.getHttpReq().getBody();
+        OkHttpClient client = new OkHttpClient.Builder()
+                .connectTimeout(5, TimeUnit.MINUTES) // connect timeout
+                .writeTimeout(5, TimeUnit.MINUTES) // write timeout
+                .readTimeout(5, TimeUnit.MINUTES) // read timeout
+                .build();
 
 
-        URL url = null;
-        HttpURLConnection connection = null;
-        int statusCode;
-        StringBuilder response = new StringBuilder();
+        String simResBody = null;
+        long statusCode = 0;
+        final Map<String, List<String>> responseHeaders = new HashMap<>();
 
+        Request request = getCustomRequest(testCase);
+        logger.debug("simulate request: {}", request);
 
-        try {
-            url = new URL(targetUrl);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(45000);
-            connection.setReadTimeout(45000);
-            connection.setRequestMethod(method);
-            connection.setRequestProperty("content-type", "application/json");
-            connection.setRequestProperty("accept", "application/json");
-            connection.setRequestProperty("KEPLOY_TEST_ID", testCase.getId());
-            setCustomRequestHeaderMap(connection, testCase.getHttpReq().getHeaderMap());
+        try (Response response = client.newCall(request).execute()) {
 
-            if (!method.equals("GET") && !method.equals("DELETE")) {
-                connection.setDoOutput(true);
-                setCustomRequestBody(connection, body);
+            try (ResponseBody responseBody = response.body()) {
+                if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+                simResBody = responseBody.string();
             }
 
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(connection.getInputStream(), "utf-8"))) {
-                String responseLine = null;
-                while ((responseLine = br.readLine()) != null) {
-                    response.append(responseLine.trim());
+            Map<String, List<String>> resHeadMap = response.headers().toMultimap();
+
+            for (String key : resHeadMap.keySet()) {
+                List<String> vals = resHeadMap.get(key);
+                List<String> values = new ArrayList<>();
+                for (String val : vals) {
+                    values.add(val);
                 }
-                logger.debug("simulate request's response: {} ", response.toString());
+                responseHeaders.put(key, values);
             }
-
-            statusCode = connection.getResponseCode();
-
-        } catch (MalformedURLException e) {
-            logger.info("failed sending testcase request to app");
-            throw new RuntimeException(e);
+            statusCode = response.code();
         } catch (IOException e) {
-            logger.info("failed sending testcase request to app");
-            throw new RuntimeException(e);
+            logger.error("failed sending testcase request to app", e);
         }
 
-
-        Map<String, List<String>> responseHeaders = connection.getHeaderFields();
-
-
-        logger.debug("response headers from custom request inside simulate: {}", responseHeaders);
-
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
-        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(response.toString())) {
-            resp.setBody(response.toString());
+        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(simResBody)) {
+            resp.setBody(simResBody);
             resp.setStatusCode(statusCode);
             Map<String, Service.StrArr> resHeaders = getResponseHeaderMap(responseHeaders);
 
             logger.debug("response headers from GetResp: {}", resHeaders);
-
             try {
                 resp.putAllHeader(resHeaders);
             } catch (Exception e) {
@@ -201,7 +190,6 @@ public class GrpcService {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
-            System.out.println("CAN NOT GET RESPONSE FROM KEPLOY MAP");
             logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
@@ -213,8 +201,6 @@ public class GrpcService {
             logger.error("failed to get response", e);
             throw new Exception(e);
         }
-
-        System.out.println("getting response from keploy resp map");
 
         logger.debug("response from keploy resp map");
         return respBuilder;
@@ -301,23 +287,79 @@ public class GrpcService {
     }
 
     private Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
+
         Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
-            //when use java.net.HttpURLConnection, one of the response headers has key = null.
-            if (key == null) continue;
 
+            if (key == null) continue;
             List<String> headerValues = srcMap.get(key);
+
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
             for (int i = 0; i < headerValues.size(); i++) {
-                builder.addValue(headerValues.get(i));
+                String hval = headerValues.get(i);
+                builder.addValue(hval);
             }
             Service.StrArr value = builder.build();
+            key = convertFirstCapAfterEachDash(key);
             map.put(key, value);
         }
         return map;
     }
 
-    private void setCustomRequestHeaderMap(HttpURLConnection connection, Map<String, Service.StrArr> srcMap) {
+    private String convertFirstCapAfterEachDash(String str) {
+        StringBuilder sb = new StringBuilder();
+        String[] sarr = str.split("-");
+        if (sarr.length == 1) {
+            sb.append(Character.toUpperCase(sarr[0].charAt(0))).append(sarr[0].substring(1));
+        } else {
+            for (int i = 0; i < sarr.length - 1; i++) {
+                String val = sarr[i];
+                sb.append(Character.toUpperCase(val.charAt(0))).append(val.substring(1)).append("-");
+            }
+            String lval = sarr[sarr.length - 1];
+            sb.append(Character.toUpperCase(lval.charAt(0))).append(lval.substring(1));
+        }
+        return sb.toString();
+    }
+
+    private Request getCustomRequest(Service.TestCase testCase) {
+
+        String url = testCase.getHttpReq().getURL();
+        String host = k.getCfg().getApp().getHost();
+        String port = k.getCfg().getApp().getPort();
+        String method = testCase.getHttpReq().getMethod();
+        String body = testCase.getHttpReq().getBody();
+        String targetUrl = "http://" + host + ":" + port + url;
+
+        logger.debug("simulate request's url: {}", targetUrl);
+        Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
+
+        Request.Builder reqBuilder = setCustomRequestHeaderMap(headerMap);
+
+        switch (method) {
+            case "GET":
+                return reqBuilder.get()
+                        .url(targetUrl)
+                        .addHeader("content-type", "application/json")
+                        .addHeader("accept", "application/json")
+                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+            case "DELETE":
+                return reqBuilder.delete()
+                        .url(targetUrl)
+                        .addHeader("content-type", "application/json")
+                        .addHeader("accept", "application/json")
+                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+            default:
+                return reqBuilder.method(method, RequestBody.create(body.getBytes(StandardCharsets.UTF_8)))
+                        .url(targetUrl)
+                        .addHeader("content-type", "application/json")
+                        .addHeader("accept", "application/json")
+                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+        }
+    }
+
+    private Request.Builder setCustomRequestHeaderMap(Map<String, Service.StrArr> srcMap) {
+        Request.Builder reqBuilder = new Request.Builder();
         Map<String, List<String>> headerMap = new HashMap<>();
 
         for (String key : srcMap.keySet()) {
@@ -331,10 +373,11 @@ public class GrpcService {
             if (isModifiable(key)) {
                 List<String> values = headerMap.get(key);
                 for (String value : values) {
-                    connection.setRequestProperty(key, value);
+                    reqBuilder.addHeader(key, value);
                 }
             }
         }
+        return reqBuilder;
     }
 
     private boolean isModifiable(String key) {
@@ -359,19 +402,6 @@ public class GrpcService {
                 return false;
         }
         return true;
-    }
-
-    private void setCustomRequestBody(HttpURLConnection connection, String body) {
-        try (OutputStream os = connection.getOutputStream()) {
-            byte[] input = body.getBytes("utf-8");
-            os.write(input, 0, input.length);
-        } catch (UnsupportedEncodingException e) {
-            logger.error("unable to set custom request body", e);
-            throw new RuntimeException(e);
-        } catch (IOException e) {
-            logger.error("unable to set custom request body", e);
-            throw new RuntimeException(e);
-        }
     }
 
     private Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
