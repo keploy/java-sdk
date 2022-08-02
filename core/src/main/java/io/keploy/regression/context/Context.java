@@ -21,6 +21,6 @@ public class Context {
     }
 
     public static void cleanup() {
-        ctx.set(null);
+        ctx.remove();
     }
 }

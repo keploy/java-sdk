@@ -12,6 +12,7 @@ import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
+import io.keploy.utils.GenericResponseWrapper;
 import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -19,22 +20,29 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
-import javax.servlet.*;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpFilter;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 
 @Component
-public class middleware implements Filter {
+public class middleware extends HttpFilter {
 
-    private static final Logger logger = LogManager.getLogger(Filter.class);
+    private static final Logger logger = LogManager.getLogger(middleware.class);
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
@@ -83,7 +91,7 @@ public class middleware implements Filter {
     }
 
     @Override
-    public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
+    public void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws IOException, ServletException {
         KeployInstance ki = KeployInstance.getInstance();
         Keploy k = ki.getKeploy();
 
@@ -92,34 +100,43 @@ public class middleware implements Filter {
         logger.debug("mode: {}", mode.getMode());
 
         if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
-            filterChain.doFilter(servletRequest, servletResponse);
+            filterChain.doFilter(request, response);
             return;
         }
-
-
-        HttpServletRequest request = (HttpServletRequest) servletRequest;
-        HttpServletResponse response = (HttpServletResponse) servletResponse;
 
         //setting request context
         Context.setCtx(new Kcontext(request, null, null, null));
 
 
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
-        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
+        GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
 
         //calling next
         filterChain.doFilter(requestWrapper, responseWrapper);
 
+        byte[] reqArr = requestWrapper.getContentAsByteArray();
+        byte[] resArr = responseWrapper.getData();
 
-        String requestBody = this.getStringValue(requestWrapper.getContentAsByteArray(), request.getCharacterEncoding());
-        String responseBody = this.getStringValue(responseWrapper.getContentAsByteArray(), response.getCharacterEncoding());
+        String requestBody = this.getStringValue(reqArr, request.getCharacterEncoding());
+        String responseBody = this.getStringValue(resArr, response.getCharacterEncoding());
 
-        responseWrapper.copyBodyToResponse();
+        logger.debug("request body inside middleware: {}", requestBody);
+        logger.debug("response body inside middleware: {}", responseBody);
+
+        OutputStream out = response.getOutputStream();
+
+//        response.setHeader("Content-Length", String.valueOf(resArr.length));
+        out.write(resArr);
+        out.close();
+
+        // to write headers from buffer
+        response.flushBuffer();
+
 
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
 
-        logger.debug("response in middleware: {}", simulateResponse);
+        logger.debug("simulate response inside middleware: {}", simulateResponse);
 
         String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
 
@@ -128,34 +145,38 @@ public class middleware implements Filter {
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
             logger.debug("response in keploy resp map: {} ", k.getResp().get(keploy_test_id));
-            return;
+        } else {
+
+            Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
+
+            Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
+            Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
+            Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
+
+
+            GrpcService grpcService = new GrpcService();
+
+            try {
+                grpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
+            } catch (Exception e) {
+                logger.error("failed to capture testCases");
+                throw new RuntimeException(e);
+            }
         }
-
-        Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
-
-        Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
-        Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
-        Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
         logger.debug("inside middleware: outgoing response");
-
-        GrpcService grpcService = new GrpcService();
-
-        try {
-            grpcService.CaptureTestCases(ki, requestBody, responseBody, urlParams, httpResp);
-        } catch (Exception e) {
-            logger.error("failed to capture testCases");
-            throw new RuntimeException(e);
-        }
     }
 
-    public Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
+
+    public Map<String, Service.StrArr> getResponseHeaderMap(GenericResponseWrapper contentCachingResponseWrapper) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
         List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
 
         for (String name : headerNames) {
+
+            if (name == null) continue;
 
             List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
@@ -176,6 +197,7 @@ public class middleware implements Filter {
         for (String key : param.keySet()) {
             //taking only value of the parameter
             String value = param.get(key)[0];
+            if (key == null || value == null) continue;
             urlParams.put(key, value);
         }
         return urlParams;
