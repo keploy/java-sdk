@@ -60,6 +60,8 @@ or to *build.gradle*:
     - `APP_PORT`           (default APP_PORT = 8080)
     - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:8081/api)
     - `KEPLOY_MODE`        (default KEPLOY_MODE = record/test)
+    - `DENOISE`            (default DENOISE = true)
+      **Note:** By enabling denoise, it will filter out noisy fields for that testcases.
 
 
 - **Generate testcases**
@@ -72,7 +74,7 @@ or to *build.gradle*:
     - **Note:** Before running tests stop the sample application.
 
     - Set `KEPLOY_MODE = test` (default "record")
-        - Using IDE 
+        - Using IDE
             1. Run your application.
             2. You can also run the application with coverage to see the test coverage.
 
@@ -93,11 +95,11 @@ or to *build.gradle*:
                      countDownLatch.await();
                   }
                ```     
-       
+
             2. To get test coverage, in addition to above follow below instructions.
-            
+
             3. Add maven-surefire-plugin to your *pom.xml*.
-  
+
                ```xml 
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
@@ -114,43 +116,43 @@ or to *build.gradle*:
                         </configuration>
                     </plugin>
                ```  
-          - 4. Add Jacoco plugin to your *pom.xml*.
-                ```xml
-                     <plugin>
-                        <groupId>org.jacoco</groupId>
-                        <artifactId>jacoco-maven-plugin</artifactId>
-                        <version>0.8.5</version>
-                        <executions>
-                            <execution>
-                                <id>prepare-agent</id>
-                                <goals>
-                                    <goal>prepare-agent</goal>
-                                </goals>
-                            </execution>
-                            <execution>
-                                <id>report</id>
-                                <phase>prepare-package</phase>
-                                <goals>
-                                    <goal>report</goal>
-                                </goals>
-                            </execution>
-                            <execution>
-                                <id>post-unit-test</id>
-                                <phase>test</phase>
-                                <goals>
-                                    <goal>report</goal>
-                                </goals>
-                                <configuration>
-                                    <!-- Sets the path to the file which contains the execution data. -->
-
-                                    <dataFile>target/jacoco.exec</dataFile>
-                                    <!-- Sets the output directory for the code coverage report. -->
-                                    <outputDirectory>target/my-reports</outputDirectory>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                ```
+            - 4. Add Jacoco plugin to your *pom.xml*.
+                  ```xml
+                       <plugin>
+                          <groupId>org.jacoco</groupId>
+                          <artifactId>jacoco-maven-plugin</artifactId>
+                          <version>0.8.5</version>
+                          <executions>
+                              <execution>
+                                  <id>prepare-agent</id>
+                                  <goals>
+                                      <goal>prepare-agent</goal>
+                                  </goals>
+                              </execution>
+                              <execution>
+                                  <id>report</id>
+                                  <phase>prepare-package</phase>
+                                  <goals>
+                                      <goal>report</goal>
+                                  </goals>
+                              </execution>
+                              <execution>
+                                  <id>post-unit-test</id>
+                                  <phase>test</phase>
+                                  <goals>
+                                      <goal>report</goal>
+                                  </goals>
+                                  <configuration>
+                                      <!-- Sets the path to the file which contains the execution data. -->
+  
+                                      <dataFile>target/jacoco.exec</dataFile>
+                                      <!-- Sets the output directory for the code coverage report. -->
+                                      <outputDirectory>target/my-reports</outputDirectory>
+                                  </configuration>
+                              </execution>
+                          </executions>
+                      </plugin>
+                  ```
             5. Run your tests using command : `mvn test`.
 
 
