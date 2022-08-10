@@ -122,11 +122,16 @@ public class GrpcService {
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server
-        try {
-            Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
-            logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
-        } catch (Exception e) {
-            logger.error("failed to send de-noise request to backend", e);
+
+        boolean noise = k.getCfg().getApp().getDenoise();
+
+        if (noise) {
+            try {
+                Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
+                logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
+            } catch (Exception e) {
+                logger.error("failed to send de-noise request to backend", e);
+            }
         }
     }
 
