@@ -1,29 +1,25 @@
 package io.keploy.servlet;
 
-import com.google.protobuf.ProtocolStringList;
-import io.keploy.regression.context.Kcontext;
-
-import io.keploy.service.GrpcService;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
+import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.AppConfig;
 import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
+import io.keploy.service.GrpcService;
 import io.keploy.utils.GenericResponseWrapper;
 import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
-import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
 import javax.servlet.ServletException;
-import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpFilter;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -35,7 +31,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 
@@ -153,6 +148,13 @@ public class middleware extends HttpFilter {
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
+            // closes grpc previous instance to exit smoothly
+            GrpcService.channel.shutdown();
+            try {
+                GrpcService.channel.awaitTermination(5000, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ex) {
+                logger.error("gRPC channel shutdown interrupted");
+            }
 
             GrpcService grpcService = new GrpcService();
 

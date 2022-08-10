@@ -14,10 +14,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
-import java.io.*;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -28,10 +26,12 @@ public class GrpcService {
     private final RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
     private final Keploy k;
 
+    public static ManagedChannel channel;
+
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("localhost:8081")
+        channel = ManagedChannelBuilder.forTarget("localhost:8081")
                 .usePlaintext()
                 .build();
         this.blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
