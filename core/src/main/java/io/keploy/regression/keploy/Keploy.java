@@ -32,7 +32,7 @@ public class Keploy {
         initMode();
     }
 
-    public void initMode() {
+    private void initMode() {
 
         // checking because user may be setting while running in test mode
         if (mode.getMode() == null) {

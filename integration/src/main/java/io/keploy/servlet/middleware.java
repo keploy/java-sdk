@@ -26,6 +26,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,17 +175,17 @@ public class middleware extends HttpFilter {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
-        List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
+        List<String> headerNames = new ArrayList<>(contentCachingResponseWrapper.getHeaderNames());
 
         for (String name : headerNames) {
 
             if (name == null) continue;
 
-            List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
+            List<String> values = new ArrayList<>(contentCachingResponseWrapper.getHeaders(name));
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
-            for (int i = 0; i < values.size(); i++) {
-                builder.addValue(values.get(i));
+            for (String s : values) {
+                builder.addValue(s);
             }
             Service.StrArr value = builder.build();
 
