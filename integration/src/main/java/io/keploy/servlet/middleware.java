@@ -56,8 +56,8 @@ public class middleware extends HttpFilter {
         if (System.getenv("APP_PORT") != null) {
             appConfig.setPort(System.getenv("APP_PORT"));
         }
-        if (System.getenv("Denoise") != null) {
-            appConfig.setDenoise(Boolean.valueOf(System.getenv("Denoise")));
+        if (System.getenv("DENOISE") != null) {
+            appConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
         }
 
         ServerConfig serverConfig = new ServerConfig();
