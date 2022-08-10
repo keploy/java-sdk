@@ -151,6 +151,7 @@ public class GrpcService {
 
             try (ResponseBody responseBody = response.body()) {
                 if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+                assert responseBody != null;
                 simResBody = responseBody.string();
             }
 
@@ -158,10 +159,7 @@ public class GrpcService {
 
             for (String key : resHeadMap.keySet()) {
                 List<String> vals = resHeadMap.get(key);
-                List<String> values = new ArrayList<>();
-                for (String val : vals) {
-                    values.add(val);
-                }
+                List<String> values = new ArrayList<>(vals);
                 responseHeaders.put(key, values);
             }
             statusCode = response.code();
@@ -190,6 +188,7 @@ public class GrpcService {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
+            System.out.println("NOT TAKING FROM MAP");
             logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
@@ -202,6 +201,7 @@ public class GrpcService {
             throw new Exception(e);
         }
 
+        System.out.println("TAKING FROM MAP");
         logger.debug("response from keploy resp map");
         return respBuilder;
     }
@@ -225,9 +225,8 @@ public class GrpcService {
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
             logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
-            Service.TestCase tcCopy = tc;
-            ok &= check(id, tcCopy);
-            logger.info("result : testcase id: [{}]  passed: {}", tcCopy.getId(), ok);
+            ok &= check(id, tc);
+            logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), ok);
         }
         String msg = end(id, ok);
         if (msg == null) {
@@ -295,8 +294,7 @@ public class GrpcService {
             List<String> headerValues = srcMap.get(key);
 
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
-            for (int i = 0; i < headerValues.size(); i++) {
-                String hval = headerValues.get(i);
+            for (String hval : headerValues) {
                 builder.addValue(hval);
             }
             Service.StrArr value = builder.build();
@@ -414,8 +412,8 @@ public class GrpcService {
             List<String> values = Collections.list(httpServletRequest.getHeaders(name));
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
-            for (int i = 0; i < values.size(); i++) {
-                builder.addValue(values.get(i));
+            for (String s : values) {
+                builder.addValue(s);
             }
             Service.StrArr value = builder.build();
 
