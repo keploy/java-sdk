@@ -3,7 +3,7 @@ package io.keploy.utils;
 import java.util.concurrent.CountDownLatch;
 
 public class HaltThread {
-    private static HaltThread haltThread;
+    private static volatile HaltThread haltThread;
     private static CountDownLatch countDownLatch;
 
 
@@ -11,7 +11,7 @@ public class HaltThread {
 
     }
 
-    public static HaltThread getInstance() {
+    public static void getInstance() {
         if (haltThread == null) {
             synchronized (HaltThread.class) {  //thread safe.
                 if (haltThread == null) {
@@ -20,7 +20,6 @@ public class HaltThread {
                 }
             }
         }
-        return haltThread;
     }
 
     public static CountDownLatch getCountDownLatch() {

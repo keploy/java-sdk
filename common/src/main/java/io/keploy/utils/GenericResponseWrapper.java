@@ -7,7 +7,7 @@ import javax.servlet.http.HttpServletResponseWrapper;
 import java.io.*;
 
 public class GenericResponseWrapper extends HttpServletResponseWrapper {
-    private ByteArrayOutputStream output;
+    private final ByteArrayOutputStream output;
     private int contentLength;
     private String contentType;
 
@@ -53,7 +53,7 @@ public class GenericResponseWrapper extends HttpServletResponseWrapper {
 }
 
 class FilterServletOutputStream extends ServletOutputStream {
-    private DataOutputStream stream;
+    private final DataOutputStream stream;
 
     public FilterServletOutputStream(OutputStream output) {
         stream = new DataOutputStream(output);

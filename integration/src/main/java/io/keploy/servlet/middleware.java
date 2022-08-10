@@ -26,12 +26,12 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 
 @Component
@@ -40,12 +40,13 @@ public class middleware extends HttpFilter {
     private static final Logger logger = LogManager.getLogger(middleware.class);
 
     @Override
-    public void init(FilterConfig filterConfig) throws ServletException {
+    public void init(FilterConfig filterConfig) {
         //just like wait groups, used in testfile
-        CountDownLatch countDownLatch = HaltThread.getInstance().getCountDownLatch();
+        HaltThread.getInstance();
+        CountDownLatch countDownLatch = HaltThread.getCountDownLatch();
 
         logger.debug("initializing keploy");
-        KeployInstance ki = KeployInstance.getInstance();
+        KeployInstance.getInstance();
         Keploy kp = new Keploy();
         Config cfg = new Config();
         AppConfig appConfig = new AppConfig();
@@ -65,7 +66,7 @@ public class middleware extends HttpFilter {
         cfg.setApp(appConfig);
         cfg.setServer(serverConfig);
         kp.setCfg(cfg);
-        ki.setKeploy(kp);
+        KeployInstance.setKeploy(kp);
 
         GrpcService grpcService = new GrpcService();
 
@@ -87,8 +88,8 @@ public class middleware extends HttpFilter {
 
     @Override
     public void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws IOException, ServletException {
-        KeployInstance ki = KeployInstance.getInstance();
-        Keploy k = ki.getKeploy();
+        KeployInstance.getInstance();
+        Keploy k = KeployInstance.getKeploy();
 
         logger.debug("inside middleware: incoming request");
 
@@ -159,7 +160,7 @@ public class middleware extends HttpFilter {
             GrpcService grpcService = new GrpcService();
 
             try {
-                grpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
+                grpcService.CaptureTestCases(requestBody, urlParams, httpResp);
             } catch (Exception e) {
                 logger.error("failed to capture testCases");
                 throw new RuntimeException(e);
@@ -174,17 +175,17 @@ public class middleware extends HttpFilter {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
-        List<String> headerNames = contentCachingResponseWrapper.getHeaderNames().stream().collect(Collectors.toList());
+        List<String> headerNames = new ArrayList<>(contentCachingResponseWrapper.getHeaderNames());
 
         for (String name : headerNames) {
 
             if (name == null) continue;
 
-            List<String> values = contentCachingResponseWrapper.getHeaders(name).stream().collect(Collectors.toList());
+            List<String> values = new ArrayList<>(contentCachingResponseWrapper.getHeaders(name));
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
-            for (int i = 0; i < values.size(); i++) {
-                builder.addValue(values.get(i));
+            for (String s : values) {
+                builder.addValue(s);
             }
             Service.StrArr value = builder.build();
 
