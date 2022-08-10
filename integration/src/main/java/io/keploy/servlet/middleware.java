@@ -148,6 +148,7 @@ public class middleware extends HttpFilter {
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
+            // closes grpc previous instance to exit smoothly
             GrpcService.channel.shutdown();
             try {
                 GrpcService.channel.awaitTermination(5000, TimeUnit.MILLISECONDS);
