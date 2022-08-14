@@ -9,6 +9,7 @@ import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
+import io.keploy.utils.HaltThread;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -18,7 +19,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GrpcService {
 
@@ -224,20 +229,43 @@ public class GrpcService {
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
-        boolean ok = true;
+        AtomicBoolean ok = new AtomicBoolean(true);
+
+        CountDownLatch wg = null;
+        ExecutorService service = Executors.newFixedThreadPool(10);
+        // call the service for each test case
+
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
             logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
-            ok &= check(id, tc);
-            logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), ok);
+            wg = new CountDownLatch(1);
+            CountDownLatch finalWg = wg;
+
+            service.submit(() -> {
+                boolean pass;
+                try {
+                    pass = check(id, tc);
+                    ok.set(ok.get() & pass);
+                } catch (Exception e) {
+                    logger.warn("unable to test with testcase id:[{}]", tc.getId());
+                    throw new RuntimeException(e);
+                }
+                logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
+                finalWg.countDown();
+            });
         }
-        String msg = end(id, ok);
+
+        if (wg != null) {
+            wg.await();
+        }
+
+        String msg = end(id, ok.get());
         if (msg == null) {
             logger.error("failed to end test run");
             return;
         }
         logger.info("test run completed with run id [{}]", id);
-        logger.info("|| passed overall: {} ||", String.valueOf(ok).toUpperCase());
+        logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
     }
 
     public String start(String total) {
@@ -273,8 +301,10 @@ public class GrpcService {
             }
             i += 25;
         }
-        return testCases;
 
+        //reverse in order to get testcases in which they were recorded.
+        Collections.reverse(testCases);
+        return testCases;
     }
 
     public boolean check(String testrunId, Service.TestCase tc) throws Exception {
