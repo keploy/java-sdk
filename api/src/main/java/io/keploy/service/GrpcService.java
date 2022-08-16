@@ -128,7 +128,7 @@ public class GrpcService {
 
         // send de-noise request to server
 
-        boolean noise = k.getCfg().getApp().getDenoise();
+        boolean noise = k.getCfg().getServer().getDenoise();
 
         if (noise) {
             try {
