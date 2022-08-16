@@ -10,9 +10,11 @@ public class ServerConfig {
 //    "https://api.keploy.io";
     private String URL = "http://localhost:8081/api";
     private String LicenseKey;
+    private Boolean Denoise = false;
 
-    public ServerConfig(String URL, String licenseKey) {
+    public ServerConfig(String URL, String licenseKey,Boolean denoise) {
         this.URL = URL;
         LicenseKey = licenseKey;
+        Denoise = denoise;
     }
 }

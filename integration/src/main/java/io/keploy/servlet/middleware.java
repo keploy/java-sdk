@@ -56,11 +56,12 @@ public class middleware extends HttpFilter {
         if (System.getenv("APP_PORT") != null) {
             appConfig.setPort(System.getenv("APP_PORT"));
         }
-        if (System.getenv("DENOISE") != null) {
-            appConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
-        }
 
         ServerConfig serverConfig = new ServerConfig();
+
+        if (System.getenv("DENOISE") != null) {
+            serverConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
+        }
 
         if (System.getenv("KEPLOY_URL") != null) {
             serverConfig.setURL(System.getenv("KEPLOY_URL"));
