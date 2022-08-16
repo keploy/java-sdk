@@ -16,6 +16,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -24,15 +25,12 @@ import javax.servlet.http.HttpFilter;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 
 @Component
@@ -108,13 +106,13 @@ public class middleware extends HttpFilter {
 
 
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
-        GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
+        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
 
         //calling next
         filterChain.doFilter(requestWrapper, responseWrapper);
 
         byte[] reqArr = requestWrapper.getContentAsByteArray();
-        byte[] resArr = responseWrapper.getData();
+        byte[] resArr = responseWrapper.getContentAsByteArray();
 
         String requestBody = this.getStringValue(reqArr, request.getCharacterEncoding());
         String responseBody = this.getStringValue(resArr, response.getCharacterEncoding());
@@ -122,15 +120,7 @@ public class middleware extends HttpFilter {
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
 
-        OutputStream out = response.getOutputStream();
-
-//        response.setHeader("Content-Length", String.valueOf(resArr.length));
-        out.write(resArr);
-        out.close();
-
-        // to write headers from buffer
-        response.flushBuffer();
-
+        responseWrapper.copyBodyToResponse();
 
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
@@ -151,19 +141,8 @@ public class middleware extends HttpFilter {
             Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
-
-            // closes grpc previous instance to exit smoothly
-            GrpcService.channel.shutdown();
             try {
-                GrpcService.channel.awaitTermination(5000, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ex) {
-                logger.error("gRPC channel shutdown interrupted");
-            }
-
-            GrpcService grpcService = new GrpcService();
-
-            try {
-                grpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
+                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
             } catch (Exception e) {
                 logger.error("failed to capture testCases");
                 throw new RuntimeException(e);
@@ -174,7 +153,7 @@ public class middleware extends HttpFilter {
     }
 
 
-    public Map<String, Service.StrArr> getResponseHeaderMap(GenericResponseWrapper contentCachingResponseWrapper) {
+    public Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 

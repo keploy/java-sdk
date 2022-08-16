@@ -28,8 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
-    private final RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub;
-    private final Keploy k;
+    private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
+    private static Keploy k = null;
 
     public static ManagedChannel channel;
 
@@ -43,7 +43,7 @@ public class GrpcService {
         this.k = KeployInstance.getInstance().getKeploy();
     }
 
-    public void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
+    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -87,11 +87,11 @@ public class GrpcService {
         Capture(testCaseReqBuilder.build());
     }
 
-    public void Capture(Service.TestCaseReq testCaseReq) throws Exception {
+    public static void Capture(Service.TestCaseReq testCaseReq) throws Exception {
         put(testCaseReq);
     }
 
-    public void put(Service.TestCaseReq testCaseReq) throws Exception {
+    public static void put(Service.TestCaseReq testCaseReq) throws Exception {
         Service.postTCResponse postTCResponse = null;
         try {
             postTCResponse = blockingStub.postTC(testCaseReq);
@@ -107,7 +107,7 @@ public class GrpcService {
         denoise(id, testCaseReq);
     }
 
-    public void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
+    public static void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
         // run the request again to find noisy fields
         TimeUnit.SECONDS.sleep(3);
 
@@ -140,7 +140,7 @@ public class GrpcService {
         }
     }
 
-    public Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
+    public static Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
         logger.debug("inside simulate");
 
         OkHttpClient client = new OkHttpClient.Builder()
@@ -194,11 +194,12 @@ public class GrpcService {
         return resp.build();
     }
 
-    public Service.HttpResp.Builder GetResp(String id) throws Exception {
+    public static Service.HttpResp.Builder GetResp(String id) throws Exception {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
             logger.debug("response is not present in keploy resp map");
+            System.out.println("~~~~~~~~~ NOT TAKING FROM MAP !!! ~~~~~~~~~~");
             return Service.HttpResp.newBuilder();
         }
         Service.HttpResp.Builder respBuilder = Service.HttpResp.newBuilder();
@@ -211,6 +212,7 @@ public class GrpcService {
         }
 
         logger.debug("response from keploy resp map");
+        System.out.println(">>>>>>>>>>>>>> TAKING FROM MAP <<<<<<<<<<<<<<");
         return respBuilder;
     }
 
@@ -318,7 +320,7 @@ public class GrpcService {
         return res.get("pass");
     }
 
-    private Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
+    private static Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
         for (String key : srcMap.keySet()) {
@@ -337,7 +339,7 @@ public class GrpcService {
         return map;
     }
 
-    private String convertFirstCapAfterEachDash(String str) {
+    private static String convertFirstCapAfterEachDash(String str) {
         StringBuilder sb = new StringBuilder();
         String[] sarr = str.split("-");
         if (sarr.length == 1) {
@@ -353,7 +355,7 @@ public class GrpcService {
         return sb.toString();
     }
 
-    private Request getCustomRequest(Service.TestCase testCase) {
+    private static Request getCustomRequest(Service.TestCase testCase) {
 
         String url = testCase.getHttpReq().getURL();
         String host = k.getCfg().getApp().getHost();
@@ -389,7 +391,7 @@ public class GrpcService {
         }
     }
 
-    private Request.Builder setCustomRequestHeaderMap(Map<String, Service.StrArr> srcMap) {
+    private static Request.Builder setCustomRequestHeaderMap(Map<String, Service.StrArr> srcMap) {
         Request.Builder reqBuilder = new Request.Builder();
         Map<String, List<String>> headerMap = new HashMap<>();
 
@@ -411,7 +413,7 @@ public class GrpcService {
         return reqBuilder;
     }
 
-    private boolean isModifiable(String key) {
+    private static boolean isModifiable(String key) {
         switch (key) {
             case "connection":
                 return false;
@@ -435,7 +437,7 @@ public class GrpcService {
         return true;
     }
 
-    private Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
+    private static Map<String, Service.StrArr> getRequestHeaderMap(HttpServletRequest httpServletRequest) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
