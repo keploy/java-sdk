@@ -38,8 +38,8 @@ public class GrpcService {
         channel = ManagedChannelBuilder.forTarget("localhost:8081")
                 .usePlaintext()
                 .build();
-        this.blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-        this.k = KeployInstance.getInstance().getKeploy();
+        blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
+        k = KeployInstance.getInstance().getKeploy();
     }
 
     public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
@@ -96,7 +96,6 @@ public class GrpcService {
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error("failed to send test case to backend", e);
-            throw new Exception();
         }
         Map<String, String> tcsId = postTCResponse.getTcsIdMap();
         String id = tcsId.get("id");
@@ -177,9 +176,6 @@ public class GrpcService {
         } catch (IOException e) {
             logger.error("failed sending testcase request to app", e);
         }
-        System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] After executing simulate request");
-
-//        Thread.sleep(10);
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
         if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(simResBody)) {
@@ -204,8 +200,6 @@ public class GrpcService {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
-
-            System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] -> ~~~~ NOT FROM MAP ~~~");
             logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
@@ -219,7 +213,6 @@ public class GrpcService {
             return Service.HttpResp.newBuilder();
         }
 
-        System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] -> *** FROM MAP ***");
         logger.debug("response from keploy resp map");
         return respBuilder;
     }
@@ -256,7 +249,6 @@ public class GrpcService {
                 if (!pass) {
                     ok.set(false);
                 }
-                System.out.println("tcId: [" + tc.getId() + "] || pass: " + pass + " || ok: " + ok.get());
                 logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
                 finalWg.countDown();
             });
