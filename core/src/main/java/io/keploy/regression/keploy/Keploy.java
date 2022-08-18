@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 @Getter
@@ -23,9 +24,8 @@ public class Keploy {
     private Map<String, Long> mocktime;
 
 
-
     public Keploy() {
-        resp = Collections.synchronizedMap(new HashMap<>());
+        resp = new ConcurrentHashMap<>();
         deps = Collections.synchronizedMap(new HashMap<>());
         mocktime = Collections.synchronizedMap(new HashMap<>());
 

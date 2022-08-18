@@ -16,6 +16,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -26,13 +27,14 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 @Component
@@ -111,8 +113,25 @@ public class middleware extends HttpFilter {
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
 
-        //calling next
-        filterChain.doFilter(requestWrapper, responseWrapper);
+        CountDownLatch latch = new CountDownLatch(1);
+
+        new Thread(() -> {
+            try {
+                //calling next
+                filterChain.doFilter(requestWrapper, responseWrapper);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (ServletException e) {
+                throw new RuntimeException(e);
+            }
+            latch.countDown();
+        }).start();
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
 
         byte[] reqArr = requestWrapper.getContentAsByteArray();
         byte[] resArr = responseWrapper.getData();
@@ -123,15 +142,18 @@ public class middleware extends HttpFilter {
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
 
+
+        System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] Before calling flushBuffer");
         OutputStream out = response.getOutputStream();
 
-//        response.setHeader("Content-Length", String.valueOf(resArr.length));
+        response.setHeader("Content-Length", String.valueOf(resArr.length));
         out.write(resArr);
         out.close();
 
         // to write headers from buffer
         response.flushBuffer();
-
+        //        responseWrapper.copyBodyToResponse();
+        System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] After calling flushBuffer");
 
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
@@ -144,6 +166,7 @@ public class middleware extends HttpFilter {
 
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
+            System.out.println("Thread: [" + Thread.currentThread() + "]-[" + Instant.now().getEpochSecond() + "] -> (middleware): response in map => " + k.getResp().get(keploy_test_id).getBody());
             logger.debug("response in keploy resp map: {} ", k.getResp().get(keploy_test_id));
         } else {
 
@@ -153,18 +176,8 @@ public class middleware extends HttpFilter {
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
-            // closes grpc previous instance to exit smoothly
-            GrpcService.channel.shutdown();
             try {
-                GrpcService.channel.awaitTermination(5000, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ex) {
-                logger.error("gRPC channel shutdown interrupted");
-            }
-
-            GrpcService grpcService = new GrpcService();
-
-            try {
-                grpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
+                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
             } catch (Exception e) {
                 logger.error("failed to capture testCases");
                 throw new RuntimeException(e);
