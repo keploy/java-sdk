@@ -9,7 +9,6 @@ import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.keploy.Keploy;
-import io.keploy.utils.HaltThread;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,8 +38,8 @@ public class GrpcService {
         channel = ManagedChannelBuilder.forTarget("localhost:8081")
                 .usePlaintext()
                 .build();
-        this.blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-        this.k = KeployInstance.getInstance().getKeploy();
+        blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
+        k = KeployInstance.getInstance().getKeploy();
     }
 
     public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
@@ -97,7 +96,6 @@ public class GrpcService {
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error("failed to send test case to backend", e);
-            throw new Exception();
         }
         Map<String, String> tcsId = postTCResponse.getTcsIdMap();
         String id = tcsId.get("id");
@@ -128,7 +126,7 @@ public class GrpcService {
 
         // send de-noise request to server
 
-        boolean noise = k.getCfg().getApp().getDenoise();
+        boolean noise = k.getCfg().getServer().getDenoise();
 
         if (noise) {
             try {
@@ -160,7 +158,9 @@ public class GrpcService {
         try (Response response = client.newCall(request).execute()) {
 
             try (ResponseBody responseBody = response.body()) {
-                if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+                if (!response.isSuccessful()) {
+                    logger.debug("Unexpected code {}", response);
+                }
                 assert responseBody != null;
                 simResBody = responseBody.string();
             }
@@ -194,29 +194,30 @@ public class GrpcService {
         return resp.build();
     }
 
+
     public static Service.HttpResp.Builder GetResp(String id) throws Exception {
+
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
             logger.debug("response is not present in keploy resp map");
-            System.out.println("~~~~~~~~~ NOT TAKING FROM MAP !!! ~~~~~~~~~~");
             return Service.HttpResp.newBuilder();
         }
+
         Service.HttpResp.Builder respBuilder = Service.HttpResp.newBuilder();
 
         try {
             respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
             logger.error("failed to get response", e);
-            throw new Exception(e);
+            return Service.HttpResp.newBuilder();
         }
 
         logger.debug("response from keploy resp map");
-        System.out.println(">>>>>>>>>>>>>> TAKING FROM MAP <<<<<<<<<<<<<<");
         return respBuilder;
     }
 
-    public void Test() throws Exception {
+    public static void Test() throws Exception {
         TimeUnit.SECONDS.sleep(7);
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
@@ -244,13 +245,9 @@ public class GrpcService {
             CountDownLatch finalWg = wg;
 
             service.submit(() -> {
-                boolean pass;
-                try {
-                    pass = check(id, tc);
-                    ok.set(ok.get() & pass);
-                } catch (Exception e) {
-                    logger.warn("unable to test with testcase id:[{}]", tc.getId());
-                    throw new RuntimeException(e);
+                boolean pass = check(id, tc);
+                if (!pass) {
+                    ok.set(false);
                 }
                 logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
                 finalWg.countDown();
@@ -262,27 +259,27 @@ public class GrpcService {
         }
 
         String msg = end(id, ok.get());
-        if (msg == null) {
-            logger.error("failed to end test run");
-            return;
-        }
+        logger.debug("message from end {}", msg);
+
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
     }
 
-    public String start(String total) {
+    public static String start(String total) {
+        logger.debug("inside start function");
         Service.startRequest startRequest = Service.startRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setTotal(total).build();
         Service.startResponse startResponse = blockingStub.start(startRequest);
         return startResponse.getId();
     }
 
-    public String end(String id, boolean status) {
+    public static String end(String id, boolean status) {
+        logger.debug("inside end function");
         Service.endRequest endRequest = Service.endRequest.newBuilder().setId(id).setStatus(String.valueOf(status)).build();
         Service.endResponse endResponse = blockingStub.end(endRequest);
         return endResponse.getMessage();
     }
 
-    public List<Service.TestCase> fetch() {
+    public static List<Service.TestCase> fetch() {
         logger.info("inside fetch function");
 
         List<Service.TestCase> testCases = new ArrayList<>();
@@ -309,15 +306,29 @@ public class GrpcService {
         return testCases;
     }
 
-    public boolean check(String testrunId, Service.TestCase tc) throws Exception {
+    public static boolean check(String testrunId, Service.TestCase tc) {
         logger.debug("running test case with [{}] testrunId ", testrunId);
 
-        Service.HttpResp resp = simulate(tc);
+        Service.HttpResp resp = null;
+        try {
+            resp = simulate(tc);
+        } catch (Exception e) {
+            logger.error("failed to simulate request on local server", e);
+            return false;
+        }
         Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(testrunId).setResp(resp).build();
-        Service.testResponse testResponse = blockingStub.test(testReq);
+
+        Service.testResponse testResponse = null;
+        try {
+            testResponse = blockingStub.test(testReq);
+        } catch (Exception e) {
+            logger.error("failed to send test request to backend", e);
+            return false;
+        }
+
         Map<String, Boolean> res = testResponse.getPassMap();
         logger.info("test result of testrunId [{}]: {} ", testrunId, res.get("pass"));
-        return res.get("pass");
+        return res.getOrDefault("pass", false);
     }
 
     private static Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {

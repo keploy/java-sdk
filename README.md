@@ -60,7 +60,7 @@ or to *build.gradle*:
     - `APP_PORT`           (default APP_PORT = 8080)
     - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:8081/api)
     - `KEPLOY_MODE`        (default KEPLOY_MODE = record/test)
-    - `DENOISE`            (default DENOISE = true)
+    - `DENOISE`            (default DENOISE = false)
       **Note:** By enabling denoise, it will filter out noisy fields for that testcases.
 
 

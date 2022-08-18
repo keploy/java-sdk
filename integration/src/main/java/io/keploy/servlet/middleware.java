@@ -26,12 +26,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
-
 
 @Component
 public class middleware extends HttpFilter {
@@ -54,11 +50,12 @@ public class middleware extends HttpFilter {
         if (System.getenv("APP_PORT") != null) {
             appConfig.setPort(System.getenv("APP_PORT"));
         }
-        if (System.getenv("DENOISE") != null) {
-            appConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
-        }
 
         ServerConfig serverConfig = new ServerConfig();
+
+        if (System.getenv("DENOISE") != null) {
+            serverConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
+        }
 
         if (System.getenv("KEPLOY_URL") != null) {
             serverConfig.setURL(System.getenv("KEPLOY_URL"));
@@ -79,7 +76,7 @@ public class middleware extends HttpFilter {
                     logger.debug("calling test Method");
                     grpcService.Test();
                 } catch (Exception e) {
-                    throw new RuntimeException(e);
+                    logger.error("failed to run tests", e);
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
@@ -104,11 +101,9 @@ public class middleware extends HttpFilter {
         //setting request context
         Context.setCtx(new Kcontext(request, null, null, null));
 
-
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
 
-        //calling next
         filterChain.doFilter(requestWrapper, responseWrapper);
 
         byte[] reqArr = requestWrapper.getContentAsByteArray();
@@ -119,8 +114,6 @@ public class middleware extends HttpFilter {
 
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
-
-        responseWrapper.copyBodyToResponse();
 
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
         Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
@@ -141,14 +134,15 @@ public class middleware extends HttpFilter {
             Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
+
             try {
                 GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
             } catch (Exception e) {
-                logger.error("failed to capture testCases");
-                throw new RuntimeException(e);
+                logger.error("failed to capture testCases", e);
             }
         }
-
+        // this will also flush the headers and make response committed.
+        responseWrapper.copyBodyToResponse();
         logger.debug("inside middleware: outgoing response");
     }
 
