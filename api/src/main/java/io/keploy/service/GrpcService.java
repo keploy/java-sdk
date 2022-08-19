@@ -129,11 +129,11 @@ public class GrpcService {
 
         // send de-noise request to server
         try {
-                Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
-                logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
-            } catch (Exception e) {
-                logger.error("failed to send de-noise request to backend", e);
-            }
+            Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
+            logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
+        } catch (Exception e) {
+            logger.error("failed to send de-noise request to backend", e);
+        }
 
     }
 
@@ -234,15 +234,13 @@ public class GrpcService {
         logger.info("starting test execution id: {} total tests: {}", id, total);
         AtomicBoolean ok = new AtomicBoolean(true);
 
-        CountDownLatch wg = null;
+        CountDownLatch wg = new CountDownLatch(tcs.size());
         ExecutorService service = Executors.newFixedThreadPool(10);
         // call the service for each test case
 
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
             logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
-            wg = new CountDownLatch(1);
-            CountDownLatch finalWg = wg;
 
             service.submit(() -> {
                 boolean pass = check(id, tc);
@@ -250,13 +248,12 @@ public class GrpcService {
                     ok.set(false);
                 }
                 logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
-                finalWg.countDown();
+                wg.countDown();
             });
         }
 
-        if (wg != null) {
-            wg.await();
-        }
+        // wait until all tests does not get completed.
+        wg.await();
 
         String msg = end(id, ok.get());
         logger.debug("message from end {}", msg);
@@ -327,7 +324,7 @@ public class GrpcService {
         }
 
         Map<String, Boolean> res = testResponse.getPassMap();
-        logger.info("test result of testrunId [{}]: {} ", testrunId, res.get("pass"));
+        logger.debug("(check): test result of testrunId [{}]: {} ", testrunId, res.get("pass"));
         return res.getOrDefault("pass", false);
     }
 
