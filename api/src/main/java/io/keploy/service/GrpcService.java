@@ -99,10 +99,13 @@ public class GrpcService {
         }
         Map<String, String> tcsId = postTCResponse.getTcsIdMap();
         String id = tcsId.get("id");
-
         if (id == null) return;
 
-        denoise(id, testCaseReq);
+        boolean noise = k.getCfg().getServer().getDenoise();
+        if (noise) {
+            denoise(id, testCaseReq);
+        }
+
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
@@ -125,26 +128,22 @@ public class GrpcService {
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server
-
-        boolean noise = k.getCfg().getServer().getDenoise();
-
-        if (noise) {
-            try {
+        try {
                 Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
                 logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
             } catch (Exception e) {
                 logger.error("failed to send de-noise request to backend", e);
             }
-        }
+
     }
 
     public static Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
         logger.debug("inside simulate");
 
         OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(5, TimeUnit.MINUTES) // connect timeout
-                .writeTimeout(5, TimeUnit.MINUTES) // write timeout
-                .readTimeout(5, TimeUnit.MINUTES) // read timeout
+                .connectTimeout(6, TimeUnit.MINUTES) // connect timeout
+                .writeTimeout(6, TimeUnit.MINUTES) // write timeout
+                .readTimeout(6, TimeUnit.MINUTES) // read timeout
                 .build();
 
 
@@ -173,6 +172,7 @@ public class GrpcService {
                 responseHeaders.put(key, values);
             }
             statusCode = response.code();
+            response.body().close();
         } catch (IOException e) {
             logger.error("failed sending testcase request to app", e);
         }
@@ -200,6 +200,7 @@ public class GrpcService {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
+            Keploy.notFromMap.getAndIncrement();
             logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
@@ -213,6 +214,7 @@ public class GrpcService {
             return Service.HttpResp.newBuilder();
         }
 
+        Keploy.fromMap.getAndIncrement();
         logger.debug("response from keploy resp map");
         return respBuilder;
     }

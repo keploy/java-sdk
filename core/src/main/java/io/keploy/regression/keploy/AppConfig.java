@@ -17,7 +17,7 @@ public class AppConfig {
     private String Port = "8080";
 
     private Duration Delay = Duration.ofSeconds(5);
-    private Duration Timeout = Duration.ofSeconds(60);
+    private Duration Timeout = Duration.ofSeconds(160);
     private Filter Filter;
 
     public AppConfig(String name, String host, String port, Duration delay, Duration timeout, Filter filter) {

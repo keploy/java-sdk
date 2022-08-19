@@ -10,7 +10,6 @@ import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
 import io.keploy.service.GrpcService;
-import io.keploy.utils.GenericResponseWrapper;
 import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -26,7 +25,10 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 @Component
@@ -80,6 +82,8 @@ public class middleware extends HttpFilter {
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
+                System.out.println("Taking from map: " + Keploy.fromMap.get());
+                System.out.println("Not Taking from map: " + Keploy.notFromMap.get());
             }
         }).start();
     }

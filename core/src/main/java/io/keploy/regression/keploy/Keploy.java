@@ -10,6 +10,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 @Getter
@@ -22,6 +23,10 @@ public class Keploy {
     private Map<String, Service.Dependency> deps;
 
     private Map<String, Long> mocktime;
+
+    public static AtomicInteger fromMap = new AtomicInteger(0);
+
+    public static AtomicInteger notFromMap = new AtomicInteger(0);
 
 
     public Keploy() {
