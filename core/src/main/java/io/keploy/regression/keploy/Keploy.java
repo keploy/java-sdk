@@ -24,13 +24,9 @@ public class Keploy {
 
     private Map<String, Long> mocktime;
 
-    public static AtomicInteger fromMap = new AtomicInteger(0);
-
-    public static AtomicInteger notFromMap = new AtomicInteger(0);
-
 
     public Keploy() {
-        resp = new ConcurrentHashMap<>();
+        resp =  Collections.synchronizedMap(new HashMap<>());
         deps = Collections.synchronizedMap(new HashMap<>());
         mocktime = Collections.synchronizedMap(new HashMap<>());
 

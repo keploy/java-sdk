@@ -200,7 +200,6 @@ public class GrpcService {
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
         if (httpResp == null) {
-            Keploy.notFromMap.getAndIncrement();
             logger.debug("response is not present in keploy resp map");
             return Service.HttpResp.newBuilder();
         }
@@ -214,7 +213,6 @@ public class GrpcService {
             return Service.HttpResp.newBuilder();
         }
 
-        Keploy.fromMap.getAndIncrement();
         logger.debug("response from keploy resp map");
         return respBuilder;
     }

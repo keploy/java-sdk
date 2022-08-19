@@ -82,8 +82,6 @@ public class middleware extends HttpFilter {
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
-                System.out.println("Taking from map: " + Keploy.fromMap.get());
-                System.out.println("Not Taking from map: " + Keploy.notFromMap.get());
             }
         }).start();
     }
