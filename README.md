@@ -173,9 +173,3 @@ We'd love to collaborate with you to make Keploy great. To get started:
   community and the team.
 * [GitHub](https://github.com/keploy/java-sdk/issues) - For bug reports and feature requests.
 
-
-## Documentation(WIP):
-
-https://docs.google.com/document/d/1scq1sGUPeWyupBqtZCDnbx2G1GMtchHBdRql9XwEEtE/edit?usp=sharing
-
-

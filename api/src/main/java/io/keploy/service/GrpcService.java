@@ -42,7 +42,7 @@ public class GrpcService {
         k = KeployInstance.getInstance().getKeploy();
     }
 
-    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) throws Exception {
+    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -86,11 +86,17 @@ public class GrpcService {
         Capture(testCaseReqBuilder.build());
     }
 
-    public static void Capture(Service.TestCaseReq testCaseReq) throws Exception {
-        put(testCaseReq);
+    public static void Capture(Service.TestCaseReq testCaseReq) {
+        new Thread(() -> {
+            try {
+                put(testCaseReq);
+            } catch (Exception e) {
+                logger.error("failed to send test case to backend", e);
+            }
+        }).start();
     }
 
-    public static void put(Service.TestCaseReq testCaseReq) throws Exception {
+    public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse = null;
         try {
             postTCResponse = blockingStub.postTC(testCaseReq);
@@ -108,9 +114,13 @@ public class GrpcService {
 
     }
 
-    public static void denoise(String id, Service.TestCaseReq testCaseReq) throws Exception {
+    public static void denoise(String id, Service.TestCaseReq testCaseReq) {
         // run the request again to find noisy fields
-        TimeUnit.SECONDS.sleep(3);
+        try {
+            TimeUnit.SECONDS.sleep(3);
+        } catch (InterruptedException e) {
+            logger.error("(denoise): unable to sleep ", e);
+        }
 
         Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
         testCaseBuilder.setId(id);
@@ -137,7 +147,7 @@ public class GrpcService {
 
     }
 
-    public static Service.HttpResp simulate(Service.TestCase testCase) throws Exception {
+    public static Service.HttpResp simulate(Service.TestCase testCase) {
         logger.debug("inside simulate");
 
         OkHttpClient client = new OkHttpClient.Builder()
@@ -195,7 +205,7 @@ public class GrpcService {
     }
 
 
-    public static Service.HttpResp.Builder GetResp(String id) throws Exception {
+    public static Service.HttpResp.Builder GetResp(String id) {
 
         logger.debug("inside GetResp");
         Service.HttpResp httpResp = k.getResp().get(id);
@@ -217,8 +227,12 @@ public class GrpcService {
         return respBuilder;
     }
 
-    public static void Test() throws Exception {
-        TimeUnit.SECONDS.sleep(7);
+    public static void Test(){
+        try {
+            TimeUnit.SECONDS.sleep(5);
+        } catch (InterruptedException e) {
+            logger.error("(Test): unable to sleep ", e);
+        }
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
 
@@ -232,7 +246,7 @@ public class GrpcService {
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
-        AtomicBoolean ok = new AtomicBoolean(true);
+        AtomicBoolean ok = new AtomicBoolean(false);
 
         CountDownLatch wg = new CountDownLatch(tcs.size());
         ExecutorService service = Executors.newFixedThreadPool(10);
@@ -253,13 +267,23 @@ public class GrpcService {
         }
 
         // wait until all tests does not get completed.
-        wg.await();
+        try {
+            wg.await();
+        } catch (InterruptedException e) {
+            logger.error("(Test): unable to wait for tests to get completed", e);
+        }
 
         String msg = end(id, ok.get());
         logger.debug("message from end {}", msg);
 
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
+        try{
+            Thread.sleep(10000);
+            System.exit(0);
+        } catch (InterruptedException e) {
+           logger.error("Failed to shut test run properly.. ",e);
+        }
     }
 
     public static String start(String total) {
