@@ -31,7 +31,7 @@ public class GrpcService {
     private static Keploy k = null;
 
     public static ManagedChannel channel;
-
+    public static OkHttpClient client;
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
@@ -40,6 +40,12 @@ public class GrpcService {
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
         k = KeployInstance.getInstance().getKeploy();
+
+        client = new OkHttpClient.Builder()
+                .connectTimeout(6, TimeUnit.MINUTES) // connect timeout
+                .writeTimeout(6, TimeUnit.MINUTES) // write timeout
+                .readTimeout(6, TimeUnit.MINUTES) // read timeout
+                .build();
     }
 
     public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) {
@@ -111,7 +117,8 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
-
+        // doing this will save thread-local from memory leak.
+        Context.cleanup();
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
@@ -149,13 +156,6 @@ public class GrpcService {
 
     public static Service.HttpResp simulate(Service.TestCase testCase) {
         logger.debug("inside simulate");
-
-        OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(6, TimeUnit.MINUTES) // connect timeout
-                .writeTimeout(6, TimeUnit.MINUTES) // write timeout
-                .readTimeout(6, TimeUnit.MINUTES) // read timeout
-                .build();
-
 
         String simResBody = null;
         long statusCode = 0;
@@ -227,7 +227,7 @@ public class GrpcService {
         return respBuilder;
     }
 
-    public static void Test(){
+    public static void Test() {
         try {
             TimeUnit.SECONDS.sleep(5);
         } catch (InterruptedException e) {
@@ -246,8 +246,8 @@ public class GrpcService {
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
-        AtomicBoolean ok = new AtomicBoolean(false);
-
+        AtomicBoolean ok = new AtomicBoolean(true);
+//        AtomicInteger testCount = new AtomicInteger(0);
         CountDownLatch wg = new CountDownLatch(tcs.size());
         ExecutorService service = Executors.newFixedThreadPool(10);
         // call the service for each test case
@@ -278,12 +278,6 @@ public class GrpcService {
 
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
-        try{
-            Thread.sleep(10000);
-            System.exit(0);
-        } catch (InterruptedException e) {
-           logger.error("Failed to shut test run properly.. ",e);
-        }
     }
 
     public static String start(String total) {
