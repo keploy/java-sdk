@@ -82,6 +82,12 @@ public class middleware extends HttpFilter {
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
+                try {
+                    Thread.sleep(10000);
+                    System.exit(0);
+                } catch (InterruptedException e) {
+                    logger.error("Failed to shut test run properly... ", e);
+                }
             }
         }).start();
     }
@@ -128,6 +134,7 @@ public class middleware extends HttpFilter {
 
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
+            Context.cleanup();
             logger.debug("response in keploy resp map: {} ", k.getResp().get(keploy_test_id));
         } else {
 

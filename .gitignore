@@ -181,3 +181,6 @@ Temporary Items
 
 target/
 dependency-reduced-pom.xml
+
+pom.xml.versionsBackup
+sdk.iml
