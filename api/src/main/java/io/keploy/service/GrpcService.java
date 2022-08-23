@@ -31,7 +31,7 @@ public class GrpcService {
     private static Keploy k = null;
 
     public static ManagedChannel channel;
-    public static OkHttpClient client;
+    private static OkHttpClient client;
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
