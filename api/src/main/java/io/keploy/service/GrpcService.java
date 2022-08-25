@@ -246,10 +246,14 @@ public class GrpcService {
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
+
         AtomicBoolean ok = new AtomicBoolean(true);
-//        AtomicInteger testCount = new AtomicInteger(0);
         CountDownLatch wg = new CountDownLatch(tcs.size());
-        ExecutorService service = Executors.newFixedThreadPool(10);
+
+        String async_test = System.getenv("ASYNC_TESTING");
+        int nThreads = (Boolean.parseBoolean(async_test)) ? 10 : 1;
+
+        ExecutorService service = Executors.newFixedThreadPool(nThreads);
         // call the service for each test case
 
         for (int i = 0; i < tcs.size(); i++) {
