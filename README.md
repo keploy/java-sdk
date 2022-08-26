@@ -52,6 +52,8 @@ or to *build.gradle*:
 
 ## Usage
 
+- Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)
+
 - **Replace** `@SpringBootApplication` with `@SpringBootApplication(scanBasePackages = {"<your base package>", "io.keploy.servlet"}).` in your main class.
 
 
