@@ -56,7 +56,7 @@ public class middleware extends HttpFilter {
         ServerConfig serverConfig = new ServerConfig();
 
         if (System.getenv("DENOISE") != null) {
-            serverConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
+            serverConfig.setDenoise(Boolean.parseBoolean(System.getenv("DENOISE")));
         }
 
         if (System.getenv("KEPLOY_URL") != null) {

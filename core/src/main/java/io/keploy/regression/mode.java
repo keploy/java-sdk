@@ -36,13 +36,6 @@ public class mode {
         setMode(ModeType.MODE_TEST);
     }
 
-    public ModeType getModeFromContext(Context ctx) {
-        if (Context.getCtx() == null) {
-            return ModeType.MODE_OFF;
-        }
-        return Context.getCtx().getMode();
-    }
-
     public enum ModeType {
         MODE_RECORD,
         MODE_TEST,
@@ -58,6 +51,13 @@ public class mode {
                     return "off";
             }
             return "unknown";
+        }
+
+        public ModeType getModeFromContext() {
+            if (Context.getCtx() == null) {
+                return ModeType.MODE_OFF;
+            }
+            return Context.getCtx().getMode();
         }
     }
 }

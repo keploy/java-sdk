@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import javax.servlet.http.HttpServletRequest;
+import java.util.List;
 
 @Getter
 @Setter
@@ -19,9 +20,9 @@ public class Kcontext {
 
     private String TestId;
 
-    private Service.Dependency[] Deps;
+    private List<Service.Dependency> Deps;
 
-    public Kcontext(HttpServletRequest request, io.keploy.regression.mode.ModeType mode, String testId, Service.Dependency[] deps) {
+    public Kcontext(HttpServletRequest request, io.keploy.regression.mode.ModeType mode, String testId, List<Service.Dependency> deps) {
         this.Request = request;
         this.Mode = mode;
         this.TestId = testId;
