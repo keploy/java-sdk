@@ -21,17 +21,17 @@ message TestCaseReq {
   HttpReq HttpReq = 4;
   HttpResp HttpResp = 5;
   repeated Dependency Dependency = 6;
+  string Path = 7;
+  repeated Mock Mocks = 8;
 }
 
-// message abc {
-//     map<string,int> a = 1;
-// }
 
 message TestReq {
   string ID = 1;
   string AppID = 2;
   string RunID = 3;
   HttpResp Resp = 4;
+  string Path = 5;
 }
 
 message TestCase {
@@ -49,11 +49,6 @@ message TestCase {
   map<string, StrArr> anchors = 12;
   repeated string noise = 13;
 }
-
-// message MessageName {
-//   repeated int64 b = 1;
-//   bytes c = 2;
-// }
 
 message Method {
   string Method = 1;
@@ -104,9 +99,11 @@ message getTCSRequest{
   string app = 1;
   string  offset = 2;
   string limit = 3;
+  string path = 4;
 }
 message getTCSResponse{
   repeated TestCase tcs = 1;
+  bool eof = 2;
 }
 message postTCResponse{
   map<string, string> tcsId = 1;
@@ -118,6 +115,60 @@ message testResponse{
   map<string, bool> pass = 1;
 }
 
+message Mock {
+  message Request {
+    string Method = 1;
+    int64 ProtoMajor = 2;
+    int64 ProtoMinor = 3;
+    string URL = 4;
+    map<string, StrArr> Header = 5;
+    string Body = 6;
+  }
+  message Object {
+    string Type = 1;
+    bytes Data = 2;
+  }
+
+  string Version = 1;
+  string Name = 2;
+  string Kind = 3;
+  message SpecSchema {
+    map<string, string> Metadata = 1;
+    repeated Object Objects = 2;
+    HttpReq Req = 3;
+    HttpResp Res = 4;
+    repeated string Mocks = 5;
+    map<string, StrArr> Assertions = 6;
+  }
+  SpecSchema Spec = 4;
+}
+
+message PutMockReq {
+  Mock Mock = 1;
+  string Path = 2;
+}
+
+message PutMockResp {
+  int64 Inserted = 1;
+}
+
+message GetMockReq {
+  string Path = 1;
+  string Name = 2;
+}
+
+message getMockResp {
+  repeated Mock Mocks = 1;
+}
+
+message StartMockReq {
+  string Path = 1;
+  string Mode = 2;
+}
+
+message StartMockResp {
+  bool Exists = 1;
+}
 
 service RegressionService{
   rpc End (endRequest) returns (endResponse);
@@ -127,4 +178,7 @@ service RegressionService{
   rpc PostTC (TestCaseReq) returns (postTCResponse);
   rpc DeNoise (TestReq) returns(deNoiseResponse);
   rpc Test (TestReq) returns (testResponse);
+  rpc PutMock (PutMockReq) returns (PutMockResp);
+  rpc GetMocks (GetMockReq) returns (getMockResp);
+  rpc StartMocking (StartMockReq) returns (StartMockResp);
 }

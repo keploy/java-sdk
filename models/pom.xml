@@ -69,6 +69,7 @@
                             <goal>run</goal>
                         </goals>
                         <configuration>
+                            <protocArtifact>com.google.protobuf:protoc:3.21.1</protocArtifact>
                             <includeMavenTypes>direct</includeMavenTypes>
 
                             <inputDirectories>
