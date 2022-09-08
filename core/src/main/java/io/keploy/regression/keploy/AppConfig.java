@@ -16,6 +16,7 @@ public class AppConfig {
     private String Host = "0.0.0.0";
     private String Port = "8080";
 
+    private String Path = "";
     private Duration Delay = Duration.ofSeconds(6);
     private Duration Timeout = Duration.ofSeconds(300);
     private Filter Filter;

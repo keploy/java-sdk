@@ -38,12 +38,6 @@
             <version>6.0.53</version>
             <scope>provided</scope>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-compiler-plugin -->
-        <dependency>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-compiler-plugin</artifactId>
-            <version>3.10.1</version>
-        </dependency>
     </dependencies>
 
     <properties>
@@ -69,6 +63,7 @@
                             <goal>run</goal>
                         </goals>
                         <configuration>
+                            <protocArtifact>com.google.protobuf:protoc:3.21.1</protocArtifact>
                             <includeMavenTypes>direct</includeMavenTypes>
 
                             <inputDirectories>

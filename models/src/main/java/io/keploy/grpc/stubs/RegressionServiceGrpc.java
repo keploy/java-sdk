@@ -232,6 +232,99 @@ public final class RegressionServiceGrpc {
     return getTestMethod;
   }
 
+  private static volatile io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.PutMockReq,
+      io.keploy.grpc.stubs.Service.PutMockResp> getPutMockMethod;
+
+  @io.grpc.stub.annotations.RpcMethod(
+      fullMethodName = SERVICE_NAME + '/' + "PutMock",
+      requestType = io.keploy.grpc.stubs.Service.PutMockReq.class,
+      responseType = io.keploy.grpc.stubs.Service.PutMockResp.class,
+      methodType = io.grpc.MethodDescriptor.MethodType.UNARY)
+  public static io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.PutMockReq,
+      io.keploy.grpc.stubs.Service.PutMockResp> getPutMockMethod() {
+    io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.PutMockReq, io.keploy.grpc.stubs.Service.PutMockResp> getPutMockMethod;
+    if ((getPutMockMethod = RegressionServiceGrpc.getPutMockMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getPutMockMethod = RegressionServiceGrpc.getPutMockMethod) == null) {
+          RegressionServiceGrpc.getPutMockMethod = getPutMockMethod =
+              io.grpc.MethodDescriptor.<io.keploy.grpc.stubs.Service.PutMockReq, io.keploy.grpc.stubs.Service.PutMockResp>newBuilder()
+              .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
+              .setFullMethodName(generateFullMethodName(SERVICE_NAME, "PutMock"))
+              .setSampledToLocalTracing(true)
+              .setRequestMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.PutMockReq.getDefaultInstance()))
+              .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.PutMockResp.getDefaultInstance()))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("PutMock"))
+              .build();
+        }
+      }
+    }
+    return getPutMockMethod;
+  }
+
+  private static volatile io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.GetMockReq,
+      io.keploy.grpc.stubs.Service.getMockResp> getGetMocksMethod;
+
+  @io.grpc.stub.annotations.RpcMethod(
+      fullMethodName = SERVICE_NAME + '/' + "GetMocks",
+      requestType = io.keploy.grpc.stubs.Service.GetMockReq.class,
+      responseType = io.keploy.grpc.stubs.Service.getMockResp.class,
+      methodType = io.grpc.MethodDescriptor.MethodType.UNARY)
+  public static io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.GetMockReq,
+      io.keploy.grpc.stubs.Service.getMockResp> getGetMocksMethod() {
+    io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.GetMockReq, io.keploy.grpc.stubs.Service.getMockResp> getGetMocksMethod;
+    if ((getGetMocksMethod = RegressionServiceGrpc.getGetMocksMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getGetMocksMethod = RegressionServiceGrpc.getGetMocksMethod) == null) {
+          RegressionServiceGrpc.getGetMocksMethod = getGetMocksMethod =
+              io.grpc.MethodDescriptor.<io.keploy.grpc.stubs.Service.GetMockReq, io.keploy.grpc.stubs.Service.getMockResp>newBuilder()
+              .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
+              .setFullMethodName(generateFullMethodName(SERVICE_NAME, "GetMocks"))
+              .setSampledToLocalTracing(true)
+              .setRequestMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.GetMockReq.getDefaultInstance()))
+              .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.getMockResp.getDefaultInstance()))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("GetMocks"))
+              .build();
+        }
+      }
+    }
+    return getGetMocksMethod;
+  }
+
+  private static volatile io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.StartMockReq,
+      io.keploy.grpc.stubs.Service.StartMockResp> getStartMockingMethod;
+
+  @io.grpc.stub.annotations.RpcMethod(
+      fullMethodName = SERVICE_NAME + '/' + "StartMocking",
+      requestType = io.keploy.grpc.stubs.Service.StartMockReq.class,
+      responseType = io.keploy.grpc.stubs.Service.StartMockResp.class,
+      methodType = io.grpc.MethodDescriptor.MethodType.UNARY)
+  public static io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.StartMockReq,
+      io.keploy.grpc.stubs.Service.StartMockResp> getStartMockingMethod() {
+    io.grpc.MethodDescriptor<io.keploy.grpc.stubs.Service.StartMockReq, io.keploy.grpc.stubs.Service.StartMockResp> getStartMockingMethod;
+    if ((getStartMockingMethod = RegressionServiceGrpc.getStartMockingMethod) == null) {
+      synchronized (RegressionServiceGrpc.class) {
+        if ((getStartMockingMethod = RegressionServiceGrpc.getStartMockingMethod) == null) {
+          RegressionServiceGrpc.getStartMockingMethod = getStartMockingMethod =
+              io.grpc.MethodDescriptor.<io.keploy.grpc.stubs.Service.StartMockReq, io.keploy.grpc.stubs.Service.StartMockResp>newBuilder()
+              .setType(io.grpc.MethodDescriptor.MethodType.UNARY)
+              .setFullMethodName(generateFullMethodName(SERVICE_NAME, "StartMocking"))
+              .setSampledToLocalTracing(true)
+              .setRequestMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.StartMockReq.getDefaultInstance()))
+              .setResponseMarshaller(io.grpc.protobuf.ProtoUtils.marshaller(
+                  io.keploy.grpc.stubs.Service.StartMockResp.getDefaultInstance()))
+              .setSchemaDescriptor(new RegressionServiceMethodDescriptorSupplier("StartMocking"))
+              .build();
+        }
+      }
+    }
+    return getStartMockingMethod;
+  }
+
   /**
    * Creates a new async stub that supports all call types for the service
    */
@@ -329,6 +422,27 @@ public final class RegressionServiceGrpc {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getTestMethod(), responseObserver);
     }
 
+    /**
+     */
+    public void putMock(io.keploy.grpc.stubs.Service.PutMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.PutMockResp> responseObserver) {
+      io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getPutMockMethod(), responseObserver);
+    }
+
+    /**
+     */
+    public void getMocks(io.keploy.grpc.stubs.Service.GetMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.getMockResp> responseObserver) {
+      io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetMocksMethod(), responseObserver);
+    }
+
+    /**
+     */
+    public void startMocking(io.keploy.grpc.stubs.Service.StartMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.StartMockResp> responseObserver) {
+      io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getStartMockingMethod(), responseObserver);
+    }
+
     @java.lang.Override public final io.grpc.ServerServiceDefinition bindService() {
       return io.grpc.ServerServiceDefinition.builder(getServiceDescriptor())
           .addMethod(
@@ -380,6 +494,27 @@ public final class RegressionServiceGrpc {
                 io.keploy.grpc.stubs.Service.TestReq,
                 io.keploy.grpc.stubs.Service.testResponse>(
                   this, METHODID_TEST)))
+          .addMethod(
+            getPutMockMethod(),
+            io.grpc.stub.ServerCalls.asyncUnaryCall(
+              new MethodHandlers<
+                io.keploy.grpc.stubs.Service.PutMockReq,
+                io.keploy.grpc.stubs.Service.PutMockResp>(
+                  this, METHODID_PUT_MOCK)))
+          .addMethod(
+            getGetMocksMethod(),
+            io.grpc.stub.ServerCalls.asyncUnaryCall(
+              new MethodHandlers<
+                io.keploy.grpc.stubs.Service.GetMockReq,
+                io.keploy.grpc.stubs.Service.getMockResp>(
+                  this, METHODID_GET_MOCKS)))
+          .addMethod(
+            getStartMockingMethod(),
+            io.grpc.stub.ServerCalls.asyncUnaryCall(
+              new MethodHandlers<
+                io.keploy.grpc.stubs.Service.StartMockReq,
+                io.keploy.grpc.stubs.Service.StartMockResp>(
+                  this, METHODID_START_MOCKING)))
           .build();
     }
   }
@@ -453,6 +588,30 @@ public final class RegressionServiceGrpc {
       io.grpc.stub.ClientCalls.asyncUnaryCall(
           getChannel().newCall(getTestMethod(), getCallOptions()), request, responseObserver);
     }
+
+    /**
+     */
+    public void putMock(io.keploy.grpc.stubs.Service.PutMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.PutMockResp> responseObserver) {
+      io.grpc.stub.ClientCalls.asyncUnaryCall(
+          getChannel().newCall(getPutMockMethod(), getCallOptions()), request, responseObserver);
+    }
+
+    /**
+     */
+    public void getMocks(io.keploy.grpc.stubs.Service.GetMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.getMockResp> responseObserver) {
+      io.grpc.stub.ClientCalls.asyncUnaryCall(
+          getChannel().newCall(getGetMocksMethod(), getCallOptions()), request, responseObserver);
+    }
+
+    /**
+     */
+    public void startMocking(io.keploy.grpc.stubs.Service.StartMockReq request,
+        io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.StartMockResp> responseObserver) {
+      io.grpc.stub.ClientCalls.asyncUnaryCall(
+          getChannel().newCall(getStartMockingMethod(), getCallOptions()), request, responseObserver);
+    }
   }
 
   /**
@@ -516,6 +675,27 @@ public final class RegressionServiceGrpc {
     public io.keploy.grpc.stubs.Service.testResponse test(io.keploy.grpc.stubs.Service.TestReq request) {
       return io.grpc.stub.ClientCalls.blockingUnaryCall(
           getChannel(), getTestMethod(), getCallOptions(), request);
+    }
+
+    /**
+     */
+    public io.keploy.grpc.stubs.Service.PutMockResp putMock(io.keploy.grpc.stubs.Service.PutMockReq request) {
+      return io.grpc.stub.ClientCalls.blockingUnaryCall(
+          getChannel(), getPutMockMethod(), getCallOptions(), request);
+    }
+
+    /**
+     */
+    public io.keploy.grpc.stubs.Service.getMockResp getMocks(io.keploy.grpc.stubs.Service.GetMockReq request) {
+      return io.grpc.stub.ClientCalls.blockingUnaryCall(
+          getChannel(), getGetMocksMethod(), getCallOptions(), request);
+    }
+
+    /**
+     */
+    public io.keploy.grpc.stubs.Service.StartMockResp startMocking(io.keploy.grpc.stubs.Service.StartMockReq request) {
+      return io.grpc.stub.ClientCalls.blockingUnaryCall(
+          getChannel(), getStartMockingMethod(), getCallOptions(), request);
     }
   }
 
@@ -588,6 +768,30 @@ public final class RegressionServiceGrpc {
       return io.grpc.stub.ClientCalls.futureUnaryCall(
           getChannel().newCall(getTestMethod(), getCallOptions()), request);
     }
+
+    /**
+     */
+    public com.google.common.util.concurrent.ListenableFuture<io.keploy.grpc.stubs.Service.PutMockResp> putMock(
+        io.keploy.grpc.stubs.Service.PutMockReq request) {
+      return io.grpc.stub.ClientCalls.futureUnaryCall(
+          getChannel().newCall(getPutMockMethod(), getCallOptions()), request);
+    }
+
+    /**
+     */
+    public com.google.common.util.concurrent.ListenableFuture<io.keploy.grpc.stubs.Service.getMockResp> getMocks(
+        io.keploy.grpc.stubs.Service.GetMockReq request) {
+      return io.grpc.stub.ClientCalls.futureUnaryCall(
+          getChannel().newCall(getGetMocksMethod(), getCallOptions()), request);
+    }
+
+    /**
+     */
+    public com.google.common.util.concurrent.ListenableFuture<io.keploy.grpc.stubs.Service.StartMockResp> startMocking(
+        io.keploy.grpc.stubs.Service.StartMockReq request) {
+      return io.grpc.stub.ClientCalls.futureUnaryCall(
+          getChannel().newCall(getStartMockingMethod(), getCallOptions()), request);
+    }
   }
 
   private static final int METHODID_END = 0;
@@ -597,6 +801,9 @@ public final class RegressionServiceGrpc {
   private static final int METHODID_POST_TC = 4;
   private static final int METHODID_DE_NOISE = 5;
   private static final int METHODID_TEST = 6;
+  private static final int METHODID_PUT_MOCK = 7;
+  private static final int METHODID_GET_MOCKS = 8;
+  private static final int METHODID_START_MOCKING = 9;
 
   private static final class MethodHandlers<Req, Resp> implements
       io.grpc.stub.ServerCalls.UnaryMethod<Req, Resp>,
@@ -642,6 +849,18 @@ public final class RegressionServiceGrpc {
         case METHODID_TEST:
           serviceImpl.test((io.keploy.grpc.stubs.Service.TestReq) request,
               (io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.testResponse>) responseObserver);
+          break;
+        case METHODID_PUT_MOCK:
+          serviceImpl.putMock((io.keploy.grpc.stubs.Service.PutMockReq) request,
+              (io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.PutMockResp>) responseObserver);
+          break;
+        case METHODID_GET_MOCKS:
+          serviceImpl.getMocks((io.keploy.grpc.stubs.Service.GetMockReq) request,
+              (io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.getMockResp>) responseObserver);
+          break;
+        case METHODID_START_MOCKING:
+          serviceImpl.startMocking((io.keploy.grpc.stubs.Service.StartMockReq) request,
+              (io.grpc.stub.StreamObserver<io.keploy.grpc.stubs.Service.StartMockResp>) responseObserver);
           break;
         default:
           throw new AssertionError();
@@ -711,6 +930,9 @@ public final class RegressionServiceGrpc {
               .addMethod(getPostTCMethod())
               .addMethod(getDeNoiseMethod())
               .addMethod(getTestMethod())
+              .addMethod(getPutMockMethod())
+              .addMethod(getGetMocksMethod())
+              .addMethod(getStartMockingMethod())
               .build();
         }
       }

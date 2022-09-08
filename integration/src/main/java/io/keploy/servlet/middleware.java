@@ -25,6 +25,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -51,6 +53,18 @@ public class middleware extends HttpFilter {
         }
         if (System.getenv("APP_PORT") != null) {
             appConfig.setPort(System.getenv("APP_PORT"));
+        }
+
+        //Path for exported tests
+        String kpath = System.getenv("KEPLOY_PATH");
+
+        if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
+            Path effectivePath = Paths.get("").resolve(kpath).toAbsolutePath();
+            String absolutePath = effectivePath.normalize().toString();
+            appConfig.setPath(absolutePath);
+        } else if (kpath == null || kpath.length() == 0) {
+            String currDir = System.getProperty("user.dir")+"/src/test";
+            appConfig.setPath(currDir);
         }
 
         ServerConfig serverConfig = new ServerConfig();

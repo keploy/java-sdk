@@ -1,10 +1,11 @@
 package io.keploy.regression;
+
 import io.keploy.regression.keploy.Keploy;
 
 public class KeployInstance {
     private static Keploy keploy;
 
-    private static KeployInstance keployInstance;
+    private static volatile KeployInstance keployInstance;
 
     private KeployInstance() {
     }

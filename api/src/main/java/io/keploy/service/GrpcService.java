@@ -32,6 +32,7 @@ public class GrpcService {
 
     public static ManagedChannel channel;
     private static OkHttpClient client;
+
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
@@ -88,6 +89,7 @@ public class GrpcService {
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
         testCaseReqBuilder.setHttpResp(httpResp);
         testCaseReqBuilder.setHttpReq(httpReq);
+        testCaseReqBuilder.setPath(k.getCfg().getApp().getPath());
 
         Capture(testCaseReqBuilder.build());
     }
@@ -142,6 +144,7 @@ public class GrpcService {
         testReqBuilder.setID(id);
         testReqBuilder.setResp(resp2);
         testReqBuilder.setAppID(k.getCfg().getApp().getName());
+        testReqBuilder.setPath(k.getCfg().getApp().getPath());
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server
@@ -182,7 +185,9 @@ public class GrpcService {
                 responseHeaders.put(key, values);
             }
             statusCode = response.code();
-            response.body().close();
+            if (response.body() != null) {
+                response.body().close();
+            }
         } catch (IOException e) {
             logger.error("failed sending testcase request to app", e);
         }
@@ -305,7 +310,11 @@ public class GrpcService {
         int i = 0;
         while (true) {
             try {
-                Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setLimit("25").setOffset(String.valueOf(i)).build();
+                Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder()
+                        .setApp(k.getCfg().getApp().getName())
+                        .setLimit("25")
+                        .setOffset(String.valueOf(i))
+                        .setPath(k.getCfg().getApp().getPath()).build();
                 Service.getTCSResponse tcs = blockingStub.getTCS(tcsRequest);
                 int cnt = tcs.getTcsCount();
                 if (cnt == 0) {
@@ -313,6 +322,12 @@ public class GrpcService {
                 }
                 List<Service.TestCase> tc = tcs.getTcsList();
                 testCases.addAll(tc);
+
+                boolean eof = tcs.getEof();
+                if (eof) {
+                    break;
+                }
+
             } catch (StatusRuntimeException e) {
                 logger.warn("RPC failed: {}", e.getStatus());
                 return null;
@@ -328,16 +343,21 @@ public class GrpcService {
     public static boolean check(String testrunId, Service.TestCase tc) {
         logger.debug("running test case with [{}] testrunId ", testrunId);
 
-        Service.HttpResp resp = null;
+        Service.HttpResp resp;
         try {
             resp = simulate(tc);
         } catch (Exception e) {
             logger.error("failed to simulate request on local server", e);
             return false;
         }
-        Service.TestReq testReq = Service.TestReq.newBuilder().setID(tc.getId()).setAppID(k.getCfg().getApp().getName()).setRunID(testrunId).setResp(resp).build();
+        Service.TestReq testReq = Service.TestReq.newBuilder()
+                .setID(tc.getId())
+                .setAppID(k.getCfg().getApp().getName())
+                .setRunID(testrunId)
+                .setResp(resp)
+                .setPath(k.getCfg().getApp().getPath()).build();
 
-        Service.testResponse testResponse = null;
+        Service.testResponse testResponse;
         try {
             testResponse = blockingStub.test(testReq);
         } catch (Exception e) {
