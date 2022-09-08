@@ -193,19 +193,6 @@ public class GrpcService {
         }
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
-        if ((resp.getStatusCode() < 300 || resp.getStatusCode() >= 400) && !resp.getBody().equals(simResBody)) {
-            resp.setBody(simResBody);
-            resp.setStatusCode(statusCode);
-            Map<String, Service.StrArr> resHeaders = getResponseHeaderMap(responseHeaders);
-
-            logger.debug("response headers from GetResp: {}", resHeaders);
-            try {
-                resp.putAllHeader(resHeaders);
-            } catch (Exception e) {
-                logger.error("unable to put headers", e);
-            }
-        }
-
         return resp.build();
     }
 
