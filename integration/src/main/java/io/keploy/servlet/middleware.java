@@ -56,17 +56,19 @@ public class middleware extends HttpFilter {
         }
 
         //Path for exported tests
-        String path = System.getenv("PATH");
+        String kpath = System.getenv("KEPLOY_PATH");
 
-        if (path.length() > 0 && !Paths.get(path).isAbsolute()) {
-            Path effectivePath = Paths.get("").resolve(path).toAbsolutePath();
+        if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
+            Path effectivePath = Paths.get("").resolve(kpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setPath(absolutePath);
-        } else if (path.length() == 0) {
-            String currDir = System.getProperty("user.dir");
+        } else if (kpath == null || kpath.length() == 0) {
+            System.out.println("Path is not there");
+            String currDir = System.getProperty("user.dir")+"/src/test";
             appConfig.setPath(currDir);
         }
 
+        System.out.println("path inside init: " + appConfig.getPath());
         ServerConfig serverConfig = new ServerConfig();
 
         if (System.getenv("DENOISE") != null) {
