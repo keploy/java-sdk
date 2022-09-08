@@ -6,8 +6,8 @@
 
     <groupId>io.keploy</groupId>
     <artifactId>java-sdk</artifactId>
-    <packaging>pom</packaging>
     <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
 
     <name>Keploy Java SDK</name>
     <description>Client Java SDK for Kepploy</description>
@@ -43,7 +43,6 @@
         <module>test-module</module>
         <module>models</module>
         <module>keploy-sdk</module>
-
     </modules>
 
     <properties>

@@ -49,7 +49,7 @@ public class GrpcService {
                 .build();
     }
 
-    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp,String protocolType) {
+    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType) {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -70,7 +70,7 @@ public class GrpcService {
         httpReqBuilder.putAllHeader(headerMap);
         httpReqBuilder.setBody(reqBody);
         httpReqBuilder.setProtoMajor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 3)));
-        httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length()-1)));
+        httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 1)));
 
         Service.HttpReq httpReq = httpReqBuilder.build();
 
@@ -89,7 +89,7 @@ public class GrpcService {
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
         testCaseReqBuilder.setHttpResp(httpResp);
         testCaseReqBuilder.setHttpReq(httpReq);
-        testCaseReqBuilder.setPath(k.getCfg().getApp().getPath());
+        testCaseReqBuilder.setTestCasePath(k.getCfg().getApp().getPath());
 
         Capture(testCaseReqBuilder.build());
     }
@@ -144,7 +144,7 @@ public class GrpcService {
         testReqBuilder.setID(id);
         testReqBuilder.setResp(resp2);
         testReqBuilder.setAppID(k.getCfg().getApp().getName());
-        testReqBuilder.setPath(k.getCfg().getApp().getPath());
+        testReqBuilder.setTestCasePath(k.getCfg().getApp().getPath());
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server
@@ -314,7 +314,7 @@ public class GrpcService {
                         .setApp(k.getCfg().getApp().getName())
                         .setLimit("25")
                         .setOffset(String.valueOf(i))
-                        .setPath(k.getCfg().getApp().getPath()).build();
+                        .setTestCasePath(k.getCfg().getApp().getPath()).build();
                 Service.getTCSResponse tcs = blockingStub.getTCS(tcsRequest);
                 int cnt = tcs.getTcsCount();
                 if (cnt == 0) {
@@ -355,7 +355,7 @@ public class GrpcService {
                 .setAppID(k.getCfg().getApp().getName())
                 .setRunID(testrunId)
                 .setResp(resp)
-                .setPath(k.getCfg().getApp().getPath()).build();
+                .setTestCasePath(k.getCfg().getApp().getPath()).build();
 
         Service.testResponse testResponse;
         try {
