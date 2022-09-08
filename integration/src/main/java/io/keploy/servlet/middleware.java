@@ -63,12 +63,10 @@ public class middleware extends HttpFilter {
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setPath(absolutePath);
         } else if (kpath == null || kpath.length() == 0) {
-            System.out.println("Path is not there");
             String currDir = System.getProperty("user.dir")+"/src/test";
             appConfig.setPath(currDir);
         }
 
-        System.out.println("path inside init: " + appConfig.getPath());
         ServerConfig serverConfig = new ServerConfig();
 
         if (System.getenv("DENOISE") != null) {

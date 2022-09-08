@@ -89,7 +89,6 @@ public class GrpcService {
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
         testCaseReqBuilder.setHttpResp(httpResp);
         testCaseReqBuilder.setHttpReq(httpReq);
-        System.out.println("Path in capture testcases: " + k.getCfg().getApp().getPath());
         testCaseReqBuilder.setPath(k.getCfg().getApp().getPath());
 
         Capture(testCaseReqBuilder.build());
