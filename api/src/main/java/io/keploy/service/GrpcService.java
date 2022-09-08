@@ -48,7 +48,7 @@ public class GrpcService {
                 .build();
     }
 
-    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp) {
+    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp,String protocolType) {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -68,8 +68,8 @@ public class GrpcService {
         Map<String, Service.StrArr> headerMap = getRequestHeaderMap(ctxReq);
         httpReqBuilder.putAllHeader(headerMap);
         httpReqBuilder.setBody(reqBody);
-        httpReqBuilder.setProtoMajor(2);
-        httpReqBuilder.setProtoMinor(1);
+        httpReqBuilder.setProtoMajor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 3)));
+        httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length()-1)));
 
         Service.HttpReq httpReq = httpReqBuilder.build();
 

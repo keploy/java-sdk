@@ -129,6 +129,7 @@ public class middleware extends HttpFilter {
         logger.debug("simulate response inside middleware: {}", simulateResponse);
 
         String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
+        String protocolType = request.getProtocol();
 
         logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
 
@@ -145,7 +146,7 @@ public class middleware extends HttpFilter {
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
             try {
-                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp);
+                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp,protocolType);
             } catch (Exception e) {
                 logger.error("failed to capture testCases", e);
             }
