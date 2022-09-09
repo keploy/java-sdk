@@ -63,7 +63,7 @@ public class middleware extends HttpFilter {
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setPath(absolutePath);
         } else if (kpath == null || kpath.length() == 0) {
-            String currDir = System.getProperty("user.dir")+"/src/test/tests";
+            String currDir = System.getProperty("user.dir")+"/src/test/e2e";
             appConfig.setPath(currDir);
         }
 
