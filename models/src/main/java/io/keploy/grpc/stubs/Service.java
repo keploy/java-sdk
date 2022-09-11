@@ -66,9 +66,11 @@ public final class Service {
      * <code>map&lt;string, string&gt; Meta = 3;</code>
      */
 
-    java.lang.String getMetaOrDefault(
+    /* nullable */
+java.lang.String getMetaOrDefault(
         java.lang.String key,
-        java.lang.String defaultValue);
+        /* nullable */
+java.lang.String defaultValue);
     /**
      * <code>map&lt;string, string&gt; Meta = 3;</code>
      */
@@ -194,6 +196,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -1499,6 +1503,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -2191,6 +2197,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -4344,6 +4352,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -5680,9 +5690,11 @@ public final class Service {
      * <code>map&lt;string, .services.StrArr&gt; allKeys = 11;</code>
      */
 
-    io.keploy.grpc.stubs.Service.StrArr getAllKeysOrDefault(
+    /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getAllKeysOrDefault(
         java.lang.String key,
-        io.keploy.grpc.stubs.Service.StrArr defaultValue);
+        /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>map&lt;string, .services.StrArr&gt; allKeys = 11;</code>
      */
@@ -5714,9 +5726,11 @@ public final class Service {
      * <code>map&lt;string, .services.StrArr&gt; anchors = 12;</code>
      */
 
-    io.keploy.grpc.stubs.Service.StrArr getAnchorsOrDefault(
+    /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getAnchorsOrDefault(
         java.lang.String key,
-        io.keploy.grpc.stubs.Service.StrArr defaultValue);
+        /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>map&lt;string, .services.StrArr&gt; anchors = 12;</code>
      */
@@ -5921,6 +5935,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -8452,6 +8468,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -9005,9 +9023,11 @@ public final class Service {
      * <code>map&lt;string, string&gt; URLParams = 5;</code>
      */
 
-    java.lang.String getURLParamsOrDefault(
+    /* nullable */
+java.lang.String getURLParamsOrDefault(
         java.lang.String key,
-        java.lang.String defaultValue);
+        /* nullable */
+java.lang.String defaultValue);
     /**
      * <code>map&lt;string, string&gt; URLParams = 5;</code>
      */
@@ -9039,9 +9059,11 @@ public final class Service {
      * <code>map&lt;string, .services.StrArr&gt; Header = 6;</code>
      */
 
-    io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
+    /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
         java.lang.String key,
-        io.keploy.grpc.stubs.Service.StrArr defaultValue);
+        /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>map&lt;string, .services.StrArr&gt; Header = 6;</code>
      */
@@ -9175,6 +9197,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -10662,6 +10686,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -11238,9 +11264,11 @@ public final class Service {
      * <code>map&lt;string, .services.StrArr&gt; Header = 2;</code>
      */
 
-    io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
+    /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
         java.lang.String key,
-        io.keploy.grpc.stubs.Service.StrArr defaultValue);
+        /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>map&lt;string, .services.StrArr&gt; Header = 2;</code>
      */
@@ -11342,6 +11370,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -12264,6 +12294,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -12963,6 +12995,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -13550,6 +13584,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -14249,6 +14285,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -14836,6 +14874,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -15611,6 +15651,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -16730,6 +16772,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -17516,9 +17560,11 @@ public final class Service {
      * <code>map&lt;string, string&gt; tcsId = 1;</code>
      */
 
-    java.lang.String getTcsIdOrDefault(
+    /* nullable */
+java.lang.String getTcsIdOrDefault(
         java.lang.String key,
-        java.lang.String defaultValue);
+        /* nullable */
+java.lang.String defaultValue);
     /**
      * <code>map&lt;string, string&gt; tcsId = 1;</code>
      */
@@ -17596,6 +17642,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -18308,6 +18356,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -18905,6 +18955,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -19680,6 +19732,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -19765,9 +19819,11 @@ public final class Service {
        * <code>map&lt;string, .services.StrArr&gt; Header = 5;</code>
        */
 
-      io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
+      /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getHeaderOrDefault(
           java.lang.String key,
-          io.keploy.grpc.stubs.Service.StrArr defaultValue);
+          /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
       /**
        * <code>map&lt;string, .services.StrArr&gt; Header = 5;</code>
        */
@@ -19888,6 +19944,8 @@ public final class Service {
           }
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
           throw e.setUnfinishedMessage(this);
+        } catch (com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
         } catch (java.io.IOException e) {
           throw new com.google.protobuf.InvalidProtocolBufferException(
               e).setUnfinishedMessage(this);
@@ -21125,6 +21183,8 @@ public final class Service {
           }
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
           throw e.setUnfinishedMessage(this);
+        } catch (com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
         } catch (java.io.IOException e) {
           throw new com.google.protobuf.InvalidProtocolBufferException(
               e).setUnfinishedMessage(this);
@@ -21704,9 +21764,11 @@ public final class Service {
        * <code>map&lt;string, string&gt; Metadata = 1;</code>
        */
 
-      java.lang.String getMetadataOrDefault(
+      /* nullable */
+java.lang.String getMetadataOrDefault(
           java.lang.String key,
-          java.lang.String defaultValue);
+          /* nullable */
+java.lang.String defaultValue);
       /**
        * <code>map&lt;string, string&gt; Metadata = 1;</code>
        */
@@ -21817,9 +21879,11 @@ public final class Service {
        * <code>map&lt;string, .services.StrArr&gt; Assertions = 6;</code>
        */
 
-      io.keploy.grpc.stubs.Service.StrArr getAssertionsOrDefault(
+      /* nullable */
+io.keploy.grpc.stubs.Service.StrArr getAssertionsOrDefault(
           java.lang.String key,
-          io.keploy.grpc.stubs.Service.StrArr defaultValue);
+          /* nullable */
+io.keploy.grpc.stubs.Service.StrArr defaultValue);
       /**
        * <code>map&lt;string, .services.StrArr&gt; Assertions = 6;</code>
        */
@@ -21967,6 +22031,8 @@ public final class Service {
           }
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
           throw e.setUnfinishedMessage(this);
+        } catch (com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
         } catch (java.io.IOException e) {
           throw new com.google.protobuf.InvalidProtocolBufferException(
               e).setUnfinishedMessage(this);
@@ -24787,6 +24853,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -25522,6 +25590,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -26038,6 +26108,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -26753,6 +26825,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -27549,6 +27623,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);
@@ -28240,6 +28316,8 @@ public final class Service {
         }
       } catch (com.google.protobuf.InvalidProtocolBufferException e) {
         throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
       } catch (java.io.IOException e) {
         throw new com.google.protobuf.InvalidProtocolBufferException(
             e).setUnfinishedMessage(this);

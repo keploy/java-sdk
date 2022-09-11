@@ -89,7 +89,7 @@ public class middleware extends HttpFilter {
         new Thread(() -> {
             if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST)) {
                 try {
-                    logger.debug("calling test Method");
+                    logger.debug("starting tests");
                     grpcService.Test();
                 } catch (Exception e) {
                     logger.error("failed to run tests", e);
@@ -150,7 +150,7 @@ public class middleware extends HttpFilter {
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
             Context.cleanup();
-            logger.debug("response in keploy resp map: {} ", k.getResp().get(keploy_test_id));
+            logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
 
             Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
