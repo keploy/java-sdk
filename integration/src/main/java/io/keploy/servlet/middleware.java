@@ -37,7 +37,7 @@ import java.util.concurrent.CountDownLatch;
 public class middleware extends HttpFilter {
 
     private static final Logger logger = LogManager.getLogger(middleware.class);
-    private static String cross = new String(Character.toChars(0x274C));
+    private static String CROSS = new String(Character.toChars(0x274C));
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
@@ -93,7 +93,7 @@ public class middleware extends HttpFilter {
                     logger.debug("starting tests");
                     grpcService.Test();
                 } catch (Exception e) {
-                    logger.error(cross + " failed to run tests", e);
+                    logger.error(CROSS + " failed to run tests", e);
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
@@ -101,7 +101,7 @@ public class middleware extends HttpFilter {
                     Thread.sleep(10000);
                     System.exit(0);
                 } catch (InterruptedException e) {
-                    logger.error(cross + " failed to shut test run properly... ", e);
+                    logger.error(CROSS + " failed to shut test run properly... ", e);
                 }
             }
         }).start();
@@ -163,7 +163,7 @@ public class middleware extends HttpFilter {
             try {
                 GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp, protocolType);
             } catch (Exception e) {
-                logger.error(cross + " failed to capture testCases", e);
+                logger.error(CROSS + " failed to capture testCases", e);
             }
         }
         // this will also flush the headers and make response committed.
