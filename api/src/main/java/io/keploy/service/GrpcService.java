@@ -3,7 +3,6 @@ package io.keploy.service;
 import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -27,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
+
+    private static String cross = new String(Character.toChars(0x274C));
     private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
 
@@ -54,7 +55,7 @@ public class GrpcService {
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
         if (ctxReq == null) {
-            logger.error("failed to get keploy context");
+            logger.error(cross + " failed to get keploy context");
             return;
         }
 
@@ -99,7 +100,7 @@ public class GrpcService {
             try {
                 put(testCaseReq);
             } catch (Exception e) {
-                logger.error("failed to send test case to backend", e);
+                logger.error(cross + " failed to send test case to backend", e);
             }
         }).start();
     }
@@ -109,8 +110,8 @@ public class GrpcService {
         try {
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
-            logger.error("failed to send testcase to backend, please ensure keploy server is up!", e);
-            logger.error("please check keploy logs if server is up");
+            logger.error(cross + " failed to send testcase to backend, please ensure keploy server is up!", e);
+            logger.error(cross + " please check keploy server logs if server is up");
             return;
         }
         Map<String, String> tcsId = postTCResponse.getTcsIdMap();
@@ -130,7 +131,7 @@ public class GrpcService {
         try {
             TimeUnit.SECONDS.sleep(3);
         } catch (InterruptedException e) {
-            logger.error("(denoise): unable to sleep", e);
+            logger.error(cross + " (denoise): unable to sleep", e);
         }
 
         Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
@@ -142,7 +143,7 @@ public class GrpcService {
 
         Service.HttpResp resp2 = simulate(testCase);
 
-        logger.debug("response getting from simulate request: {}", resp2);
+        logger.debug("response got from simulate request: {}", resp2);
 
         Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
         testReqBuilder.setID(id);
@@ -156,7 +157,7 @@ public class GrpcService {
             Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
             logger.debug("denoise message received from server: {}", deNoiseResponse.getMessage());
         } catch (Exception e) {
-            logger.error("failed to send de-noise request to backend, please check keploy logs", e);
+            logger.error(cross + " failed to send de-noise request to backend, please check keploy server logs", e);
         }
 
     }
@@ -193,7 +194,7 @@ public class GrpcService {
                 Objects.requireNonNull(response.body()).close();
             }
         } catch (IOException e) {
-            logger.error("failed sending testcase request to app", e);
+            logger.error(cross + " failed sending testcase request to app", e);
         }
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
@@ -215,7 +216,7 @@ public class GrpcService {
         try {
             respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
-            logger.error("failed getting response for http request", e);
+            logger.error(cross + " failed getting response for http request", e);
             return Service.HttpResp.newBuilder();
         }
 
@@ -227,7 +228,7 @@ public class GrpcService {
         try {
             TimeUnit.SECONDS.sleep(5);
         } catch (InterruptedException e) {
-            logger.error("(Test): unable to sleep", e);
+            logger.error(cross + " (Test): unable to sleep", e);
         }
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
@@ -238,7 +239,7 @@ public class GrpcService {
         try {
             id = start(String.valueOf(total));
         } catch (Exception e) {
-            logger.error("failed to start test run", e);
+            logger.error(cross + " failed to start test run", e);
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
@@ -270,7 +271,7 @@ public class GrpcService {
         try {
             wg.await();
         } catch (InterruptedException e) {
-            logger.error("(Test): unable to wait for tests to get completed", e);
+            logger.error(cross + " (Test): unable to wait for tests to get completed", e);
         }
 
         end(id, ok.get());
@@ -287,7 +288,7 @@ public class GrpcService {
         try {
             startResponse = blockingStub.start(startRequest);
         } catch (Exception e) {
-            logger.error("failed to start test run, please check keploy logs", e);
+            logger.error(cross + " failed to start test run, please check keploy server logs", e);
             System.exit(1);
         }
 
@@ -302,7 +303,7 @@ public class GrpcService {
             endResponse = blockingStub.end(endRequest);
             logger.debug("response after ending test run: {}", endResponse);
         } catch (Exception e) {
-            logger.error("failed to complete test runs, please check keploy logs", e);
+            logger.error(cross + " failed to complete test runs, please check keploy server logs", e);
             System.exit(1);
         }
     }
@@ -324,7 +325,7 @@ public class GrpcService {
             try {
                 tcs = blockingStub.getTCS(tcsRequest);
             } catch (Exception e) {
-                logger.error("failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
+                logger.error(cross + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
                 System.exit(1);
             }
 
@@ -358,9 +359,9 @@ public class GrpcService {
         Service.HttpResp resp;
         try {
             resp = simulate(tc);
-            logger.debug("response getting from simulate request: {}", resp);
+            logger.debug("response got from simulate request: {}", resp);
         } catch (Exception e) {
-            logger.error("failed to simulate request on local server", e);
+            logger.error(cross + " failed to simulate request on local server", e);
             return false;
         }
         Service.TestReq testReq = Service.TestReq.newBuilder()
@@ -374,7 +375,7 @@ public class GrpcService {
         try {
             testResponse = blockingStub.test(testReq);
         } catch (Exception e) {
-            logger.error("failed to send test request to backend, please check keploy logs", e);
+            logger.error(cross + " failed to send test request to backend, please check keploy server logs", e);
             return false;
         }
 

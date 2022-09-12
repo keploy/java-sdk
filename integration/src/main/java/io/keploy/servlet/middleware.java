@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 public class middleware extends HttpFilter {
 
     private static final Logger logger = LogManager.getLogger(middleware.class);
+    private static String cross = new String(Character.toChars(0x274C));
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
@@ -63,7 +64,7 @@ public class middleware extends HttpFilter {
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setPath(absolutePath);
         } else if (kpath == null || kpath.length() == 0) {
-            String currDir = System.getProperty("user.dir")+"/src/test/e2e";
+            String currDir = System.getProperty("user.dir") + "/src/test/e2e";
             appConfig.setPath(currDir);
         }
 
@@ -92,7 +93,7 @@ public class middleware extends HttpFilter {
                     logger.debug("starting tests");
                     grpcService.Test();
                 } catch (Exception e) {
-                    logger.error("failed to run tests", e);
+                    logger.error(cross + " failed to run tests", e);
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
@@ -100,7 +101,7 @@ public class middleware extends HttpFilter {
                     Thread.sleep(10000);
                     System.exit(0);
                 } catch (InterruptedException e) {
-                    logger.error("Failed to shut test run properly... ", e);
+                    logger.error(cross + " failed to shut test run properly... ", e);
                 }
             }
         }).start();
@@ -160,9 +161,9 @@ public class middleware extends HttpFilter {
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
             try {
-                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp,protocolType);
+                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp, protocolType);
             } catch (Exception e) {
-                logger.error("failed to capture testCases", e);
+                logger.error(cross + " failed to capture testCases", e);
             }
         }
         // this will also flush the headers and make response committed.
