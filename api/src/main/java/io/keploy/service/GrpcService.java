@@ -282,7 +282,8 @@ public class GrpcService {
 
     public static String start(String total) {
         logger.debug("inside start function");
-        Service.startRequest startRequest = Service.startRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setTotal(total).build();
+        Service.startRequest startRequest = Service.startRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setTestCasePath(k.getCfg().getApp().getPath()).setTotal(total).build();
+
         Service.startResponse startResponse = null;
 
         try {

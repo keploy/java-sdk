@@ -13513,6 +13513,18 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
      */
     com.google.protobuf.ByteString
         getAppBytes();
+
+    /**
+     * <code>string TestCasePath = 3;</code>
+     * @return The testCasePath.
+     */
+    java.lang.String getTestCasePath();
+    /**
+     * <code>string TestCasePath = 3;</code>
+     * @return The bytes for testCasePath.
+     */
+    com.google.protobuf.ByteString
+        getTestCasePathBytes();
   }
   /**
    * Protobuf type {@code services.startRequest}
@@ -13529,6 +13541,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     private startRequest() {
       total_ = "";
       app_ = "";
+      testCasePath_ = "";
     }
 
     @java.lang.Override
@@ -13571,6 +13584,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
               java.lang.String s = input.readStringRequireUtf8();
 
               app_ = s;
+              break;
+            }
+            case 26: {
+              java.lang.String s = input.readStringRequireUtf8();
+
+              testCasePath_ = s;
               break;
             }
             default: {
@@ -13683,6 +13702,44 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       }
     }
 
+    public static final int TESTCASEPATH_FIELD_NUMBER = 3;
+    private volatile java.lang.Object testCasePath_;
+    /**
+     * <code>string TestCasePath = 3;</code>
+     * @return The testCasePath.
+     */
+    @java.lang.Override
+    public java.lang.String getTestCasePath() {
+      java.lang.Object ref = testCasePath_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        testCasePath_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string TestCasePath = 3;</code>
+     * @return The bytes for testCasePath.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getTestCasePathBytes() {
+      java.lang.Object ref = testCasePath_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        testCasePath_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -13703,6 +13760,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(app_)) {
         com.google.protobuf.GeneratedMessageV3.writeString(output, 2, app_);
       }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(testCasePath_)) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 3, testCasePath_);
+      }
       unknownFields.writeTo(output);
     }
 
@@ -13717,6 +13777,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(app_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, app_);
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(testCasePath_)) {
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(3, testCasePath_);
       }
       size += unknownFields.getSerializedSize();
       memoizedSize = size;
@@ -13737,6 +13800,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
           .equals(other.getTotal())) return false;
       if (!getApp()
           .equals(other.getApp())) return false;
+      if (!getTestCasePath()
+          .equals(other.getTestCasePath())) return false;
       if (!unknownFields.equals(other.unknownFields)) return false;
       return true;
     }
@@ -13752,6 +13817,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       hash = (53 * hash) + getTotal().hashCode();
       hash = (37 * hash) + APP_FIELD_NUMBER;
       hash = (53 * hash) + getApp().hashCode();
+      hash = (37 * hash) + TESTCASEPATH_FIELD_NUMBER;
+      hash = (53 * hash) + getTestCasePath().hashCode();
       hash = (29 * hash) + unknownFields.hashCode();
       memoizedHashCode = hash;
       return hash;
@@ -13889,6 +13956,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
 
         app_ = "";
 
+        testCasePath_ = "";
+
         return this;
       }
 
@@ -13917,6 +13986,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         io.keploy.grpc.stubs.Service.startRequest result = new io.keploy.grpc.stubs.Service.startRequest(this);
         result.total_ = total_;
         result.app_ = app_;
+        result.testCasePath_ = testCasePath_;
         onBuilt();
         return result;
       }
@@ -13971,6 +14041,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         }
         if (!other.getApp().isEmpty()) {
           app_ = other.app_;
+          onChanged();
+        }
+        if (!other.getTestCasePath().isEmpty()) {
+          testCasePath_ = other.testCasePath_;
           onChanged();
         }
         this.mergeUnknownFields(other.unknownFields);
@@ -14150,6 +14224,82 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
   checkByteStringIsUtf8(value);
         
         app_ = value;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object testCasePath_ = "";
+      /**
+       * <code>string TestCasePath = 3;</code>
+       * @return The testCasePath.
+       */
+      public java.lang.String getTestCasePath() {
+        java.lang.Object ref = testCasePath_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          testCasePath_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string TestCasePath = 3;</code>
+       * @return The bytes for testCasePath.
+       */
+      public com.google.protobuf.ByteString
+          getTestCasePathBytes() {
+        java.lang.Object ref = testCasePath_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          testCasePath_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string TestCasePath = 3;</code>
+       * @param value The testCasePath to set.
+       * @return This builder for chaining.
+       */
+      public Builder setTestCasePath(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  
+        testCasePath_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string TestCasePath = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearTestCasePath() {
+        
+        testCasePath_ = getDefaultInstance().getTestCasePath();
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string TestCasePath = 3;</code>
+       * @param value The bytes for testCasePath to set.
+       * @return This builder for chaining.
+       */
+      public Builder setTestCasePathBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+        
+        testCasePath_ = value;
         onChanged();
         return this;
       }
@@ -28986,62 +29136,63 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       "y\030\003 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005v" +
       "alue\030\002 \001(\0132\020.services.StrArr:\0028\001\"(\n\nendR" +
       "equest\022\016\n\006status\030\001 \001(\t\022\n\n\002id\030\002 \001(\t\"\036\n\013en" +
-      "dResponse\022\017\n\007message\030\001 \001(\t\"*\n\014startReque" +
-      "st\022\r\n\005total\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\"\033\n\rstartR" +
-      "esponse\022\n\n\002id\030\001 \001(\t\"\'\n\014getTCRequest\022\n\n\002i" +
-      "d\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\"c\n\rgetTCSRequest\022\013\n" +
-      "\003app\030\001 \001(\t\022\016\n\006offset\030\002 \001(\t\022\r\n\005limit\030\003 \001(" +
-      "\t\022\024\n\014TestCasePath\030\004 \001(\t\022\020\n\010MockPath\030\005 \001(" +
-      "\t\">\n\016getTCSResponse\022\037\n\003tcs\030\001 \003(\0132\022.servi" +
-      "ces.TestCase\022\013\n\003eof\030\002 \001(\010\"r\n\016postTCRespo" +
-      "nse\0222\n\005tcsId\030\001 \003(\0132#.services.postTCResp" +
-      "onse.TcsIdEntry\032,\n\nTcsIdEntry\022\013\n\003key\030\001 \001" +
-      "(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\"\n\017deNoiseResponse" +
-      "\022\017\n\007message\030\001 \001(\t\"k\n\014testResponse\022.\n\004pas" +
-      "s\030\001 \003(\0132 .services.testResponse.PassEntr" +
-      "y\032+\n\tPassEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001" +
-      "(\010:\0028\001\"\336\005\n\004Mock\022\017\n\007Version\030\001 \001(\t\022\014\n\004Name" +
-      "\030\002 \001(\t\022\014\n\004Kind\030\003 \001(\t\022\'\n\004Spec\030\004 \001(\0132\031.ser" +
-      "vices.Mock.SpecSchema\032\321\001\n\007Request\022\016\n\006Met" +
-      "hod\030\001 \001(\t\022\022\n\nProtoMajor\030\002 \001(\003\022\022\n\nProtoMi" +
-      "nor\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0222\n\006Header\030\005 \003(\0132\"" +
-      ".services.Mock.Request.HeaderEntry\022\014\n\004Bo" +
-      "dy\030\006 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005" +
-      "value\030\002 \001(\0132\020.services.StrArr:\0028\001\032$\n\006Obj" +
-      "ect\022\014\n\004Type\030\001 \001(\t\022\014\n\004Data\030\002 \001(\014\032\205\003\n\nSpec" +
-      "Schema\0229\n\010Metadata\030\001 \003(\0132\'.services.Mock" +
-      ".SpecSchema.MetadataEntry\022&\n\007Objects\030\002 \003" +
-      "(\0132\025.services.Mock.Object\022\036\n\003Req\030\003 \001(\0132\021" +
-      ".services.HttpReq\022\037\n\003Res\030\004 \001(\0132\022.service" +
-      "s.HttpResp\022\r\n\005Mocks\030\005 \003(\t\022=\n\nAssertions\030" +
-      "\006 \003(\0132).services.Mock.SpecSchema.Asserti" +
-      "onsEntry\022\017\n\007Created\030\007 \001(\003\032/\n\rMetadataEnt" +
-      "ry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032C\n\017As" +
-      "sertionsEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(" +
-      "\0132\020.services.StrArr:\0028\001\"8\n\nPutMockReq\022\034\n" +
-      "\004Mock\030\001 \001(\0132\016.services.Mock\022\014\n\004Path\030\002 \001(" +
-      "\t\"\037\n\013PutMockResp\022\020\n\010Inserted\030\001 \001(\003\"(\n\nGe" +
-      "tMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\",\n\013" +
-      "getMockResp\022\035\n\005Mocks\030\001 \003(\0132\016.services.Mo" +
-      "ck\"*\n\014StartMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004Mode" +
-      "\030\002 \001(\t\"\037\n\rStartMockResp\022\016\n\006Exists\030\001 \001(\0102" +
-      "\314\004\n\021RegressionService\0222\n\003End\022\024.services." +
-      "endRequest\032\025.services.endResponse\0228\n\005Sta" +
-      "rt\022\026.services.startRequest\032\027.services.st" +
-      "artResponse\0223\n\005GetTC\022\026.services.getTCReq" +
-      "uest\032\022.services.TestCase\022;\n\006GetTCS\022\027.ser" +
-      "vices.getTCSRequest\032\030.services.getTCSRes" +
-      "ponse\0229\n\006PostTC\022\025.services.TestCaseReq\032\030" +
-      ".services.postTCResponse\0227\n\007DeNoise\022\021.se" +
-      "rvices.TestReq\032\031.services.deNoiseRespons" +
-      "e\0221\n\004Test\022\021.services.TestReq\032\026.services." +
-      "testResponse\0226\n\007PutMock\022\024.services.PutMo" +
-      "ckReq\032\025.services.PutMockResp\0227\n\010GetMocks" +
-      "\022\024.services.GetMockReq\032\025.services.getMoc" +
-      "kResp\022?\n\014StartMocking\022\026.services.StartMo" +
-      "ckReq\032\027.services.StartMockRespB;\n\024io.kep" +
-      "loy.grpc.stubsZ#go.keploy.io/server/grpc" +
-      "/regressionb\006proto3"
+      "dResponse\022\017\n\007message\030\001 \001(\t\"@\n\014startReque" +
+      "st\022\r\n\005total\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\022\024\n\014TestCa" +
+      "sePath\030\003 \001(\t\"\033\n\rstartResponse\022\n\n\002id\030\001 \001(" +
+      "\t\"\'\n\014getTCRequest\022\n\n\002id\030\001 \001(\t\022\013\n\003app\030\002 \001" +
+      "(\t\"c\n\rgetTCSRequest\022\013\n\003app\030\001 \001(\t\022\016\n\006offs" +
+      "et\030\002 \001(\t\022\r\n\005limit\030\003 \001(\t\022\024\n\014TestCasePath\030" +
+      "\004 \001(\t\022\020\n\010MockPath\030\005 \001(\t\">\n\016getTCSRespons" +
+      "e\022\037\n\003tcs\030\001 \003(\0132\022.services.TestCase\022\013\n\003eo" +
+      "f\030\002 \001(\010\"r\n\016postTCResponse\0222\n\005tcsId\030\001 \003(\013" +
+      "2#.services.postTCResponse.TcsIdEntry\032,\n" +
+      "\nTcsIdEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:" +
+      "\0028\001\"\"\n\017deNoiseResponse\022\017\n\007message\030\001 \001(\t\"" +
+      "k\n\014testResponse\022.\n\004pass\030\001 \003(\0132 .services" +
+      ".testResponse.PassEntry\032+\n\tPassEntry\022\013\n\003" +
+      "key\030\001 \001(\t\022\r\n\005value\030\002 \001(\010:\0028\001\"\336\005\n\004Mock\022\017\n" +
+      "\007Version\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\022\014\n\004Kind\030\003 \001" +
+      "(\t\022\'\n\004Spec\030\004 \001(\0132\031.services.Mock.SpecSch" +
+      "ema\032\321\001\n\007Request\022\016\n\006Method\030\001 \001(\t\022\022\n\nProto" +
+      "Major\030\002 \001(\003\022\022\n\nProtoMinor\030\003 \001(\003\022\013\n\003URL\030\004" +
+      " \001(\t\0222\n\006Header\030\005 \003(\0132\".services.Mock.Req" +
+      "uest.HeaderEntry\022\014\n\004Body\030\006 \001(\t\032?\n\013Header" +
+      "Entry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.serv" +
+      "ices.StrArr:\0028\001\032$\n\006Object\022\014\n\004Type\030\001 \001(\t\022" +
+      "\014\n\004Data\030\002 \001(\014\032\205\003\n\nSpecSchema\0229\n\010Metadata" +
+      "\030\001 \003(\0132\'.services.Mock.SpecSchema.Metada" +
+      "taEntry\022&\n\007Objects\030\002 \003(\0132\025.services.Mock" +
+      ".Object\022\036\n\003Req\030\003 \001(\0132\021.services.HttpReq\022" +
+      "\037\n\003Res\030\004 \001(\0132\022.services.HttpResp\022\r\n\005Mock" +
+      "s\030\005 \003(\t\022=\n\nAssertions\030\006 \003(\0132).services.M" +
+      "ock.SpecSchema.AssertionsEntry\022\017\n\007Create" +
+      "d\030\007 \001(\003\032/\n\rMetadataEntry\022\013\n\003key\030\001 \001(\t\022\r\n" +
+      "\005value\030\002 \001(\t:\0028\001\032C\n\017AssertionsEntry\022\013\n\003k" +
+      "ey\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.StrAr" +
+      "r:\0028\001\"8\n\nPutMockReq\022\034\n\004Mock\030\001 \001(\0132\016.serv" +
+      "ices.Mock\022\014\n\004Path\030\002 \001(\t\"\037\n\013PutMockResp\022\020" +
+      "\n\010Inserted\030\001 \001(\003\"(\n\nGetMockReq\022\014\n\004Path\030\001" +
+      " \001(\t\022\014\n\004Name\030\002 \001(\t\",\n\013getMockResp\022\035\n\005Moc" +
+      "ks\030\001 \003(\0132\016.services.Mock\"*\n\014StartMockReq" +
+      "\022\014\n\004Path\030\001 \001(\t\022\014\n\004Mode\030\002 \001(\t\"\037\n\rStartMoc" +
+      "kResp\022\016\n\006Exists\030\001 \001(\0102\314\004\n\021RegressionServ" +
+      "ice\0222\n\003End\022\024.services.endRequest\032\025.servi" +
+      "ces.endResponse\0228\n\005Start\022\026.services.star" +
+      "tRequest\032\027.services.startResponse\0223\n\005Get" +
+      "TC\022\026.services.getTCRequest\032\022.services.Te" +
+      "stCase\022;\n\006GetTCS\022\027.services.getTCSReques" +
+      "t\032\030.services.getTCSResponse\0229\n\006PostTC\022\025." +
+      "services.TestCaseReq\032\030.services.postTCRe" +
+      "sponse\0227\n\007DeNoise\022\021.services.TestReq\032\031.s" +
+      "ervices.deNoiseResponse\0221\n\004Test\022\021.servic" +
+      "es.TestReq\032\026.services.testResponse\0226\n\007Pu" +
+      "tMock\022\024.services.PutMockReq\032\025.services.P" +
+      "utMockResp\0227\n\010GetMocks\022\024.services.GetMoc" +
+      "kReq\032\025.services.getMockResp\022?\n\014StartMock" +
+      "ing\022\026.services.StartMockReq\032\027.services.S" +
+      "tartMockRespB;\n\024io.keploy.grpc.stubsZ#go" +
+      ".keploy.io/server/grpc/regressionb\006proto" +
+      "3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -29154,7 +29305,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     internal_static_services_startRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_startRequest_descriptor,
-        new java.lang.String[] { "Total", "App", });
+        new java.lang.String[] { "Total", "App", "TestCasePath", });
     internal_static_services_startResponse_descriptor =
       getDescriptor().getMessageTypes().get(12);
     internal_static_services_startResponse_fieldAccessorTable = new
