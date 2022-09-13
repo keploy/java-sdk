@@ -3,7 +3,6 @@ package io.keploy.service;
 import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -27,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
+
+    private static String CROSS = new String(Character.toChars(0x274C));
     private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
 
@@ -54,7 +55,7 @@ public class GrpcService {
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
         if (ctxReq == null) {
-            logger.warn("failed to get keploy context");
+            logger.error(CROSS + " failed to get keploy context");
             return;
         }
 
@@ -99,17 +100,19 @@ public class GrpcService {
             try {
                 put(testCaseReq);
             } catch (Exception e) {
-                logger.error("failed to send test case to backend", e);
+                logger.error(CROSS + " failed to send test case to backend", e);
             }
         }).start();
     }
 
     public static void put(Service.TestCaseReq testCaseReq) {
-        Service.postTCResponse postTCResponse = null;
+        Service.postTCResponse postTCResponse;
         try {
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
-            logger.error("failed to send test case to backend", e);
+            logger.error(CROSS + " failed to send testcase to backend, please ensure keploy server is up!", e);
+            logger.error(CROSS + " please check keploy server logs if server is up");
+            return;
         }
         Map<String, String> tcsId = postTCResponse.getTcsIdMap();
         String id = tcsId.get("id");
@@ -128,7 +131,7 @@ public class GrpcService {
         try {
             TimeUnit.SECONDS.sleep(3);
         } catch (InterruptedException e) {
-            logger.error("(denoise): unable to sleep ", e);
+            logger.error(CROSS + " (denoise): unable to sleep", e);
         }
 
         Service.TestCase.Builder testCaseBuilder = Service.TestCase.newBuilder();
@@ -140,6 +143,8 @@ public class GrpcService {
 
         Service.HttpResp resp2 = simulate(testCase);
 
+        logger.debug("response got from simulate request: {}", resp2);
+
         Service.TestReq.Builder testReqBuilder = Service.TestReq.newBuilder();
         testReqBuilder.setID(id);
         testReqBuilder.setResp(resp2);
@@ -150,9 +155,9 @@ public class GrpcService {
         // send de-noise request to server
         try {
             Service.deNoiseResponse deNoiseResponse = blockingStub.deNoise(bin2);
-            logger.debug("denoise message received from server {}", deNoiseResponse.getMessage());
+            logger.debug("denoise message received from server: {}", deNoiseResponse.getMessage());
         } catch (Exception e) {
-            logger.error("failed to send de-noise request to backend", e);
+            logger.error(CROSS + " failed to send de-noise request to backend, please check keploy server logs", e);
         }
 
     }
@@ -171,7 +176,7 @@ public class GrpcService {
 
             try (ResponseBody responseBody = response.body()) {
                 if (!response.isSuccessful()) {
-                    logger.debug("Unexpected code {}", response);
+                    logger.debug("Unexpected response from server for simulate request: {}", response);
                 }
                 assert responseBody != null;
                 simResBody = responseBody.string();
@@ -186,10 +191,10 @@ public class GrpcService {
             }
             statusCode = response.code();
             if (response.body() != null) {
-                response.body().close();
+                Objects.requireNonNull(response.body()).close();
             }
         } catch (IOException e) {
-            logger.error("failed sending testcase request to app", e);
+            logger.error(CROSS + " failed sending testcase request to app", e);
         }
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
@@ -211,7 +216,7 @@ public class GrpcService {
         try {
             respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
-            logger.error("failed to get response", e);
+            logger.error(CROSS + " failed getting response for http request", e);
             return Service.HttpResp.newBuilder();
         }
 
@@ -223,7 +228,7 @@ public class GrpcService {
         try {
             TimeUnit.SECONDS.sleep(5);
         } catch (InterruptedException e) {
-            logger.error("(Test): unable to sleep ", e);
+            logger.error(CROSS + " (Test): unable to sleep", e);
         }
         logger.debug("entering test mode");
         logger.info("test starting in 5 sec");
@@ -234,7 +239,7 @@ public class GrpcService {
         try {
             id = start(String.valueOf(total));
         } catch (Exception e) {
-            logger.info("failed to start test run ", e);
+            logger.error(CROSS + " failed to start test run", e);
             return;
         }
         logger.info("starting test execution id: {} total tests: {}", id, total);
@@ -266,11 +271,10 @@ public class GrpcService {
         try {
             wg.await();
         } catch (InterruptedException e) {
-            logger.error("(Test): unable to wait for tests to get completed", e);
+            logger.error(CROSS + " (Test): unable to wait for tests to get completed", e);
         }
 
-        String msg = end(id, ok.get());
-        logger.debug("message from end {}", msg);
+        end(id, ok.get());
 
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
@@ -279,46 +283,68 @@ public class GrpcService {
     public static String start(String total) {
         logger.debug("inside start function");
         Service.startRequest startRequest = Service.startRequest.newBuilder().setApp(k.getCfg().getApp().getName()).setTotal(total).build();
-        Service.startResponse startResponse = blockingStub.start(startRequest);
-        return startResponse.getId();
+        Service.startResponse startResponse = null;
+
+        try {
+            startResponse = blockingStub.start(startRequest);
+        } catch (Exception e) {
+            logger.error(CROSS + " failed to start test run, please check keploy server logs", e);
+            System.exit(1);
+        }
+
+        return (startResponse != null) ? startResponse.getId() : "";
     }
 
-    public static String end(String id, boolean status) {
+    public static void end(String id, boolean status) {
         logger.debug("inside end function");
         Service.endRequest endRequest = Service.endRequest.newBuilder().setId(id).setStatus(String.valueOf(status)).build();
-        Service.endResponse endResponse = blockingStub.end(endRequest);
-        return endResponse.getMessage();
+        Service.endResponse endResponse;
+        try {
+            endResponse = blockingStub.end(endRequest);
+            logger.debug("response after ending test run: {}", endResponse);
+        } catch (Exception e) {
+            logger.error(CROSS + " failed to complete test runs, please check keploy server logs", e);
+            System.exit(1);
+        }
     }
 
     public static List<Service.TestCase> fetch() {
-        logger.info("inside fetch function");
+        logger.debug("inside fetch function");
 
         List<Service.TestCase> testCases = new ArrayList<>();
         int i = 0;
         while (true) {
+            Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder()
+                    .setApp(k.getCfg().getApp().getName())
+                    .setLimit("25")
+                    .setOffset(String.valueOf(i))
+                    .setTestCasePath(k.getCfg().getApp().getPath()).build();
+
+            Service.getTCSResponse tcs = null;
+
             try {
-                Service.getTCSRequest tcsRequest = Service.getTCSRequest.newBuilder()
-                        .setApp(k.getCfg().getApp().getName())
-                        .setLimit("25")
-                        .setOffset(String.valueOf(i))
-                        .setTestCasePath(k.getCfg().getApp().getPath()).build();
-                Service.getTCSResponse tcs = blockingStub.getTCS(tcsRequest);
-                int cnt = tcs.getTcsCount();
-                if (cnt == 0) {
-                    break;
-                }
-                List<Service.TestCase> tc = tcs.getTcsList();
-                testCases.addAll(tc);
-
-                boolean eof = tcs.getEof();
-                if (eof) {
-                    break;
-                }
-
-            } catch (StatusRuntimeException e) {
-                logger.warn("RPC failed: {}", e.getStatus());
-                return null;
+                tcs = blockingStub.getTCS(tcsRequest);
+            } catch (Exception e) {
+                logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
+                System.exit(1);
             }
+
+            if (tcs == null) {
+                break;
+            }
+
+            int cnt = tcs.getTcsCount();
+            if (cnt == 0) {
+                break;
+            }
+            List<Service.TestCase> tc = tcs.getTcsList();
+            testCases.addAll(tc);
+
+            boolean eof = tcs.getEof();
+            if (eof) {
+                break;
+            }
+
             i += 25;
         }
 
@@ -328,13 +354,14 @@ public class GrpcService {
     }
 
     public static boolean check(String testrunId, Service.TestCase tc) {
-        logger.debug("running test case with [{}] testrunId ", testrunId);
+        logger.debug("running test case with [{}] testrunId", testrunId);
 
         Service.HttpResp resp;
         try {
             resp = simulate(tc);
+            logger.debug("response got from simulate request: {}", resp);
         } catch (Exception e) {
-            logger.error("failed to simulate request on local server", e);
+            logger.error(CROSS + " failed to simulate request on local server", e);
             return false;
         }
         Service.TestReq testReq = Service.TestReq.newBuilder()
@@ -348,49 +375,53 @@ public class GrpcService {
         try {
             testResponse = blockingStub.test(testReq);
         } catch (Exception e) {
-            logger.error("failed to send test request to backend", e);
+            logger.error(CROSS + " failed to send test request to backend, please check keploy server logs", e);
+            return false;
+        }
+
+        if (testResponse == null) {
             return false;
         }
 
         Map<String, Boolean> res = testResponse.getPassMap();
-        logger.debug("(check): test result of testrunId [{}]: {} ", testrunId, res.get("pass"));
+        logger.debug("(check): test result of testrunId [{}]: {}", testrunId, res.get("pass"));
         return res.getOrDefault("pass", false);
     }
 
-    private static Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
+//    private static Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
+//
+//        Map<String, Service.StrArr> map = new HashMap<>();
+//        for (String key : srcMap.keySet()) {
+//
+//            if (key == null) continue;
+//            List<String> headerValues = srcMap.get(key);
+//
+//            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
+//            for (String hval : headerValues) {
+//                builder.addValue(hval);
+//            }
+//            Service.StrArr value = builder.build();
+//            key = convertFirstCapAfterEachDash(key);
+//            map.put(key, value);
+//        }
+//        return map;
+//    }
 
-        Map<String, Service.StrArr> map = new HashMap<>();
-        for (String key : srcMap.keySet()) {
-
-            if (key == null) continue;
-            List<String> headerValues = srcMap.get(key);
-
-            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
-            for (String hval : headerValues) {
-                builder.addValue(hval);
-            }
-            Service.StrArr value = builder.build();
-            key = convertFirstCapAfterEachDash(key);
-            map.put(key, value);
-        }
-        return map;
-    }
-
-    private static String convertFirstCapAfterEachDash(String str) {
-        StringBuilder sb = new StringBuilder();
-        String[] sarr = str.split("-");
-        if (sarr.length == 1) {
-            sb.append(Character.toUpperCase(sarr[0].charAt(0))).append(sarr[0].substring(1));
-        } else {
-            for (int i = 0; i < sarr.length - 1; i++) {
-                String val = sarr[i];
-                sb.append(Character.toUpperCase(val.charAt(0))).append(val.substring(1)).append("-");
-            }
-            String lval = sarr[sarr.length - 1];
-            sb.append(Character.toUpperCase(lval.charAt(0))).append(lval.substring(1));
-        }
-        return sb.toString();
-    }
+//    private static String convertFirstCapAfterEachDash(String str) {
+//        StringBuilder sb = new StringBuilder();
+//        String[] sarr = str.split("-");
+//        if (sarr.length == 1) {
+//            sb.append(Character.toUpperCase(sarr[0].charAt(0))).append(sarr[0].substring(1));
+//        } else {
+//            for (int i = 0; i < sarr.length - 1; i++) {
+//                String val = sarr[i];
+//                sb.append(Character.toUpperCase(val.charAt(0))).append(val.substring(1)).append("-");
+//            }
+//            String lval = sarr[sarr.length - 1];
+//            sb.append(Character.toUpperCase(lval.charAt(0))).append(lval.substring(1));
+//        }
+//        return sb.toString();
+//    }
 
     private static Request getCustomRequest(Service.TestCase testCase) {
 
