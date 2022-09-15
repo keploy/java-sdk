@@ -14,6 +14,8 @@ import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
@@ -27,7 +29,7 @@ public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
 
-    private static String CROSS = new String(Character.toChars(0x274C));
+    private static final String CROSS = new String(Character.toChars(0x274C));
     private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
 
@@ -37,11 +39,11 @@ public class GrpcService {
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
-        channel = ManagedChannelBuilder.forTarget("localhost:8081")
+        k = KeployInstance.getInstance().getKeploy();
+        channel = ManagedChannelBuilder.forTarget(getTargetServerUrl())
                 .usePlaintext()
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-        k = KeployInstance.getInstance().getKeploy();
 
         client = new OkHttpClient.Builder()
                 .connectTimeout(6, TimeUnit.MINUTES) // connect timeout
@@ -50,7 +52,20 @@ public class GrpcService {
                 .build();
     }
 
-    public static void CaptureTestCases(KeployInstance ki, String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType) {
+    private String getTargetServerUrl() {
+        String target;
+        URL url;
+        try {
+            url = new URL(k.getCfg().getServer().getURL());
+        } catch (MalformedURLException e) {
+            logger.error("unable to make GrpcConnection", e);
+            return "localhost:8081";
+        }
+
+        return url.getAuthority();
+    }
+
+    public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType) {
         logger.debug("inside CaptureTestCases");
 
         HttpServletRequest ctxReq = Context.getCtx().getRequest();
@@ -165,8 +180,8 @@ public class GrpcService {
     public static Service.HttpResp simulate(Service.TestCase testCase) {
         logger.debug("inside simulate");
 
-        String simResBody = null;
-        long statusCode = 0;
+        String simResBody;
+        long statusCode;
         final Map<String, List<String>> responseHeaders = new HashMap<>();
 
         Request request = getCustomRequest(testCase);
@@ -182,6 +197,8 @@ public class GrpcService {
                 simResBody = responseBody.string();
             }
 
+            logger.debug("response body got from simulate request: {}", simResBody);
+
             Map<String, List<String>> resHeadMap = response.headers().toMultimap();
 
             for (String key : resHeadMap.keySet()) {
@@ -190,6 +207,8 @@ public class GrpcService {
                 responseHeaders.put(key, values);
             }
             statusCode = response.code();
+            logger.debug("status code got from simulate request: {}", statusCode);
+
             if (response.body() != null) {
                 Objects.requireNonNull(response.body()).close();
             }
