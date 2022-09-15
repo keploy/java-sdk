@@ -3,11 +3,13 @@ package io.keploy.regression;
 import io.keploy.regression.keploy.Keploy;
 
 public class KeployInstance {
-    private static Keploy keploy;
-
     private static volatile KeployInstance keployInstance;
 
+    private final Keploy keploy;
+
+
     private KeployInstance() {
+        keploy = new Keploy();
     }
 
     public static KeployInstance getInstance() {
@@ -21,13 +23,7 @@ public class KeployInstance {
         return keployInstance;
     }
 
-    public static void setKeploy(Keploy keploy) {
-        if (KeployInstance.keploy == null) {
-            KeployInstance.keploy = keploy;
-        }
-    }
-
-    public static Keploy getKeploy() {
+    public Keploy getKeploy() {
         return keploy;
     }
 }

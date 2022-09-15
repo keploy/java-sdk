@@ -37,16 +37,16 @@ import java.util.concurrent.CountDownLatch;
 public class middleware extends HttpFilter {
 
     private static final Logger logger = LogManager.getLogger(middleware.class);
-    private static String CROSS = new String(Character.toChars(0x274C));
+    private static final String CROSS = new String(Character.toChars(0x274C));
 
     @Override
-    public void init(FilterConfig filterConfig) throws ServletException {
+    public void init(FilterConfig filterConfig) {
         //just like wait groups, used in testfile
         CountDownLatch countDownLatch = HaltThread.getInstance().getCountDownLatch();
 
         logger.debug("initializing keploy");
         KeployInstance ki = KeployInstance.getInstance();
-        Keploy kp = new Keploy();
+        Keploy kp = ki.getKeploy();
         Config cfg = new Config();
         AppConfig appConfig = new AppConfig();
         if (System.getenv("APP_NAME") != null) {
@@ -81,9 +81,9 @@ public class middleware extends HttpFilter {
         cfg.setApp(appConfig);
         cfg.setServer(serverConfig);
         kp.setCfg(cfg);
-        ki.setKeploy(kp);
 
-        GrpcService grpcService = new GrpcService();
+        // its mere purpose is to call the constructor to initialize some fields
+        new GrpcService();
 
         final mode.ModeType KEPLOY_MODE = mode.getMode();
 
@@ -91,7 +91,7 @@ public class middleware extends HttpFilter {
             if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST)) {
                 try {
                     logger.debug("starting tests");
-                    grpcService.Test();
+                    GrpcService.Test();
                 } catch (Exception e) {
                     logger.error(CROSS + " failed to run tests", e);
                 }
@@ -161,7 +161,7 @@ public class middleware extends HttpFilter {
             Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
 
             try {
-                GrpcService.CaptureTestCases(ki, requestBody, urlParams, httpResp, protocolType);
+                GrpcService.CaptureTestCases(requestBody, urlParams, httpResp, protocolType);
             } catch (Exception e) {
                 logger.error(CROSS + " failed to capture testCases", e);
             }
