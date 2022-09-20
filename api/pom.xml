@@ -32,19 +32,19 @@
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
-            <version>3.21.4</version>
+            <version>3.21.5</version>
         </dependency>
 
         <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-stub</artifactId>
-            <version>1.48.0</version>
+            <version>1.49.0</version>
         </dependency>
 
         <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-core</artifactId>
-            <version>1.48.0</version>
+            <version>1.49.0</version>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
@@ -52,12 +52,5 @@
             <version>1.0.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp -->
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.10.0</version>
-        </dependency>
-
     </dependencies>
 </project>

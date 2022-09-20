@@ -3,12 +3,12 @@ package io.keploy.utils;
 import java.util.concurrent.CountDownLatch;
 
 public class HaltThread {
-    private static HaltThread haltThread;
-    private static CountDownLatch countDownLatch;
+    private static volatile HaltThread haltThread;
+    private final CountDownLatch countDownLatch;
 
 
     private HaltThread() {
-
+        countDownLatch = new CountDownLatch(2);
     }
 
     public static HaltThread getInstance() {
@@ -16,14 +16,13 @@ public class HaltThread {
             synchronized (HaltThread.class) {  //thread safe.
                 if (haltThread == null) {
                     haltThread = new HaltThread();
-                    countDownLatch = new CountDownLatch(2);
                 }
             }
         }
         return haltThread;
     }
 
-    public static CountDownLatch getCountDownLatch() {
+    public CountDownLatch getCountDownLatch() {
         return countDownLatch;
     }
 }
