@@ -17,7 +17,7 @@ public class Kcontext {
 
     private HttpServletRequest Request;
 
-    private mode.ModeType Mode;
+    private mode.ModeType Mode = mode.ModeType.MODE_RECORD;
 
     private Boolean FileExport;
 

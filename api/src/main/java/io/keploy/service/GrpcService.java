@@ -12,6 +12,7 @@ import io.keploy.regression.keploy.Keploy;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.http.HttpStatus;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -51,7 +52,6 @@ public class GrpcService {
                 .readTimeout(6, TimeUnit.MINUTES) // read timeout
                 .build();
     }
-
 
 
     private String getTarget() {
@@ -189,8 +189,11 @@ public class GrpcService {
         logger.debug("inside simulate");
 
         //add mocks to shared context
-        k.getMocks().put(testCase.getId(), testCase.getMocksList());
+        k.getMocks().put(testCase.getId(), new ArrayList<>(testCase.getMocksList()));
         k.getMocktime().put(testCase.getId(), testCase.getCaptured());
+
+        //add dependency to shared context
+        k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
 
         String simResBody;
         long statusCode;
@@ -230,7 +233,8 @@ public class GrpcService {
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
-        // add comment
+        // add comment (why are you removing it)
+        k.getDeps().remove(testCase.getId());
         k.getMocks().remove(testCase.getId());
         k.getMocktime().remove(testCase.getId());
 
@@ -250,7 +254,12 @@ public class GrpcService {
         Service.HttpResp.Builder respBuilder = Service.HttpResp.newBuilder();
 
         try {
-            respBuilder.setBody(httpResp.getBody()).setStatusCode(httpResp.getStatusCode()).putAllHeader(httpResp.getHeaderMap());
+            respBuilder.setBody(httpResp.getBody())
+                    .setStatusCode(httpResp.getStatusCode())
+                    .setStatusMessage(httpResp.getStatusMessage())
+                    .setProtoMajor(httpResp.getProtoMajor())
+                    .setProtoMinor(httpResp.getProtoMinor())
+                    .putAllHeader(httpResp.getHeaderMap());
         } catch (Exception e) {
             logger.error(CROSS + " failed getting response for http request", e);
             return Service.HttpResp.newBuilder();
@@ -476,6 +485,7 @@ public class GrpcService {
         String method = testCase.getHttpReq().getMethod();
         String body = testCase.getHttpReq().getBody();
         String targetUrl = "http://" + host + ":" + port + url;
+        String testId = testCase.getId();
 
         logger.debug("simulate request's url: {}", targetUrl);
         Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
@@ -488,19 +498,19 @@ public class GrpcService {
                         .url(targetUrl)
                         .addHeader("content-type", "application/json")
                         .addHeader("accept", "application/json")
-                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+                        .addHeader("KEPLOY_TEST_ID", testId).build();
             case "DELETE":
                 return reqBuilder.delete()
                         .url(targetUrl)
                         .addHeader("content-type", "application/json")
                         .addHeader("accept", "application/json")
-                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+                        .addHeader("KEPLOY_TEST_ID", testId).build();
             default:
                 return reqBuilder.method(method, RequestBody.create(body.getBytes(StandardCharsets.UTF_8)))
                         .url(targetUrl)
                         .addHeader("content-type", "application/json")
                         .addHeader("accept", "application/json")
-                        .addHeader("KEPLOY_TEST_ID", testCase.getId()).build();
+                        .addHeader("KEPLOY_TEST_ID", testId).build();
         }
     }
 

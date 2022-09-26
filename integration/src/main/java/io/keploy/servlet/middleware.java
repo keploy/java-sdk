@@ -2,7 +2,6 @@ package io.keploy.servlet;
 
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
-import io.keploy.regression.Mock;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.AppConfig;
@@ -14,6 +13,7 @@ import io.keploy.service.GrpcService;
 import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
@@ -95,9 +95,6 @@ public class middleware extends HttpFilter {
         cfg.setServer(serverConfig);
         kp.setCfg(cfg);
 
-        //just to test if it is now loading or not.
-        new Mock();
-
         // its mere purpose is to call the constructor to initialize some fields
         new GrpcService();
 
@@ -137,12 +134,20 @@ public class middleware extends HttpFilter {
             return;
         }
 
-        //setting request context
+        //setting  context
         Kcontext kctx = new Kcontext();
         kctx.setRequest(request);
-        kctx.setMode(mode.getMode());
+
         Context.setCtx(kctx);
 
+        String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
+        logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
+
+        if (keploy_test_id != null) {
+            kctx.setTestId(keploy_test_id);
+            kctx.setMode(mode.ModeType.MODE_TEST);
+            kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
+        }
 
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
@@ -158,19 +163,26 @@ public class middleware extends HttpFilter {
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
 
+        String statusMsg = HttpStatus.valueOf(responseWrapper.getStatus()).getReasonPhrase();
+        String protocolType = requestWrapper.getProtocol();
+        int protoMajor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 3));
+        int protoMinor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 1));
+
+
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
-        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
+
+        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder()
+                .setStatusCode(responseWrapper.getStatus())
+                .setBody(responseBody)
+                .setStatusMessage(statusMsg)
+                .setProtoMajor(protoMajor)
+                .setProtoMinor(protoMinor)
+                .putAllHeader(simResponseHeaderMap).build();
 
         logger.debug("simulate response inside middleware: {}", simulateResponse);
 
-        String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
-        String protocolType = request.getProtocol();
-
-        logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
-
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
-            kctx.setTestId(keploy_test_id);
 //            Context.cleanup();
             logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
@@ -179,7 +191,13 @@ public class middleware extends HttpFilter {
 
             Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
-            Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
+            Service.HttpResp httpResp = builder
+                    .setStatusCode(responseWrapper.getStatus())
+                    .setBody(responseBody)
+                    .setStatusMessage(statusMsg)
+                    .setProtoMajor(protoMajor)
+                    .setProtoMinor(protoMinor)
+                    .putAllHeader(headerMap).build();
 
             try {
                 GrpcService.CaptureTestCases(requestBody, urlParams, httpResp, protocolType);

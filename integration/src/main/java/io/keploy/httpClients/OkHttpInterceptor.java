@@ -13,24 +13,31 @@ import okio.ByteString;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.*;
 
 @Component
-public class okhttp implements Interceptor {
-    private static final Logger logger = LogManager.getLogger(okhttp.class);
+public class OkHttpInterceptor implements Interceptor {
+    private static final Logger logger = LogManager.getLogger(OkHttpInterceptor.class);
 
 
     @NotNull
     @Override
     public Response intercept(@NotNull Chain chain) throws IOException {
 
-        System.out.println("inside okhttp interceptor");
+        logger.debug("inside OkHttpInterceptor");
+
         Request request = chain.request();
 
         Kcontext kctx = Context.getCtx();
+
+        if (kctx == null) {
+            logger.debug("[OkHttpInterceptor]: simulate call ");
+            return chain.proceed(request);
+        }
 
         mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
 
@@ -56,6 +63,8 @@ public class okhttp implements Interceptor {
                 if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.HTTP_EXPORT.value)) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0 && mocks.get(0).getSpec().getObjectsCount() > 0) {
+                        logger.debug("[OkHttpInterceptor]: test mode");
+
                         com.google.protobuf.ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
 
                         Service.HttpResp httpResp = mocks.get(0).getSpec().getRes();
@@ -63,7 +72,6 @@ public class okhttp implements Interceptor {
                         long statusCode = httpResp.getStatusCode();
                         Map<String, Service.StrArr> headerMap = httpResp.getHeaderMap();
                         String msg = httpResp.getStatusMessage();
-//                        HttpStatus.valueOf((int) statusCode).getReasonPhrase();
 
                         ResponseBody
                                 resBody = ResponseBody.create(body, MediaType.parse("application/json; charset=utf-8"));
@@ -84,21 +92,28 @@ public class okhttp implements Interceptor {
                         meta.put("ProtoMajor", String.valueOf(protoMajor));
                         meta.put("ProtoMinor", String.valueOf(protoMinor));
 
-                        if (kctx.getFileExport()) {
-                            logger.info("🤡 Returned the mocked outputs for Http dependency call with meta: {}", meta);
-                        }
-                        // add comment
+                        // add comment why you are removing this.
                         mocks.remove(0);
                     }
-                    assert response != null;
+
+                    if (response == null) {
+                        logger.error("[OkHttpInterceptor]: unable to read response");
+                        throw new RuntimeException("unable to read response");
+                    }
+
                     return response;
+                } else {
+                    logger.error("[OkHttpInterceptor]: mocks not present");
+                    throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:
+                logger.debug("[OkHttpInterceptor]: record mode");
+
                 response = chain.proceed(request);
                 String responseBody = getResponseBody(response);
                 int statuscode = response.code();
-                String msg = response.message();
-
+//                String msg = response.message();
+                String msg = HttpStatus.valueOf(statuscode).getReasonPhrase();
                 long[] protocol = getProtoVersion(response.protocol());
                 long ProtoMinor = protocol[0];
                 long ProtoMajor = protocol[1];
@@ -127,20 +142,24 @@ public class okhttp implements Interceptor {
                 meta.put("ProtoMajor", String.valueOf(ProtoMajor));
                 meta.put("ProtoMinor", String.valueOf(ProtoMinor));
 
+                Service.Mock.Object obj = Service.Mock.Object.newBuilder().setType("error").setData(com.google.protobuf.ByteString.fromHex("")).build();
+                List<Service.Mock.Object> lobj = new ArrayList<>();
+                lobj.add(obj);
+
                 Service.Mock.SpecSchema specSchema = Service.Mock.SpecSchema.newBuilder()
                         .setReq(httpReq)
                         .setRes(httpResp)
                         .putAllMetadata(meta)
+                        .addAllObjects(lobj)
                         .build();
-
-                //add enums for version, kind (refer models of keploy-server)
 
                 Service.Mock httpMock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
                         .setKind(Mock.Kind.HTTP_EXPORT.value)
-                        .setName(kctx.getTestId())
+                        .setName("")
                         .setSpec(specSchema)
                         .build();
+
                 kctx.getMock().add(httpMock);
                 return response;
             default:
