@@ -127,7 +127,6 @@ public class GrpcService {
 
     public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse;
-        System.out.println("Request headers of mock: " + testCaseReq.getMocksList().get(0).getSpec().getReq().getHeaderMap());
         try {
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {

@@ -26,7 +26,6 @@ public class KAgent {
     public static void premain(String arg, Instrumentation instrumentation) {
 
         logger.debug("inside premain method");
-        logger.info("inside premain method");
 
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String okhttpClientBuilder = "okhttp3.OkHttpClient$Builder";
@@ -39,22 +38,20 @@ public class KAgent {
                 //for okhttp client interceptor upto version 2.7.5
                 .type(named(okhttp_java))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    System.out.println("[" + Instant.now().getEpochSecond() + "]:Inside OkHttp Transformer");
+                    logger.debug("inside OkHttpTransformer_Java");
                     return builder
                             .constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Java").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
                 //for okhttp client interceptor for version 3.0+
                 .type(named(okhttpClientBuilder))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    logger.debug("inside OkHttpTransformer");
-                    System.out.println("Inside okhttp transformer");
+                    logger.debug("inside OkHttpTransformer_Kotlin");
                     return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Kotlin").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
                 //for apache client interceptor
                 .type(named(apacheClient))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("inside apacheInterceptor");
-                    System.out.println("inside apache transformer");
                     try {
                         String interceptor = "io.keploy.httpClients.ApacheInterceptor";
                         ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();

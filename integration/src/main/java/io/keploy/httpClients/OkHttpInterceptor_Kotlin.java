@@ -55,7 +55,6 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         meta.put("type", "HTTP_CLIENT");
         meta.put("operation", request.method());
         meta.put("URL", request.url().toString());
-        System.out.println("request headers inside okhttp interceptor: " + getHeadersMultimap(request.headers()));
         meta.put("Header", request.headers().toString());
         meta.put("Body", reqBody);
 
@@ -142,7 +141,6 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                         .putAllURLParams(getUrlParams(request))
                         .build();
 
-                System.out.println("httpReq Header map: " + httpReq.getHeaderMap());
 
                 meta.put("ProtoMajor", String.valueOf(ProtoMajor));
                 meta.put("ProtoMinor", String.valueOf(ProtoMinor));
@@ -233,10 +231,6 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         for (Pair<? extends String, ? extends String> header : headers) {
             String key = header.getFirst();
             String value = header.getSecond();
-
-            System.out.println("key of okhttp header: " + key);
-            System.out.println("value of okhttp header: " + value);
-
             hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
         }
 

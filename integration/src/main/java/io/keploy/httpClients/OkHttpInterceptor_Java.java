@@ -54,7 +54,6 @@ public class OkHttpInterceptor_Java implements Interceptor {
         meta.put("type", "HTTP_CLIENT");
         meta.put("operation", request.method());
         meta.put("URL", request.url().toString());
-        System.out.println("request headers inside okhttp interceptor: " + request.headers().toMultimap());
         meta.put("Header", request.headers().toString());
         meta.put("Body", reqBody);
 
@@ -141,7 +140,6 @@ public class OkHttpInterceptor_Java implements Interceptor {
                         .putAllURLParams(getUrlParams(request))
                         .build();
 
-                System.out.println("httpReq Header map: " + httpReq.getHeaderMap());
 
                 meta.put("ProtoMajor", String.valueOf(ProtoMajor));
                 meta.put("ProtoMinor", String.valueOf(ProtoMinor));
