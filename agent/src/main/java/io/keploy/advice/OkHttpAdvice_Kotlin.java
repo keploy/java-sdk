@@ -1,12 +1,13 @@
 package io.keploy.advice;
 
-import io.keploy.httpClients.OkHttpInterceptor;
+import io.keploy.httpClients.OkHttpInterceptor_Kotlin;
 import net.bytebuddy.asm.Advice;
 import okhttp3.OkHttpClient;
 
 import java.lang.reflect.Constructor;
 
-public class OkHttpAdvice {
+
+public class OkHttpAdvice_Kotlin {
 
 
     @Advice.OnMethodEnter
@@ -17,7 +18,8 @@ public class OkHttpAdvice {
     @Advice.OnMethodExit
     static void exitMethods(@Advice.Origin Constructor constructor, @Advice.This OkHttpClient.Builder builder) throws Exception {
         System.out.println("Inside OnMethodExit advice -> " + constructor);
-        OkHttpInterceptor okHttpInterceptor = new OkHttpInterceptor();
+
+        OkHttpInterceptor_Kotlin okHttpInterceptor = new OkHttpInterceptor_Kotlin();
 //        int ct = AdviceCounter.icount.incrementAndGet();
 //        System.out.println("counter: " + ct);
 //        if (ct == 1) {

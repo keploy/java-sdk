@@ -1,15 +1,16 @@
 package io.keploy.httpClients;
 
+import com.google.protobuf.ByteString;
 import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
 import io.keploy.regression.mode;
+import kotlin.Pair;
 import okhttp3.*;
 import okio.Buffer;
 import okio.BufferedSource;
-import okio.ByteString;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
@@ -20,9 +21,10 @@ import java.io.IOException;
 import java.util.*;
 
 @Component
-public class OkHttpInterceptor implements Interceptor {
-    private static final Logger logger = LogManager.getLogger(OkHttpInterceptor.class);
+public class OkHttpInterceptor_Kotlin implements Interceptor {
+    private static final Logger logger = LogManager.getLogger(OkHttpInterceptor_Kotlin.class);
 
+    private static final String CROSS = new String(Character.toChars(0x274C));
 
     @NotNull
     @Override
@@ -53,6 +55,7 @@ public class OkHttpInterceptor implements Interceptor {
         meta.put("type", "HTTP_CLIENT");
         meta.put("operation", request.method());
         meta.put("URL", request.url().toString());
+        System.out.println("request headers inside okhttp interceptor: " + getHeadersMultimap(request.headers()));
         meta.put("Header", request.headers().toString());
         meta.put("Body", reqBody);
 
@@ -65,7 +68,7 @@ public class OkHttpInterceptor implements Interceptor {
                     if (mocks.size() > 0 && mocks.get(0).getSpec().getObjectsCount() > 0) {
                         logger.debug("[OkHttpInterceptor]: test mode");
 
-                        com.google.protobuf.ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
+                        ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
 
                         Service.HttpResp httpResp = mocks.get(0).getSpec().getRes();
                         String body = httpResp.getBody();
@@ -97,13 +100,13 @@ public class OkHttpInterceptor implements Interceptor {
                     }
 
                     if (response == null) {
-                        logger.error("[OkHttpInterceptor]: unable to read response");
+                        logger.error(CROSS + " [OkHttpInterceptor]: unable to read response");
                         throw new RuntimeException("unable to read response");
                     }
 
                     return response;
                 } else {
-                    logger.error("[OkHttpInterceptor]: mocks not present");
+                    logger.error(CROSS + " [OkHttpInterceptor]: mocks not present");
                     throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:
@@ -118,7 +121,7 @@ public class OkHttpInterceptor implements Interceptor {
                 long ProtoMinor = protocol[0];
                 long ProtoMajor = protocol[1];
 
-                Map<String, Service.StrArr> resHeaders = getHeadersMap(response.headers().toMultimap());
+                Map<String, Service.StrArr> resHeaders = getHeadersMap(response.headers());
 
                 Service.HttpResp httpResp = Service.HttpResp.newBuilder()
                         .setBody(responseBody)
@@ -135,9 +138,11 @@ public class OkHttpInterceptor implements Interceptor {
                         .setURL(String.valueOf(request.url()))
                         .setProtoMajor(ProtoMajor)
                         .setProtoMinor(ProtoMinor)
-                        .putAllHeader(getHeadersMap(request.headers().toMultimap()))
+                        .putAllHeader(getHeadersMap(request.headers()))
                         .putAllURLParams(getUrlParams(request))
                         .build();
+
+                System.out.println("httpReq Header map: " + httpReq.getHeaderMap());
 
                 meta.put("ProtoMajor", String.valueOf(ProtoMajor));
                 meta.put("ProtoMinor", String.valueOf(ProtoMinor));
@@ -163,7 +168,7 @@ public class OkHttpInterceptor implements Interceptor {
                 kctx.getMock().add(httpMock);
                 return response;
             default:
-                logger.error("integrations: Not in a valid sdk mode");
+                logger.error(CROSS + " integrations: Not in a valid sdk mode");
                 return chain.proceed(request);
         }
     }
@@ -220,7 +225,28 @@ public class OkHttpInterceptor implements Interceptor {
         return resB.build();
     }
 
-    private Map<String, Service.StrArr> getHeadersMap(Map<String, List<String>> hmap) {
+
+    private Map<String, List<String>> getHeadersMultimap(Headers headers) {
+
+        Map<String, List<String>> hmap = new HashMap<>();
+
+        for (Pair<? extends String, ? extends String> header : headers) {
+            String key = header.getFirst();
+            String value = header.getSecond();
+
+            System.out.println("key of okhttp header: " + key);
+            System.out.println("value of okhttp header: " + value);
+
+            hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
+        }
+
+        return hmap;
+    }
+
+    private Map<String, Service.StrArr> getHeadersMap(Headers headers) {
+
+        Map<String, List<String>> hmap = getHeadersMultimap(headers);
+
         Map<String, Service.StrArr> map = new HashMap<>();
 
         for (String name : hmap.keySet()) {
@@ -246,7 +272,7 @@ public class OkHttpInterceptor implements Interceptor {
                 Objects.requireNonNull(copy.body()).writeTo(buffer);
                 return buffer.readUtf8();
             } catch (final IOException e) {
-                logger.error("Unable to read request body", e);
+                logger.error(CROSS + " [OkHttpInterceptor]: unable to read request body", e);
             }
         }
         return "";
@@ -255,7 +281,7 @@ public class OkHttpInterceptor implements Interceptor {
     private String getResponseBody(Response response) throws IOException {
         final BufferedSource source = Objects.requireNonNull(response.body()).source();
         source.request(Integer.MAX_VALUE);
-        ByteString snapshot = source.getBuffer().snapshot();
+        okio.ByteString snapshot = source.buffer().snapshot();
         return snapshot.utf8();
     }
 }
