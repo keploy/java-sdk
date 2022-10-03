@@ -183,7 +183,9 @@ public class middleware extends HttpFilter {
 
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
+            
 //            Context.cleanup();
+
             logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
 
