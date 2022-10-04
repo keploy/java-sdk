@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import javax.servlet.http.HttpServletRequest;
+import java.util.ArrayList;
+import java.util.List;
 
 @Getter
 @Setter
@@ -15,16 +17,22 @@ public class Kcontext {
 
     private HttpServletRequest Request;
 
-    private mode.ModeType Mode;
+    private mode.ModeType Mode = mode.ModeType.MODE_RECORD;
+
+    private Boolean FileExport;
 
     private String TestId;
 
-    private Service.Dependency[] Deps;
+    private List<Service.Dependency> Deps = new ArrayList<>();
 
-    public Kcontext(HttpServletRequest request, io.keploy.regression.mode.ModeType mode, String testId, Service.Dependency[] deps) {
-        this.Request = request;
-        this.Mode = mode;
-        this.TestId = testId;
-        this.Deps = deps;
+    private List<Service.Mock> Mock = new ArrayList<>();
+
+    public Kcontext(HttpServletRequest request, mode.ModeType mode, Boolean fileExport, String testId, List<Service.Dependency> deps, List<Service.Mock> mock) {
+        Request = request;
+        Mode = mode;
+        FileExport = fileExport;
+        TestId = testId;
+        Deps = deps;
+        Mock = mock;
     }
 }

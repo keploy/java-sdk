@@ -13,6 +13,7 @@ import io.keploy.service.GrpcService;
 import io.keploy.utils.HaltThread;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
@@ -62,16 +63,28 @@ public class middleware extends HttpFilter {
         if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
             Path effectivePath = Paths.get("").resolve(kpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
-            appConfig.setPath(absolutePath);
+            appConfig.setTestPath(absolutePath);
         } else if (kpath == null || kpath.length() == 0) {
-            String currDir = System.getProperty("user.dir") + "/src/test/e2e";
-            appConfig.setPath(currDir);
+            String currDir = System.getProperty("user.dir") + "/src/test/e2e/keploy-tests";
+            appConfig.setTestPath(currDir);
+        }
+
+        //Path for exported mocks
+        String mpath = System.getenv("MOCK_PATH");
+
+        if (mpath != null && mpath.length() > 0 && !Paths.get(mpath).isAbsolute()) {
+            Path effectivePath = Paths.get("").resolve(mpath).toAbsolutePath();
+            String absolutePath = effectivePath.normalize().toString();
+            appConfig.setMockPath(absolutePath);
+        } else if (mpath == null || mpath.length() == 0) {
+            String currDir = System.getProperty("user.dir") + "/src/test/e2e/mocks";
+            appConfig.setMockPath(currDir);
         }
 
         ServerConfig serverConfig = new ServerConfig();
 
         if (System.getenv("DENOISE") != null) {
-            serverConfig.setDenoise(Boolean.valueOf(System.getenv("DENOISE")));
+            serverConfig.setDenoise(Boolean.parseBoolean(System.getenv("DENOISE")));
         }
 
         if (System.getenv("KEPLOY_URL") != null) {
@@ -121,8 +134,20 @@ public class middleware extends HttpFilter {
             return;
         }
 
-        //setting request context
-        Context.setCtx(new Kcontext(request, null, null, null));
+        //setting  context
+        Kcontext kctx = new Kcontext();
+        kctx.setRequest(request);
+
+        Context.setCtx(kctx);
+
+        String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
+        logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
+
+        if (keploy_test_id != null) {
+            kctx.setTestId(keploy_test_id);
+            kctx.setMode(mode.ModeType.MODE_TEST);
+            kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
+        }
 
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
@@ -138,19 +163,27 @@ public class middleware extends HttpFilter {
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
 
+        String statusMsg = HttpStatus.valueOf(responseWrapper.getStatus()).getReasonPhrase();
+        String protocolType = requestWrapper.getProtocol();
+        int protoMajor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 3));
+        int protoMinor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 1));
+
+
         Map<String, Service.StrArr> simResponseHeaderMap = getResponseHeaderMap(responseWrapper);
-        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder().setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(simResponseHeaderMap).build();
+
+        Service.HttpResp simulateResponse = Service.HttpResp.newBuilder()
+                .setStatusCode(responseWrapper.getStatus())
+                .setBody(responseBody)
+                .setStatusMessage(statusMsg)
+                .setProtoMajor(protoMajor)
+                .setProtoMinor(protoMinor)
+                .putAllHeader(simResponseHeaderMap).build();
 
         logger.debug("simulate response inside middleware: {}", simulateResponse);
 
-        String keploy_test_id = request.getHeader("KEPLOY_TEST_ID");
-        String protocolType = request.getProtocol();
-
-        logger.debug("KEPLOY_TEST_ID: {}", keploy_test_id);
-
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
-            Context.cleanup();
+//            Context.cleanup();
             logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
 
@@ -158,7 +191,13 @@ public class middleware extends HttpFilter {
 
             Service.HttpResp.Builder builder = Service.HttpResp.newBuilder();
             Map<String, Service.StrArr> headerMap = getResponseHeaderMap(responseWrapper);
-            Service.HttpResp httpResp = builder.setStatusCode(responseWrapper.getStatus()).setBody(responseBody).putAllHeader(headerMap).build();
+            Service.HttpResp httpResp = builder
+                    .setStatusCode(responseWrapper.getStatus())
+                    .setBody(responseBody)
+                    .setStatusMessage(statusMsg)
+                    .setProtoMajor(protoMajor)
+                    .setProtoMinor(protoMinor)
+                    .putAllHeader(headerMap).build();
 
             try {
                 GrpcService.CaptureTestCases(requestBody, urlParams, httpResp, protocolType);
@@ -172,7 +211,7 @@ public class middleware extends HttpFilter {
     }
 
 
-    public Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
+    private Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
@@ -195,7 +234,7 @@ public class middleware extends HttpFilter {
         return map;
     }
 
-    public Map<String, String> setUrlParams(Map<String, String[]> param) {
+    private Map<String, String> setUrlParams(Map<String, String[]> param) {
         Map<String, String> urlParams = new HashMap<>();
 
         for (String key : param.keySet()) {
