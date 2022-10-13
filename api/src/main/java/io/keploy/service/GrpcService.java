@@ -61,7 +61,7 @@ public class GrpcService {
             url = new URL(k.getCfg().getServer().getURL());
         } catch (MalformedURLException e) {
             logger.error("unable to make GrpcConnection", e);
-            return "localhost:8081";
+            return "localhost:6789";
         }
 
         return url.getAuthority();
