@@ -16,12 +16,6 @@
         <maven.compiler.target>1.8</maven.compiler.target>
     </properties>
     <dependencies>
-        <!-- https://mvnrepository.com/artifact/org.springframework/spring-context -->
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-context</artifactId>
-            <version>5.3.22</version>
-        </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>models</artifactId>
@@ -29,5 +23,4 @@
             <scope>compile</scope>
         </dependency>
     </dependencies>
-
 </project>

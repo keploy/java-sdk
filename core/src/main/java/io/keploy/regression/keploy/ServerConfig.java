@@ -8,7 +8,7 @@ import lombok.Setter;
 @NoArgsConstructor
 public class ServerConfig {
 //    "https://api.keploy.io";
-    private String URL = "http://localhost:8081/api";
+    private String URL = "http://localhost:6789/api";
     private String LicenseKey;
     private Boolean Denoise = false;
 

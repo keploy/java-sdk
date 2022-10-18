@@ -1,20 +1,17 @@
 Manifest-Version: 1.0
 Main-Class: 
-Class-Path: javax.annotation-api-1.3.2.jar log4j-core-2.18.0.jar failure
- access-1.0.1.jar perfmark-api-0.25.0.jar httpclient-4.5.13.jar okhttp-4
- .10.0.jar okio-jvm-3.0.0.jar spring-expression-5.3.22.jar okhttp-2.7.5.
- jar byte-buddy-agent-1.12.14.jar proto-google-common-protos-2.9.0.jar c
- ommons-codec-1.11.jar spring-aop-5.3.22.jar kotlin-stdlib-jdk8-1.5.31.j
- ar okio-1.6.0.jar gson-2.9.0.jar grpc-protobuf-lite-1.49.0.jar spring-c
- ontext-5.3.22.jar kotlin-stdlib-jdk7-1.5.31.jar kotlin-stdlib-common-1.
- 5.31.jar j2objc-annotations-1.3.jar grpc-context-1.49.0.jar grpc-api-1.
- 49.0.jar grpc-netty-shaded-1.49.0.jar spring-web-5.3.22.jar protobuf-ja
- va-3.21.5.jar httpcore-4.4.13.jar guava-31.1-android.jar animal-sniffer
- -annotations-1.21.jar annotations-13.0.jar byte-buddy-1.12.14.jar grpc-
- stub-1.49.0.jar kotlin-stdlib-1.6.20.jar grpc-protobuf-1.49.0.jar sprin
- g-core-5.3.22.jar spring-beans-5.3.22.jar error_prone_annotations-2.14.
- 0.jar grpc-core-1.49.0.jar annotations-4.1.1.4.jar listenablefuture-999
- 9.0-empty-to-avoid-conflict-with-guava.jar jsr305-3.0.2.jar commons-log
- ging-1.2.jar spring-jcl-5.3.22.jar checker-qual-3.12.0.jar log4j-api-2.
- 18.0.jar
+Class-Path: annotations-4.1.1.4.jar grpc-api-1.49.2.jar gson-2.9.0.jar g
+ rpc-protobuf-1.49.2.jar annotations-13.0.jar okio-jvm-3.0.0.jar kotlin-
+ stdlib-common-1.5.31.jar animal-sniffer-annotations-1.21.jar httpclient
+ -4.5.13.jar log4j-core-2.18.0.jar protobuf-java-3.21.7.jar j2objc-annot
+ ations-1.3.jar jsr305-3.0.2.jar grpc-stub-1.49.2.jar httpcore-4.4.13.ja
+ r byte-buddy-agent-1.12.14.jar kotlin-stdlib-jdk8-1.5.31.jar okhttp-4.1
+ 0.0.jar byte-buddy-1.12.14.jar kotlin-stdlib-jdk7-1.5.31.jar error_pron
+ e_annotations-2.14.0.jar httpasyncclient-4.1.5.jar failureaccess-1.0.1.
+ jar commons-logging-1.2.jar httpcore-nio-4.4.15.jar commons-codec-1.11.
+ jar listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar kotl
+ in-stdlib-1.6.20.jar grpc-core-1.49.2.jar grpc-context-1.49.2.jar grpc-
+ netty-shaded-1.49.2.jar guava-31.1-android.jar javax.annotation-api-1.3
+ .2.jar log4j-api-2.18.0.jar proto-google-common-protos-2.9.0.jar grpc-p
+ rotobuf-lite-1.49.2.jar perfmark-api-0.25.0.jar checker-qual-3.12.0.jar
 
