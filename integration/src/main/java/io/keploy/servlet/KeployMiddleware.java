@@ -10,18 +10,14 @@ import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.mode;
 import io.keploy.service.GrpcService;
+import io.keploy.utils.GenericRequestWrapper;
+import io.keploy.utils.GenericResponseWrapper;
 import io.keploy.utils.HaltThread;
+import io.keploy.utils.HttpStatusReasons;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.springframework.web.util.ContentCachingRequestWrapper;
-import org.springframework.web.util.ContentCachingResponseWrapper;
 
-import javax.servlet.FilterChain;
-import javax.servlet.FilterConfig;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpFilter;
+import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -34,10 +30,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
-@Component
-public class middleware extends HttpFilter {
+public class KeployMiddleware implements Filter {
 
-    private static final Logger logger = LogManager.getLogger(middleware.class);
+    private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);
     private static final String CROSS = new String(Character.toChars(0x274C));
 
     @Override
@@ -69,6 +64,8 @@ public class middleware extends HttpFilter {
             appConfig.setTestPath(currDir);
         }
 
+        logger.debug("test path: {}", appConfig.getTestPath());
+
         //Path for exported mocks
         String mpath = System.getenv("MOCK_PATH");
 
@@ -80,6 +77,8 @@ public class middleware extends HttpFilter {
             String currDir = System.getProperty("user.dir") + "/src/test/e2e/mocks";
             appConfig.setMockPath(currDir);
         }
+
+        logger.debug("mock path: {}", appConfig.getMockPath());
 
         ServerConfig serverConfig = new ServerConfig();
 
@@ -121,7 +120,11 @@ public class middleware extends HttpFilter {
     }
 
     @Override
-    public void doFilter(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws IOException, ServletException {
+    public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
+        HttpServletRequest request = (HttpServletRequest) servletRequest;
+        HttpServletResponse response = (HttpServletResponse) servletResponse;
+
+
         KeployInstance ki = KeployInstance.getInstance();
         Keploy k = ki.getKeploy();
 
@@ -149,21 +152,26 @@ public class middleware extends HttpFilter {
             kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
         }
 
-        ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
-        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
+//        ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
+//        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
+        GenericRequestWrapper requestWrapper = new GenericRequestWrapper(request);
+        GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
 
         filterChain.doFilter(requestWrapper, responseWrapper);
 
-        byte[] reqArr = requestWrapper.getContentAsByteArray();
-        byte[] resArr = responseWrapper.getContentAsByteArray();
+        byte[] reqArr = requestWrapper.getData();
+        byte[] resArr = responseWrapper.getData();
 
-        String requestBody = this.getStringValue(reqArr, request.getCharacterEncoding());
-        String responseBody = this.getStringValue(resArr, response.getCharacterEncoding());
+        String reqEncoding = (request.getCharacterEncoding() == null) ? "UTF-8" : request.getCharacterEncoding();
+        String resEncoding = (response.getCharacterEncoding() == null) ? "ISO-8859-1" : response.getCharacterEncoding();
+
+        String requestBody = this.getStringValue(reqArr, reqEncoding);
+        String responseBody = this.getStringValue(resArr, resEncoding);
 
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
 
-        String statusMsg = HttpStatus.valueOf(responseWrapper.getStatus()).getReasonPhrase();
+        String statusMsg = HttpStatusReasons.getStatusMsg(responseWrapper.getStatus());
         String protocolType = requestWrapper.getProtocol();
         int protoMajor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 3));
         int protoMinor = Character.getNumericValue(protocolType.charAt(protocolType.length() - 1));
@@ -206,22 +214,32 @@ public class middleware extends HttpFilter {
             }
         }
         // this will also flush the headers and make response committed.
-        responseWrapper.copyBodyToResponse();
+//        responseWrapper.copyBodyToResponse();
+
+        responseWrapper.flushBuffer();
+
+//        OutputStream out = response.getOutputStream();
+//        out.write(resArr);
+//        out.close();
+//        // to write headers from buffer
+//        response.flushBuffer();
+
+
         logger.debug("inside middleware: outgoing response");
     }
 
 
-    private Map<String, Service.StrArr> getResponseHeaderMap(ContentCachingResponseWrapper contentCachingResponseWrapper) {
+    private Map<String, Service.StrArr> getResponseHeaderMap(GenericResponseWrapper responseWrapper) {
 
         Map<String, Service.StrArr> map = new HashMap<>();
 
-        List<String> headerNames = new ArrayList<>(contentCachingResponseWrapper.getHeaderNames());
+        List<String> headerNames = new ArrayList<>(responseWrapper.getHeaderNames());
 
         for (String name : headerNames) {
 
             if (name == null) continue;
 
-            List<String> values = new ArrayList<>(contentCachingResponseWrapper.getHeaders(name));
+            List<String> values = new ArrayList<>(responseWrapper.getHeaders(name));
             Service.StrArr.Builder builder = Service.StrArr.newBuilder();
 
             for (String s : values) {

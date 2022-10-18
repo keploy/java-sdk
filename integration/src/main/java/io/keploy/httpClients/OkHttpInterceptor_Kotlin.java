@@ -7,6 +7,7 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
 import io.keploy.regression.mode;
+import io.keploy.utils.HttpStatusReasons;
 import kotlin.Pair;
 import okhttp3.*;
 import okio.Buffer;
@@ -14,13 +15,10 @@ import okio.BufferedSource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.*;
 
-@Component
 public class OkHttpInterceptor_Kotlin implements Interceptor {
     private static final Logger logger = LogManager.getLogger(OkHttpInterceptor_Kotlin.class);
 
@@ -73,7 +71,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                         String body = httpResp.getBody();
                         long statusCode = httpResp.getStatusCode();
                         Map<String, Service.StrArr> headerMap = httpResp.getHeaderMap();
-                        String msg = httpResp.getStatusMessage();
+                        String statusMsg = httpResp.getStatusMessage();
 
                         ResponseBody
                                 resBody = ResponseBody.create(body, MediaType.parse("application/json; charset=utf-8"));
@@ -85,7 +83,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
 
                         Response.Builder resBuilder = new Response.Builder().body(resBody)
                                 .code((int) statusCode)
-                                .message(msg)
+                                .message(statusMsg)
                                 .request(request)
                                 .protocol(protocol);
                         response = setResponseHeaders(resBuilder, headerMap);
@@ -114,8 +112,8 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 response = chain.proceed(request);
                 String responseBody = getResponseBody(response);
                 int statuscode = response.code();
-//                String msg = response.message();
-                String msg = HttpStatus.valueOf(statuscode).getReasonPhrase();
+                String statusMsg = HttpStatusReasons.getStatusMsg(statuscode);
+
                 long[] protocol = getProtoVersion(response.protocol());
                 long ProtoMinor = protocol[0];
                 long ProtoMajor = protocol[1];
@@ -125,7 +123,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 Service.HttpResp httpResp = Service.HttpResp.newBuilder()
                         .setBody(responseBody)
                         .setStatusCode(statuscode)
-                        .setStatusMessage(msg)
+                        .setStatusMessage(statusMsg)
                         .setProtoMajor(ProtoMajor)
                         .setProtoMinor(ProtoMinor)
                         .putAllHeader(resHeaders)

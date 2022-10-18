@@ -114,16 +114,6 @@
 
     <dependencies>
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-context</artifactId>
-            <version>5.3.22</version>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-web</artifactId>
-            <version>5.3.22</version>
-        </dependency>
-        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <version>1.18.24</version>
@@ -145,15 +135,21 @@
             <version>4.10.0</version>
         </dependency>
         <dependency>
-            <groupId>com.squareup.okhttp</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>2.7.5</version>
-        </dependency>
-        <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
             <version>4.5.13</version>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/org.apache.httpcomponents/httpasyncclient -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpasyncclient</artifactId>
+            <version>4.1.5</version>
+        </dependency>
+        <!--        <dependency>-->
+        <!--            <groupId>org.elasticsearch</groupId>-->
+        <!--            <artifactId>elasticsearch</artifactId>-->
+        <!--            <version>6.8.13</version>-->
+        <!--        </dependency>-->
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
@@ -179,85 +175,85 @@
 
     <build>
         <plugins>
-<!--                        <plugin>-->
-<!--                            <groupId>org.apache.maven.plugins</groupId>-->
-<!--                            <artifactId>maven-gpg-plugin</artifactId>-->
-<!--                            <version>1.5</version>-->
-<!--                            <executions>-->
-<!--                                <execution>-->
-<!--                                    <id>sign-artifacts</id>-->
-<!--                                    <phase>verify</phase>-->
-<!--                                    <goals>-->
-<!--                                        <goal>sign</goal>-->
-<!--                                    </goals>-->
-<!--                                </execution>-->
-<!--                            </executions>-->
-<!--                        </plugin>-->
-<!--                        <plugin>-->
-<!--                            <groupId>org.sonatype.plugins</groupId>-->
-<!--                            <artifactId>nexus-staging-maven-plugin</artifactId>-->
-<!--                            <version>1.6.7</version>-->
-<!--                            <extensions>true</extensions>-->
-<!--                            <configuration>-->
-<!--                                <serverId>ossrh</serverId>-->
-<!--                                <nexusUrl>https://oss.sonatype.org/</nexusUrl>-->
-<!--                                <autoReleaseAfterClose>true</autoReleaseAfterClose>-->
-<!--                            </configuration>-->
-<!--                        </plugin>-->
-<!--                        <plugin>-->
-<!--                            <groupId>org.apache.maven.plugins</groupId>-->
-<!--                            <artifactId>maven-source-plugin</artifactId>-->
-<!--                            <version>2.2.1</version>-->
-<!--                            <executions>-->
-<!--                                <execution>-->
-<!--                                    <id>attach-sources</id>-->
-<!--                                    <goals>-->
-<!--                                        <goal>jar-no-fork</goal>-->
-<!--                                    </goals>-->
-<!--                                </execution>-->
-<!--                            </executions>-->
-<!--                        </plugin>-->
-<!--                        <plugin>-->
-<!--                            <groupId>org.apache.maven.plugins</groupId>-->
-<!--                            <artifactId>maven-gpg-plugin</artifactId>-->
-<!--                            <version>1.5</version>-->
-<!--                            <executions>-->
-<!--                                <execution>-->
-<!--                                    <id>sign-artifacts</id>-->
-<!--                                    <phase>verify</phase>-->
-<!--                                    <goals>-->
-<!--                                        <goal>sign</goal>-->
-<!--                                    </goals>-->
-<!--                                </execution>-->
-<!--                            </executions>-->
-<!--                        </plugin>-->
-<!--                        <plugin>-->
-<!--                            <groupId>org.apache.maven.plugins</groupId>-->
-<!--                            <artifactId>maven-javadoc-plugin</artifactId>-->
-<!--                            <version>2.9.1</version>-->
-<!--                            <executions>-->
-<!--                                <execution>-->
-<!--                                    <id>attach-javadocs</id>-->
-<!--                                    <goals>-->
-<!--                                        <goal>jar</goal>-->
-<!--                                    </goals>-->
-<!--                                </execution>-->
-<!--                            </executions>-->
-<!--                        </plugin>-->
-<!--                        <plugin>-->
-<!--                            <groupId>org.apache.maven.plugins</groupId>-->
-<!--                            <artifactId>maven-gpg-plugin</artifactId>-->
-<!--                            <version>1.5</version>-->
-<!--                            <executions>-->
-<!--                                <execution>-->
-<!--                                    <id>sign-artifacts</id>-->
-<!--                                    <phase>verify</phase>-->
-<!--                                    <goals>-->
-<!--                                        <goal>sign</goal>-->
-<!--                                    </goals>-->
-<!--                                </execution>-->
-<!--                            </executions>-->
-<!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.apache.maven.plugins</groupId>-->
+            <!--                            <artifactId>maven-gpg-plugin</artifactId>-->
+            <!--                            <version>1.5</version>-->
+            <!--                            <executions>-->
+            <!--                                <execution>-->
+            <!--                                    <id>sign-artifacts</id>-->
+            <!--                                    <phase>verify</phase>-->
+            <!--                                    <goals>-->
+            <!--                                        <goal>sign</goal>-->
+            <!--                                    </goals>-->
+            <!--                                </execution>-->
+            <!--                            </executions>-->
+            <!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.sonatype.plugins</groupId>-->
+            <!--                            <artifactId>nexus-staging-maven-plugin</artifactId>-->
+            <!--                            <version>1.6.7</version>-->
+            <!--                            <extensions>true</extensions>-->
+            <!--                            <configuration>-->
+            <!--                                <serverId>ossrh</serverId>-->
+            <!--                                <nexusUrl>https://oss.sonatype.org/</nexusUrl>-->
+            <!--                                <autoReleaseAfterClose>true</autoReleaseAfterClose>-->
+            <!--                            </configuration>-->
+            <!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.apache.maven.plugins</groupId>-->
+            <!--                            <artifactId>maven-source-plugin</artifactId>-->
+            <!--                            <version>2.2.1</version>-->
+            <!--                            <executions>-->
+            <!--                                <execution>-->
+            <!--                                    <id>attach-sources</id>-->
+            <!--                                    <goals>-->
+            <!--                                        <goal>jar-no-fork</goal>-->
+            <!--                                    </goals>-->
+            <!--                                </execution>-->
+            <!--                            </executions>-->
+            <!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.apache.maven.plugins</groupId>-->
+            <!--                            <artifactId>maven-gpg-plugin</artifactId>-->
+            <!--                            <version>1.5</version>-->
+            <!--                            <executions>-->
+            <!--                                <execution>-->
+            <!--                                    <id>sign-artifacts</id>-->
+            <!--                                    <phase>verify</phase>-->
+            <!--                                    <goals>-->
+            <!--                                        <goal>sign</goal>-->
+            <!--                                    </goals>-->
+            <!--                                </execution>-->
+            <!--                            </executions>-->
+            <!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.apache.maven.plugins</groupId>-->
+            <!--                            <artifactId>maven-javadoc-plugin</artifactId>-->
+            <!--                            <version>2.9.1</version>-->
+            <!--                            <executions>-->
+            <!--                                <execution>-->
+            <!--                                    <id>attach-javadocs</id>-->
+            <!--                                    <goals>-->
+            <!--                                        <goal>jar</goal>-->
+            <!--                                    </goals>-->
+            <!--                                </execution>-->
+            <!--                            </executions>-->
+            <!--                        </plugin>-->
+            <!--                        <plugin>-->
+            <!--                            <groupId>org.apache.maven.plugins</groupId>-->
+            <!--                            <artifactId>maven-gpg-plugin</artifactId>-->
+            <!--                            <version>1.5</version>-->
+            <!--                            <executions>-->
+            <!--                                <execution>-->
+            <!--                                    <id>sign-artifacts</id>-->
+            <!--                                    <phase>verify</phase>-->
+            <!--                                    <goals>-->
+            <!--                                        <goal>sign</goal>-->
+            <!--                                    </goals>-->
+            <!--                                </execution>-->
+            <!--                            </executions>-->
+            <!--                        </plugin>-->
         </plugins>
     </build>
 
