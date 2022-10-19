@@ -9,6 +9,7 @@ import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.Keploy;
+import io.keploy.utils.AssertKTests;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -318,10 +319,12 @@ public class GrpcService {
             logger.error(CROSS + " (Test): unable to wait for tests to get completed", e);
         }
 
-        end(id, ok.get());
+        Boolean finalResult = ok.get();
+        AssertKTests.finalTestResult.set(finalResult);
+        end(id, finalResult);
 
         logger.info("test run completed with run id [{}]", id);
-        logger.info("|| passed overall: {} ||", String.valueOf(ok.get()).toUpperCase());
+        logger.info("|| passed overall: {} ||", String.valueOf(finalResult).toUpperCase());
     }
 
     public static String start(String total) {

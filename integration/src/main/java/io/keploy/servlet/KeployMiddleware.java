@@ -8,7 +8,7 @@ import io.keploy.regression.keploy.AppConfig;
 import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
-import io.keploy.regression.mode;
+import io.keploy.regression.Mode;
 import io.keploy.service.GrpcService;
 import io.keploy.utils.GenericRequestWrapper;
 import io.keploy.utils.GenericResponseWrapper;
@@ -97,10 +97,10 @@ public class KeployMiddleware implements Filter {
         // its mere purpose is to call the constructor to initialize some fields
         new GrpcService();
 
-        final mode.ModeType KEPLOY_MODE = mode.getMode();
+        final Mode.ModeType KEPLOY_MODE = Mode.getMode();
 
         new Thread(() -> {
-            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(mode.ModeType.MODE_TEST)) {
+            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(Mode.ModeType.MODE_TEST)) {
                 try {
                     logger.debug("starting tests");
                     GrpcService.Test();
@@ -130,9 +130,9 @@ public class KeployMiddleware implements Filter {
 
         logger.debug("inside middleware: incoming request");
 
-        logger.debug("mode: {}", mode.getMode());
+        logger.debug("mode: {}", Mode.getMode());
 
-        if (k == null || mode.getMode() != null && (mode.getMode()).equals(mode.ModeType.MODE_OFF)) {
+        if (k == null || Mode.getMode() != null && (Mode.getMode()).equals(Mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -148,7 +148,7 @@ public class KeployMiddleware implements Filter {
 
         if (keploy_test_id != null) {
             kctx.setTestId(keploy_test_id);
-            kctx.setMode(mode.ModeType.MODE_TEST);
+            kctx.setMode(Mode.ModeType.MODE_TEST);
             kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
         }
 

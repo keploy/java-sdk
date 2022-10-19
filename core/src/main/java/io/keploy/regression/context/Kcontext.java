@@ -1,7 +1,6 @@
 package io.keploy.regression.context;
 
 import io.keploy.grpc.stubs.Service;
-import io.keploy.regression.mode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -17,7 +16,7 @@ public class Kcontext {
 
     private HttpServletRequest Request;
 
-    private mode.ModeType Mode = mode.ModeType.MODE_RECORD;
+    private io.keploy.regression.Mode.ModeType Mode = io.keploy.regression.Mode.ModeType.MODE_RECORD;
 
     private Boolean FileExport;
 
@@ -27,7 +26,7 @@ public class Kcontext {
 
     private List<Service.Mock> Mock = new ArrayList<>();
 
-    public Kcontext(HttpServletRequest request, mode.ModeType mode, Boolean fileExport, String testId, List<Service.Dependency> deps, List<Service.Mock> mock) {
+    public Kcontext(HttpServletRequest request, io.keploy.regression.Mode.ModeType mode, Boolean fileExport, String testId, List<Service.Dependency> deps, List<Service.Mock> mock) {
         Request = request;
         Mode = mode;
         FileExport = fileExport;

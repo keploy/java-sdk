@@ -6,7 +6,7 @@ import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
-import io.keploy.regression.mode;
+import io.keploy.regression.Mode;
 import io.keploy.utils.HttpStatusReasons;
 import kotlin.Pair;
 import okhttp3.*;
@@ -39,9 +39,9 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
             return chain.proceed(request);
         }
 
-        mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
+        Mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
 
-        if (modeFromContext.equals(mode.ModeType.MODE_OFF)) {
+        if (modeFromContext.equals(Mode.ModeType.MODE_OFF)) {
             return chain.proceed(request);
         }
 
