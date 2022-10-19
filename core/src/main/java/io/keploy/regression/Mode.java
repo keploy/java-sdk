@@ -1,32 +1,33 @@
+
 package io.keploy.regression;
 
 import io.keploy.regression.context.Context;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-public class mode {
+public class Mode {
 
-    private static final Logger logger = LogManager.getLogger(mode.class);
+    private static final Logger logger = LogManager.getLogger(io.keploy.regression.Mode.class);
 
-    private static ModeType Mode;
+    private static ModeType modeType;
 
-    public mode() {
+    public Mode() {
 
     }
 
-    public mode(ModeType mode) {
-        Mode = mode;
+    public Mode(ModeType mode) {
+        modeType = mode;
     }
 
     public static ModeType getMode() {
-        return Mode;
+        return modeType;
     }
 
     public static void setMode(ModeType mode) {
         if (!isValid(mode)) {
             return;
         }
-        Mode = mode;
+        modeType = mode;
     }
 
     public static boolean isValid(ModeType mode) {
