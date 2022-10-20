@@ -57,10 +57,10 @@ or to *build.gradle*:
 - **For Spring based application**
   - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
 - **For Java EE application**
-    - Specify the below filter in the **web.xml** file.
+    - Specify the below filter above all other filters and servlets in the **web.xml** file. 
       ```xml
         <filter>
-            <filter-nam8e>middleware</filter-nam8e>
+            <filter-name>middleware</filter-name>
             <filter-class>io.keploy.servlet.KeployMiddleware</filter-class>
         </filter>
         <filter-mapping>
