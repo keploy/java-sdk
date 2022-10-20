@@ -62,6 +62,9 @@ public class KeployMiddleware implements Filter {
         } else if (kpath == null || kpath.length() == 0) {
             String currDir = System.getProperty("user.dir") + "/src/test/e2e/keploy-tests";
             appConfig.setTestPath(currDir);
+        } else {
+            //if user gives the path
+            appConfig.setTestPath(kpath);
         }
 
         logger.debug("test path: {}", appConfig.getTestPath());
@@ -76,6 +79,9 @@ public class KeployMiddleware implements Filter {
         } else if (mpath == null || mpath.length() == 0) {
             String currDir = System.getProperty("user.dir") + "/src/test/e2e/mocks";
             appConfig.setMockPath(currDir);
+        } else {
+            //if user gives the path
+            appConfig.setMockPath(mpath);
         }
 
         logger.debug("mock path: {}", appConfig.getMockPath());
