@@ -53,7 +53,7 @@ public class KeployMiddleware implements Filter {
         }
 
         //Path for exported tests
-        String kpath = System.getenv("KEPLOY_PATH");
+        String kpath = System.getenv("KTEST_PATH");
 
         if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
             Path effectivePath = Paths.get("").resolve(kpath).toAbsolutePath();
@@ -70,7 +70,7 @@ public class KeployMiddleware implements Filter {
         logger.debug("test path: {}", appConfig.getTestPath());
 
         //Path for exported mocks
-        String mpath = System.getenv("MOCK_PATH");
+        String mpath = System.getenv("KMOCK_PATH");
 
         if (mpath != null && mpath.length() > 0 && !Paths.get(mpath).isAbsolute()) {
             Path effectivePath = Paths.get("").resolve(mpath).toAbsolutePath();
