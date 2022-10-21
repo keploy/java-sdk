@@ -54,7 +54,20 @@ or to *build.gradle*:
 
 - Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)
 
-- Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
+- **For Spring based application**
+  - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
+- **For Java EE application**
+    - Specify the below filter above all other filters and servlets in the **web.xml** file. 
+      ```xml
+        <filter>
+            <filter-name>middleware</filter-name>
+            <filter-class>io.keploy.servlet.KeployMiddleware</filter-class>
+        </filter>
+        <filter-mapping>
+            <filter-name>middleware</filter-name>
+            <url-pattern>/*</url-pattern>
+        </filter-mapping>
+      ```
 
 
 - **Configure Environment Variables**
