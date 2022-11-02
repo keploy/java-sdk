@@ -1,5 +1,6 @@
 package io.keploy.servlet;
 
+import io.grpc.netty.shaded.io.netty.util.internal.InternalThreadLocalMap;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
@@ -14,6 +15,7 @@ import io.keploy.utils.GenericRequestWrapper;
 import io.keploy.utils.GenericResponseWrapper;
 import io.keploy.utils.HaltThread;
 import io.keploy.utils.HttpStatusReasons;
+import lombok.SneakyThrows;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -29,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class KeployMiddleware implements Filter {
 
@@ -105,8 +108,8 @@ public class KeployMiddleware implements Filter {
 
         final Mode.ModeType KEPLOY_MODE = Mode.getMode();
 
-        new Thread(() -> {
-            if (KEPLOY_MODE != null && KEPLOY_MODE.equals(Mode.ModeType.MODE_TEST)) {
+        if (KEPLOY_MODE != null && KEPLOY_MODE.equals(Mode.ModeType.MODE_TEST)) {
+            new Thread(() -> {
                 try {
                     logger.debug("starting tests");
                     GrpcService.Test();
@@ -115,14 +118,68 @@ public class KeployMiddleware implements Filter {
                 }
                 //to stop after running all tests
                 countDownLatch.countDown(); // when running tests using cmd
+
+                // to avoid memory leak
+                Context.cleanup();
+                InternalThreadLocalMap.remove();
+                try {
+                    GrpcService.channel.shutdown();
+                    GrpcService.channel.awaitTermination(1, TimeUnit.MINUTES);
+                    GrpcService.channel.shutdownNow();
+                } catch (InterruptedException e) {
+                    logger.error(CROSS + " failed to shut grpc connection properly... ", e);
+                }
+
                 try {
                     Thread.sleep(10000);
                     System.exit(0);
                 } catch (InterruptedException e) {
                     logger.error(CROSS + " failed to shut test run properly... ", e);
                 }
-            }
-        }).start();
+
+            }).start();
+        }
+
+        String runTestBeforeRecord = System.getenv("RUN_TEST_BEFORE_RECORD");
+        boolean runTests = true;
+        if (runTestBeforeRecord != null) {
+            runTests = Boolean.parseBoolean(runTestBeforeRecord);
+        }
+
+
+        if (KEPLOY_MODE != null && KEPLOY_MODE.equals(Mode.ModeType.MODE_RECORD) && runTests) {
+            new Thread(this::handleExistingTests).start();
+        }
+
+    }
+
+    private static final String SET_PLAIN_TEXT = "\033[0;0m";
+    private static final String SET_BOLD_TEXT = "\033[0;1m";
+
+    private static String bold(String str) {
+        return (SET_BOLD_TEXT + str + SET_PLAIN_TEXT);
+    }
+
+    @SneakyThrows
+    private void handleExistingTests() {
+
+        Thread.sleep(2000);
+
+        final String WARN = "\uD83D\uDEA8";
+        final String RED_CIRCLE = "\uD83D\uDD34";
+
+        System.out.println("--------------------------------------------------------------------------------------------\n");
+        String startTest = WARN + " Executing existing test cases to maintain the same state, " +
+                "kindly do not record any new test cases till these tests get completed.";
+        System.out.println(bold(startTest));
+        System.out.println("\n--------------------------------------------------------------------------------------------");
+
+        GrpcService.Test();
+
+        System.out.println("--------------------------------------------------------------------------------------------\n");
+        String endTest = RED_CIRCLE + " Tests have been completed, You can record your new test cases now.";
+        System.out.println(bold(endTest));
+        System.out.println("\n--------------------------------------------------------------------------------------------");
     }
 
     @Override
@@ -158,8 +215,7 @@ public class KeployMiddleware implements Filter {
             kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
         }
 
-//        ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
-//        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
+
         GenericRequestWrapper requestWrapper = new GenericRequestWrapper(request);
         GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
 
@@ -197,7 +253,8 @@ public class KeployMiddleware implements Filter {
 
         if (keploy_test_id != null) {
             k.getResp().put(keploy_test_id, simulateResponse);
-//            Context.cleanup();
+            Context.cleanup();
+            InternalThreadLocalMap.remove();
             logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
 
@@ -219,18 +276,12 @@ public class KeployMiddleware implements Filter {
                 logger.error(CROSS + " failed to capture testCases", e);
             }
         }
-        // this will also flush the headers and make response committed.
-//        responseWrapper.copyBodyToResponse();
 
         responseWrapper.flushBuffer();
 
-//        OutputStream out = response.getOutputStream();
-//        out.write(resArr);
-//        out.close();
-//        // to write headers from buffer
-//        response.flushBuffer();
-
-
+        // doing this will save thread-local from memory leak.
+        Context.cleanup();
+        InternalThreadLocalMap.remove();
         logger.debug("inside middleware: outgoing response");
     }
 
@@ -281,6 +332,6 @@ public class KeployMiddleware implements Filter {
 
     @Override
     public void destroy() {
-
+        InternalThreadLocalMap.destroy();
     }
 }

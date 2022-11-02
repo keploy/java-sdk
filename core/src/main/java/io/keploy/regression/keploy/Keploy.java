@@ -39,13 +39,13 @@ public class Keploy {
 
             switch (envMode) {
                 case "record":
-                    new Mode().setMode(Mode.ModeType.MODE_RECORD);
+                    Mode.setMode(Mode.ModeType.MODE_RECORD);
                     break;
                 case "test":
-                    new Mode().setMode(Mode.ModeType.MODE_TEST);
+                    Mode.setMode(Mode.ModeType.MODE_TEST);
                     break;
                 case "off":
-                    new Mode().setMode(Mode.ModeType.MODE_OFF);
+                    Mode.setMode(Mode.ModeType.MODE_OFF);
                     break;
             }
         }
