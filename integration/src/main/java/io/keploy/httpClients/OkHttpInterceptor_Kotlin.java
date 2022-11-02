@@ -92,7 +92,6 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                         meta.put("ProtoMajor", String.valueOf(protoMajor));
                         meta.put("ProtoMinor", String.valueOf(protoMinor));
 
-                        // add comment why you are removing this.
                         mocks.remove(0);
                     }
 

@@ -3,19 +3,24 @@ package io.keploy.service;
 import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.internal.SharedResourceHolder;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
+import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.utils.AssertKTests;
+import lombok.SneakyThrows;
+import me.tongfei.progressbar.ProgressBar;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class GrpcService {
 
@@ -35,7 +41,12 @@ public class GrpcService {
     private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
     public static ManagedChannel channel;
-    private static OkHttpClient client;
+    public static OkHttpClient client;
+
+    private static final String SET_PLAIN_TEXT = "\033[0;0m";
+
+    private static final String SET_BOLD_TEXT = "\033[0;1m";
+
 
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
@@ -47,9 +58,10 @@ public class GrpcService {
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
 
         client = new OkHttpClient.Builder()
-                .connectTimeout(6, TimeUnit.MINUTES) // connect timeout
-                .writeTimeout(6, TimeUnit.MINUTES) // write timeout
-                .readTimeout(6, TimeUnit.MINUTES) // read timeout
+                .connectTimeout(1, TimeUnit.MINUTES) // connect timeout
+                .writeTimeout(1, TimeUnit.MINUTES) // write timeout
+                .readTimeout(1, TimeUnit.MINUTES) // read timeout
+                .followRedirects(false)
                 .build();
     }
 
@@ -60,7 +72,7 @@ public class GrpcService {
         try {
             url = new URL(k.getCfg().getServer().getURL());
         } catch (MalformedURLException e) {
-            logger.error("unable to make GrpcConnection", e);
+            logger.error(CROSS + " unable to make GrpcConnection", e);
             return "localhost:6789";
         }
 
@@ -102,7 +114,7 @@ public class GrpcService {
          * It's only for grouping the testcases.
          * Below code gives unordered mapping of path variables or path parameters
          * Map<String, String> pathVariables = ((Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE));
-         * Hence we are storing the actual Uri not according to the routing patter.
+         * Hence we are storing the actual Uri not according to the routing pattern.
          * */
 
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
@@ -142,9 +154,6 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
-
-        // doing this will save thread-local from memory leak.
-//        Context.cleanup();
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
@@ -233,7 +242,6 @@ public class GrpcService {
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
-        // add comment (why are you removing it)
         k.getDeps().remove(testCase.getId());
         k.getMocks().remove(testCase.getId());
         k.getMocktime().remove(testCase.getId());
@@ -290,6 +298,7 @@ public class GrpcService {
         logger.info("starting test execution id: {} total tests: {}", id, total);
 
         AtomicBoolean ok = new AtomicBoolean(true);
+        AtomicInteger failedtestCount = new AtomicInteger(0);
         CountDownLatch wg = new CountDownLatch(tcs.size());
 
         String async_test = System.getenv("ASYNC_TESTING");
@@ -298,18 +307,20 @@ public class GrpcService {
         ExecutorService service = Executors.newFixedThreadPool(nThreads);
         // call the service for each test case
 
-        for (int i = 0; i < tcs.size(); i++) {
-            Service.TestCase tc = tcs.get(i);
-            logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
+        String runTestBeforeRecord = System.getenv("RUN_TEST_BEFORE_RECORD");
+        boolean runExistingTests = true;
+        if (runTestBeforeRecord != null) {
+            runExistingTests = Boolean.parseBoolean(runTestBeforeRecord);
+        }
 
-            service.submit(() -> {
-                boolean pass = check(id, tc);
-                if (!pass) {
-                    ok.set(false);
-                }
-                logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
-                wg.countDown();
-            });
+        //running tests in record mode in order to maintain the same state of database.
+        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests) {
+            try (ProgressBar pb = new ProgressBar("KEPLOY-TESTS", total)) {
+                runTests(service, pb, ok, wg, total, tcs, id, failedtestCount);
+                pb.setExtraMessage("Tests Completed");
+            }
+        } else if (Mode.getMode().equals(Mode.ModeType.MODE_TEST)) {
+            runTests(service, null, ok, wg, total, tcs, id, failedtestCount);
         }
 
         // wait for all tests to get completed.
@@ -317,6 +328,7 @@ public class GrpcService {
             wg.await();
         } catch (InterruptedException e) {
             logger.error(CROSS + " (Test): unable to wait for tests to get completed", e);
+            AssertKTests.finalTestResult.set(false);
         }
 
         Boolean finalResult = ok.get();
@@ -325,6 +337,37 @@ public class GrpcService {
 
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(finalResult).toUpperCase());
+
+        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests && !finalResult) {
+            final String test = (failedtestCount.get() > 1) ? "tests" : "test";
+            String WARN = "\u26A0\uFE0F";
+            String inconsistentState = WARN + " " + bold(failedtestCount.get() + " " + test + " failed, Please make sure your database state is consistent.");
+            System.out.println(inconsistentState);
+        }
+    }
+
+    private static void runTests(ExecutorService service, ProgressBar pb, AtomicBoolean ok, CountDownLatch wg, int total, List<Service.TestCase> tcs, String id, AtomicInteger failedtestCount) {
+        for (int i = 0; i < tcs.size(); i++) {
+            Service.TestCase tc = tcs.get(i);
+            logger.info("testing {} of {} testcase id: [{}]", (i + 1), total, tc.getId());
+            service.submit(() -> {
+                boolean pass = check(id, tc);
+                if (!pass) {
+                    failedtestCount.getAndIncrement();
+                    ok.set(false);
+                }
+
+                logger.info("result : testcase id: [{}]  passed: {}", tc.getId(), pass);
+                wg.countDown();
+            });
+            if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD)) {
+                pb.step(); // for progress bar
+            }
+        }
+    }
+
+    private static String bold(String str) {
+        return (SET_BOLD_TEXT + str + SET_PLAIN_TEXT);
     }
 
     public static String start(String total) {
@@ -341,6 +384,7 @@ public class GrpcService {
             startResponse = blockingStub.start(startRequest);
         } catch (Exception e) {
             logger.error(CROSS + " failed to start test run, please check keploy server logs", e);
+            AssertKTests.finalTestResult.set(false);
             System.exit(1);
         }
 
@@ -356,6 +400,7 @@ public class GrpcService {
             logger.debug("response after ending test run: {}", endResponse);
         } catch (Exception e) {
             logger.error(CROSS + " failed to complete test runs, please check keploy server logs", e);
+            AssertKTests.finalTestResult.set(false);
             System.exit(1);
         }
     }
@@ -380,6 +425,7 @@ public class GrpcService {
                 tcs = blockingStub.getTCS(tcsRequest);
             } catch (Exception e) {
                 logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
+                AssertKTests.finalTestResult.set(false);
                 System.exit(1);
             }
 
@@ -416,6 +462,7 @@ public class GrpcService {
             logger.debug("response got from simulate request: {}", resp);
         } catch (Exception e) {
             logger.error(CROSS + " failed to simulate request on local server", e);
+            AssertKTests.finalTestResult.set(false);
             return false;
         }
         Service.TestReq testReq = Service.TestReq.newBuilder()
@@ -443,41 +490,6 @@ public class GrpcService {
         logger.debug("(check): test result of testrunId [{}]: {}", testrunId, res.get("pass"));
         return res.getOrDefault("pass", false);
     }
-
-//    private static Map<String, Service.StrArr> getResponseHeaderMap(Map<String, List<String>> srcMap) {
-//
-//        Map<String, Service.StrArr> map = new HashMap<>();
-//        for (String key : srcMap.keySet()) {
-//
-//            if (key == null) continue;
-//            List<String> headerValues = srcMap.get(key);
-//
-//            Service.StrArr.Builder builder = Service.StrArr.newBuilder();
-//            for (String hval : headerValues) {
-//                builder.addValue(hval);
-//            }
-//            Service.StrArr value = builder.build();
-//            key = convertFirstCapAfterEachDash(key);
-//            map.put(key, value);
-//        }
-//        return map;
-//    }
-
-//    private static String convertFirstCapAfterEachDash(String str) {
-//        StringBuilder sb = new StringBuilder();
-//        String[] sarr = str.split("-");
-//        if (sarr.length == 1) {
-//            sb.append(Character.toUpperCase(sarr[0].charAt(0))).append(sarr[0].substring(1));
-//        } else {
-//            for (int i = 0; i < sarr.length - 1; i++) {
-//                String val = sarr[i];
-//                sb.append(Character.toUpperCase(val.charAt(0))).append(val.substring(1)).append("-");
-//            }
-//            String lval = sarr[sarr.length - 1];
-//            sb.append(Character.toUpperCase(lval.charAt(0))).append(lval.substring(1));
-//        }
-//        return sb.toString();
-//    }
 
     private static Request getCustomRequest(Service.TestCase testCase) {
 
