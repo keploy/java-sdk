@@ -79,28 +79,6 @@ public class GrpcService {
         return url.getAuthority();
     }
 
-    @SneakyThrows
-    public static void cleanGrpcSharedResources() throws NoSuchFieldException, IllegalAccessException {
-
-        final Field instancesField = SharedResourceHolder.class.getDeclaredField("instances");
-        instancesField.setAccessible(true);
-
-        final Field holderField = SharedResourceHolder.class.getDeclaredField("holder");
-        holderField.setAccessible(true);
-
-        final Map<?, ?> instances = (Map<?, ?>) instancesField.get(holderField.get(null));
-        while (!instances.isEmpty()) {
-            instances.keySet()
-                    .stream()
-                    .map(entry -> (SharedResourceHolder.Resource<Object>) entry)
-                    .forEach(resource -> {
-                        final Object instance = SharedResourceHolder.get(resource);
-                        SharedResourceHolder.release(resource, instance);
-                    });
-            Thread.yield();
-        }
-    }
-
     public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType) {
         logger.debug("inside CaptureTestCases");
 
