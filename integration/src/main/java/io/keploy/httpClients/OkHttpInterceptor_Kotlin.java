@@ -3,6 +3,7 @@ package io.keploy.httpClients;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
+import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
@@ -102,7 +103,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
 
                     return response;
                 } else {
-                    logger.error(CROSS + " [OkHttpInterceptor]: mocks not present");
+                    logger.error(CROSS + " [OkHttpInterceptor]: mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
                     throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:

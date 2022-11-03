@@ -3,7 +3,6 @@ package io.keploy.service;
 import com.google.protobuf.ProtocolStringList;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.internal.SharedResourceHolder;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
@@ -12,7 +11,6 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.utils.AssertKTests;
-import lombok.SneakyThrows;
 import me.tongfei.progressbar.ProgressBar;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
@@ -287,6 +285,18 @@ public class GrpcService {
         logger.info("test starting in 5 sec");
 
         List<Service.TestCase> tcs = fetch();
+
+        final String RED_CIRCLE = "\uD83D\uDD34";
+
+        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && tcs == null) {
+            logger.info("No existing tests found at {} directory", k.getCfg().getApp().getTestPath());
+            System.out.println("--------------------------------------------------------------------------------------------\n");
+            String endTest = RED_CIRCLE + " You can record your new test cases now.";
+            System.out.println(bold(endTest));
+            System.out.println("\n--------------------------------------------------------------------------------------------");
+            return;
+        }
+
         int total = tcs.size();
         String id;
         try {
@@ -338,11 +348,17 @@ public class GrpcService {
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(finalResult).toUpperCase());
 
-        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests && !finalResult) {
-            final String test = (failedtestCount.get() > 1) ? "tests" : "test";
-            String WARN = "\u26A0\uFE0F";
-            String inconsistentState = WARN + " " + bold(failedtestCount.get() + " " + test + " failed, Please make sure your database state is consistent.");
-            System.out.println(inconsistentState);
+        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests) {
+            if (!finalResult) {
+                final String test = (failedtestCount.get() > 1) ? "tests" : "test";
+                String WARN = "\u26A0\uFE0F";
+                String inconsistentState = WARN + " " + bold(failedtestCount.get() + " " + test + " failed, Please make sure your database state is consistent.");
+                System.out.println(inconsistentState);
+            }
+            System.out.println("--------------------------------------------------------------------------------------------\n");
+            String endTest = RED_CIRCLE + " Tests have been completed, You can record your new test cases now.";
+            System.out.println(bold(endTest));
+            System.out.println("\n--------------------------------------------------------------------------------------------");
         }
     }
 
@@ -424,7 +440,15 @@ public class GrpcService {
             try {
                 tcs = blockingStub.getTCS(tcsRequest);
             } catch (Exception e) {
-                logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
+                if (e.getMessage().contains("no such file or directory")) {
+                    if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD)) {
+                        return null;
+                    } else if (Mode.getMode().equals(Mode.ModeType.MODE_TEST)) {
+                        logger.info("No existing tests found at {} directory", k.getCfg().getApp().getTestPath());
+                    }
+                } else {
+                    logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!", e);
+                }
                 AssertKTests.finalTestResult.set(false);
                 System.exit(1);
             }
