@@ -166,7 +166,6 @@ public class KeployMiddleware implements Filter {
         Thread.sleep(2000);
 
         final String WARN = "\uD83D\uDEA8";
-        final String RED_CIRCLE = "\uD83D\uDD34";
 
         System.out.println("--------------------------------------------------------------------------------------------\n");
         String startTest = WARN + " Executing existing test cases to maintain the same state, " +
@@ -175,11 +174,6 @@ public class KeployMiddleware implements Filter {
         System.out.println("\n--------------------------------------------------------------------------------------------");
 
         GrpcService.Test();
-
-        System.out.println("--------------------------------------------------------------------------------------------\n");
-        String endTest = RED_CIRCLE + " Tests have been completed, You can record your new test cases now.";
-        System.out.println(bold(endTest));
-        System.out.println("\n--------------------------------------------------------------------------------------------");
     }
 
     @Override
