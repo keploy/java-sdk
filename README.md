@@ -43,16 +43,16 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.1.1)
+      <version>N.N.N</version> (eg: 1.1.6)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.1.1)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.1.6)
 
 ## Usage
 
-- Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)
+- **Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)**
 
 - **For Spring based application**
   - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
@@ -73,28 +73,27 @@ or to *build.gradle*:
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
     - `APP_PORT`           (default APP_PORT = 8080)
+    - `DELAY`              (default DELAY = 5)(It is the estimate application startup time (in sec))
     - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:6789/api)
     - `KEPLOY_MODE`        (default KEPLOY_MODE = off)
     - `KTEST_PATH`         (default **/src/test/e2e/keploy-tests** directory of your application)
     - `KMOCK_PATH`         (default **/src/test/e2e/mocks directory** of your application)
     - `DENOISE`            (default DENOISE = false)
-      **Note:** By enabling denoise, it will filter out noisy fields for that testcases.
+      **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = true)
       **Note:** Default is true, to maintain the same database state.
-    - `DELAY`            (default DELAY = 5) 
-    **Note:** It is set according to time taken by your apllication server to get start,default value is set to 5sec.
 
 
 - **Generate testcases**
     - To generate/capture TestCases set  and run your application.
-        1. Set `KEPLOY_MODE = record`
+        1. Set `KEPLOY_MODE = record` (default "off")
         2. Run your application.
         3. Make some API calls.
 
 - **Run the testcases**
     - **Note:** Before running tests stop the sample application.
 
-        - Set `KEPLOY_MODE = test` (default "record")
+        - Set `KEPLOY_MODE = test` (default "off")
             - Using IDE
                 1. Run your application.
                 2. You can also run the application with coverage to see the test coverage.
@@ -110,7 +109,7 @@ or to *build.gradle*:
                           Mode.setTestMode();
 
                           new Thread(() -> {
-                              SamplesJavaApplication.main(new String[]{""});
+                              <Your Application Class>.main(new String[]{""});
                               countDownLatch.countDown();
                           }).start();
 
@@ -195,4 +194,3 @@ We'd love to collaborate with you to make Keploy great. To get started:
 * [Slack](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA) - Discussions with the
   community and the team.
 * [GitHub](https://github.com/keploy/java-sdk/issues) - For bug reports and feature requests.
-
