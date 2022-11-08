@@ -18,10 +18,10 @@ import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
@@ -277,6 +277,10 @@ public class GrpcService {
 
     public static void Test() {
         try {
+            String delay = System.getenv("DELAY");
+            if (delay != null) {
+                k.getCfg().getApp().setDelay(Duration.ofSeconds(Long.parseLong(delay)));
+            }
             TimeUnit.SECONDS.sleep(k.getCfg().getApp().getDelay().getSeconds());
         } catch (InterruptedException e) {
             logger.error(CROSS + " (Test): unable to sleep", e);
@@ -529,6 +533,10 @@ public class GrpcService {
         Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
 
         Request.Builder reqBuilder = setCustomRequestHeaderMap(headerMap);
+
+        if (method.equals("GET") && !body.isEmpty()) {
+            logger.warn("keploy doesn't support get request with body");
+        }
 
         switch (method) {
             case "GET":
