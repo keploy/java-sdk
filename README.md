@@ -81,6 +81,8 @@ or to *build.gradle*:
       **Note:** By enabling denoise, it will filter out noisy fields for that testcases.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = true)
       **Note:** Default is true, to maintain the same database state.
+    - `DELAY`            (default DELAY = 5) 
+    **Note:** It is set according to time taken by your apllication server to get start,default value is set to 5sec.
 
 
 - **Generate testcases**
