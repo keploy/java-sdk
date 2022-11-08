@@ -18,10 +18,10 @@ import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
@@ -277,6 +277,10 @@ public class GrpcService {
 
     public static void Test() {
         try {
+            String delay = System.getenv("DELAY");
+            if (delay != null) {
+                k.getCfg().getApp().setDelay(Duration.ofSeconds(Long.parseLong(delay)));
+            }
             TimeUnit.SECONDS.sleep(k.getCfg().getApp().getDelay().getSeconds());
         } catch (InterruptedException e) {
             logger.error(CROSS + " (Test): unable to sleep", e);
@@ -285,18 +289,6 @@ public class GrpcService {
         logger.info("test starting in 5 sec");
 
         List<Service.TestCase> tcs = fetch();
-
-        final String RED_CIRCLE = "\uD83D\uDD34";
-
-        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && tcs == null) {
-            logger.info("No existing tests found at {} directory", k.getCfg().getApp().getTestPath());
-            System.out.println("--------------------------------------------------------------------------------------------\n");
-            String endTest = RED_CIRCLE + " You can record your new test cases now.";
-            System.out.println(bold(endTest));
-            System.out.println("\n--------------------------------------------------------------------------------------------");
-            return;
-        }
-
         int total = tcs.size();
         String id;
         try {
@@ -348,17 +340,11 @@ public class GrpcService {
         logger.info("test run completed with run id [{}]", id);
         logger.info("|| passed overall: {} ||", String.valueOf(finalResult).toUpperCase());
 
-        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests) {
-            if (!finalResult) {
-                final String test = (failedtestCount.get() > 1) ? "tests" : "test";
-                String WARN = "\u26A0\uFE0F";
-                String inconsistentState = WARN + " " + bold(failedtestCount.get() + " " + test + " failed, Please make sure your database state is consistent.");
-                System.out.println(inconsistentState);
-            }
-            System.out.println("--------------------------------------------------------------------------------------------\n");
-            String endTest = RED_CIRCLE + " Tests have been completed, You can record your new test cases now.";
-            System.out.println(bold(endTest));
-            System.out.println("\n--------------------------------------------------------------------------------------------");
+        if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD) && runExistingTests && !finalResult) {
+            final String test = (failedtestCount.get() > 1) ? "tests" : "test";
+            String WARN = "\u26A0\uFE0F";
+            String inconsistentState = WARN + " " + bold(failedtestCount.get() + " " + test + " failed, Please make sure your database state is consistent.");
+            System.out.println(inconsistentState);
         }
     }
 
@@ -440,15 +426,7 @@ public class GrpcService {
             try {
                 tcs = blockingStub.getTCS(tcsRequest);
             } catch (Exception e) {
-                if (e.getMessage().contains("no such file or directory")) {
-                    if (Mode.getMode().equals(Mode.ModeType.MODE_RECORD)) {
-                        return null;
-                    } else if (Mode.getMode().equals(Mode.ModeType.MODE_TEST)) {
-                        logger.info("No existing tests found at {} directory", k.getCfg().getApp().getTestPath());
-                    }
-                } else {
-                    logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!", e);
-                }
+                logger.error(CROSS + " failed to fetch testcases from keploy cloud, please ensure keploy server is up!");
                 AssertKTests.finalTestResult.set(false);
                 System.exit(1);
             }
@@ -524,6 +502,10 @@ public class GrpcService {
         String body = testCase.getHttpReq().getBody();
         String targetUrl = "http://" + host + ":" + port + url;
         String testId = testCase.getId();
+
+        if (method.equals("GET") && !body.isEmpty()) {
+            logger.warn("keploy doesn't support GET request with body");
+        }
 
         logger.debug("simulate request's url: {}", targetUrl);
         Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
