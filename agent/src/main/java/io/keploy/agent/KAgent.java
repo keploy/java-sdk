@@ -3,24 +3,17 @@ package io.keploy.agent;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
-import net.bytebuddy.description.method.MethodDescription;
-import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
-import net.bytebuddy.dynamic.DynamicType;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
 import net.bytebuddy.implementation.MethodDelegation;
-import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.pool.TypePool;
-import org.apache.http.concurrent.FutureCallback;
-import org.apache.http.nio.protocol.HttpAsyncResponseConsumer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.lang.instrument.Instrumentation;
-import java.util.concurrent.Future;
+import java.util.Objects;
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
-import static net.bytebuddy.matcher.ElementMatchers.takesArgument;
 
 public class KAgent {
 
@@ -30,6 +23,12 @@ public class KAgent {
 
         logger.debug("inside premain method");
 
+        System.out.println(System.getenv("KEPLOY_MODE"));
+//        setMode();
+        if (Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
+            return;
+        }
+
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
         String okhttpClientBuilder = "okhttp3.OkHttpClient$Builder";
@@ -38,6 +37,7 @@ public class KAgent {
 
 
         new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
+                .with(new AgentBuilder.InitializationStrategy.SelfInjection.Eager())
 //                .with(AgentBuilder.Listener.StreamWriting.toSystemOut())
 
                 //for okhttp client interceptor upto version 2.7.5
@@ -137,6 +137,27 @@ public class KAgent {
 //                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe(internalAsyncInterceptor).resolve()));
 //
 //                })
+                // FOR KSQL INTEGRATION ....
+
+                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
+                    System.out.println("Inside RegisterDriverAdvice1 Transformer");
+                    return builder.method(named("setDriverClassName"))
+                            .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
+                    System.out.println("Inside RegisterDriverAdvice2 Transformer");
+                    return builder.method(named("determineDriverClassName"))
+                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    System.out.println("Inside HibernateProperties Transformer");
+                    return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
                 .installOn(instrumentation);
     }
 }

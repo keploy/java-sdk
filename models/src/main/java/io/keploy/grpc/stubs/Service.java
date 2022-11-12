@@ -22860,6 +22860,47 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
        * @return The created.
        */
       long getCreated();
+
+      /**
+       * <pre>
+       * for sql
+       * </pre>
+       *
+       * <code>string Type = 8;</code>
+       * @return The type.
+       */
+      java.lang.String getType();
+      /**
+       * <pre>
+       * for sql
+       * </pre>
+       *
+       * <code>string Type = 8;</code>
+       * @return The bytes for type.
+       */
+      com.google.protobuf.ByteString
+          getTypeBytes();
+
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       * @return Whether the table field is set.
+       */
+      boolean hasTable();
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       * @return The table.
+       */
+      io.keploy.grpc.stubs.Service.Table getTable();
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       */
+      io.keploy.grpc.stubs.Service.TableOrBuilder getTableOrBuilder();
+
+      /**
+       * <code>int64 Int = 10;</code>
+       * @return The int.
+       */
+      long getInt();
     }
     /**
      * Protobuf type {@code services.Mock.SpecSchema}
@@ -22876,6 +22917,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       private SpecSchema() {
         objects_ = java.util.Collections.emptyList();
         mocks_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        type_ = "";
       }
 
       @java.lang.Override
@@ -22984,6 +23026,30 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
                 created_ = input.readInt64();
                 break;
               }
+              case 66: {
+                java.lang.String s = input.readStringRequireUtf8();
+
+                type_ = s;
+                break;
+              }
+              case 74: {
+                io.keploy.grpc.stubs.Service.Table.Builder subBuilder = null;
+                if (((bitField0_ & 0x00000001) != 0)) {
+                  subBuilder = table_.toBuilder();
+                }
+                table_ = input.readMessage(io.keploy.grpc.stubs.Service.Table.parser(), extensionRegistry);
+                if (subBuilder != null) {
+                  subBuilder.mergeFrom(table_);
+                  table_ = subBuilder.buildPartial();
+                }
+                bitField0_ |= 0x00000001;
+                break;
+              }
+              case 80: {
+
+                int_ = input.readInt64();
+                break;
+              }
               default: {
                 if (!parseUnknownField(
                     input, unknownFields, extensionRegistry, tag)) {
@@ -23038,6 +23104,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
                 io.keploy.grpc.stubs.Service.Mock.SpecSchema.class, io.keploy.grpc.stubs.Service.Mock.SpecSchema.Builder.class);
       }
 
+      private int bitField0_;
       public static final int METADATA_FIELD_NUMBER = 1;
       private static final class MetadataDefaultEntryHolder {
         static final com.google.protobuf.MapEntry<
@@ -23338,6 +23405,89 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         return created_;
       }
 
+      public static final int TYPE_FIELD_NUMBER = 8;
+      private volatile java.lang.Object type_;
+      /**
+       * <pre>
+       * for sql
+       * </pre>
+       *
+       * <code>string Type = 8;</code>
+       * @return The type.
+       */
+      @java.lang.Override
+      public java.lang.String getType() {
+        java.lang.Object ref = type_;
+        if (ref instanceof java.lang.String) {
+          return (java.lang.String) ref;
+        } else {
+          com.google.protobuf.ByteString bs = 
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          type_ = s;
+          return s;
+        }
+      }
+      /**
+       * <pre>
+       * for sql
+       * </pre>
+       *
+       * <code>string Type = 8;</code>
+       * @return The bytes for type.
+       */
+      @java.lang.Override
+      public com.google.protobuf.ByteString
+          getTypeBytes() {
+        java.lang.Object ref = type_;
+        if (ref instanceof java.lang.String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          type_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+
+      public static final int TABLE_FIELD_NUMBER = 9;
+      private io.keploy.grpc.stubs.Service.Table table_;
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       * @return Whether the table field is set.
+       */
+      @java.lang.Override
+      public boolean hasTable() {
+        return ((bitField0_ & 0x00000001) != 0);
+      }
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       * @return The table.
+       */
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.Table getTable() {
+        return table_ == null ? io.keploy.grpc.stubs.Service.Table.getDefaultInstance() : table_;
+      }
+      /**
+       * <code>optional .services.Table Table = 9;</code>
+       */
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.TableOrBuilder getTableOrBuilder() {
+        return table_ == null ? io.keploy.grpc.stubs.Service.Table.getDefaultInstance() : table_;
+      }
+
+      public static final int INT_FIELD_NUMBER = 10;
+      private long int_;
+      /**
+       * <code>int64 Int = 10;</code>
+       * @return The int.
+       */
+      @java.lang.Override
+      public long getInt() {
+        return int_;
+      }
+
       private byte memoizedIsInitialized = -1;
       @java.lang.Override
       public final boolean isInitialized() {
@@ -23378,6 +23528,15 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
             6);
         if (created_ != 0L) {
           output.writeInt64(7, created_);
+        }
+        if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
+          com.google.protobuf.GeneratedMessageV3.writeString(output, 8, type_);
+        }
+        if (((bitField0_ & 0x00000001) != 0)) {
+          output.writeMessage(9, getTable());
+        }
+        if (int_ != 0L) {
+          output.writeInt64(10, int_);
         }
         unknownFields.writeTo(output);
       }
@@ -23432,6 +23591,17 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
           size += com.google.protobuf.CodedOutputStream
             .computeInt64Size(7, created_);
         }
+        if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
+          size += com.google.protobuf.GeneratedMessageV3.computeStringSize(8, type_);
+        }
+        if (((bitField0_ & 0x00000001) != 0)) {
+          size += com.google.protobuf.CodedOutputStream
+            .computeMessageSize(9, getTable());
+        }
+        if (int_ != 0L) {
+          size += com.google.protobuf.CodedOutputStream
+            .computeInt64Size(10, int_);
+        }
         size += unknownFields.getSerializedSize();
         memoizedSize = size;
         return size;
@@ -23467,6 +23637,15 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
             other.internalGetAssertions())) return false;
         if (getCreated()
             != other.getCreated()) return false;
+        if (!getType()
+            .equals(other.getType())) return false;
+        if (hasTable() != other.hasTable()) return false;
+        if (hasTable()) {
+          if (!getTable()
+              .equals(other.getTable())) return false;
+        }
+        if (getInt()
+            != other.getInt()) return false;
         if (!unknownFields.equals(other.unknownFields)) return false;
         return true;
       }
@@ -23505,6 +23684,15 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         hash = (37 * hash) + CREATED_FIELD_NUMBER;
         hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
             getCreated());
+        hash = (37 * hash) + TYPE_FIELD_NUMBER;
+        hash = (53 * hash) + getType().hashCode();
+        if (hasTable()) {
+          hash = (37 * hash) + TABLE_FIELD_NUMBER;
+          hash = (53 * hash) + getTable().hashCode();
+        }
+        hash = (37 * hash) + INT_FIELD_NUMBER;
+        hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+            getInt());
         hash = (29 * hash) + unknownFields.hashCode();
         memoizedHashCode = hash;
         return hash;
@@ -23660,6 +23848,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
           if (com.google.protobuf.GeneratedMessageV3
                   .alwaysUseFieldBuilders) {
             getObjectsFieldBuilder();
+            getTableFieldBuilder();
           }
         }
         @java.lang.Override
@@ -23689,6 +23878,16 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
           internalGetMutableAssertions().clear();
           created_ = 0L;
 
+          type_ = "";
+
+          if (tableBuilder_ == null) {
+            table_ = null;
+          } else {
+            tableBuilder_.clear();
+          }
+          bitField0_ = (bitField0_ & ~0x00000010);
+          int_ = 0L;
+
           return this;
         }
 
@@ -23716,6 +23915,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         public io.keploy.grpc.stubs.Service.Mock.SpecSchema buildPartial() {
           io.keploy.grpc.stubs.Service.Mock.SpecSchema result = new io.keploy.grpc.stubs.Service.Mock.SpecSchema(this);
           int from_bitField0_ = bitField0_;
+          int to_bitField0_ = 0;
           result.metadata_ = internalGetMetadata();
           result.metadata_.makeImmutable();
           if (objectsBuilder_ == null) {
@@ -23745,6 +23945,17 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
           result.assertions_ = internalGetAssertions();
           result.assertions_.makeImmutable();
           result.created_ = created_;
+          result.type_ = type_;
+          if (((from_bitField0_ & 0x00000010) != 0)) {
+            if (tableBuilder_ == null) {
+              result.table_ = table_;
+            } else {
+              result.table_ = tableBuilder_.build();
+            }
+            to_bitField0_ |= 0x00000001;
+          }
+          result.int_ = int_;
+          result.bitField0_ = to_bitField0_;
           onBuilt();
           return result;
         }
@@ -23841,6 +24052,16 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
               other.internalGetAssertions());
           if (other.getCreated() != 0L) {
             setCreated(other.getCreated());
+          }
+          if (!other.getType().isEmpty()) {
+            type_ = other.type_;
+            onChanged();
+          }
+          if (other.hasTable()) {
+            mergeTable(other.getTable());
+          }
+          if (other.getInt() != 0L) {
+            setInt(other.getInt());
           }
           this.mergeUnknownFields(other.unknownFields);
           onChanged();
@@ -24749,6 +24970,253 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         public Builder clearCreated() {
           
           created_ = 0L;
+          onChanged();
+          return this;
+        }
+
+        private java.lang.Object type_ = "";
+        /**
+         * <pre>
+         * for sql
+         * </pre>
+         *
+         * <code>string Type = 8;</code>
+         * @return The type.
+         */
+        public java.lang.String getType() {
+          java.lang.Object ref = type_;
+          if (!(ref instanceof java.lang.String)) {
+            com.google.protobuf.ByteString bs =
+                (com.google.protobuf.ByteString) ref;
+            java.lang.String s = bs.toStringUtf8();
+            type_ = s;
+            return s;
+          } else {
+            return (java.lang.String) ref;
+          }
+        }
+        /**
+         * <pre>
+         * for sql
+         * </pre>
+         *
+         * <code>string Type = 8;</code>
+         * @return The bytes for type.
+         */
+        public com.google.protobuf.ByteString
+            getTypeBytes() {
+          java.lang.Object ref = type_;
+          if (ref instanceof String) {
+            com.google.protobuf.ByteString b = 
+                com.google.protobuf.ByteString.copyFromUtf8(
+                    (java.lang.String) ref);
+            type_ = b;
+            return b;
+          } else {
+            return (com.google.protobuf.ByteString) ref;
+          }
+        }
+        /**
+         * <pre>
+         * for sql
+         * </pre>
+         *
+         * <code>string Type = 8;</code>
+         * @param value The type to set.
+         * @return This builder for chaining.
+         */
+        public Builder setType(
+            java.lang.String value) {
+          if (value == null) {
+    throw new NullPointerException();
+  }
+  
+          type_ = value;
+          onChanged();
+          return this;
+        }
+        /**
+         * <pre>
+         * for sql
+         * </pre>
+         *
+         * <code>string Type = 8;</code>
+         * @return This builder for chaining.
+         */
+        public Builder clearType() {
+          
+          type_ = getDefaultInstance().getType();
+          onChanged();
+          return this;
+        }
+        /**
+         * <pre>
+         * for sql
+         * </pre>
+         *
+         * <code>string Type = 8;</code>
+         * @param value The bytes for type to set.
+         * @return This builder for chaining.
+         */
+        public Builder setTypeBytes(
+            com.google.protobuf.ByteString value) {
+          if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+          
+          type_ = value;
+          onChanged();
+          return this;
+        }
+
+        private io.keploy.grpc.stubs.Service.Table table_;
+        private com.google.protobuf.SingleFieldBuilderV3<
+            io.keploy.grpc.stubs.Service.Table, io.keploy.grpc.stubs.Service.Table.Builder, io.keploy.grpc.stubs.Service.TableOrBuilder> tableBuilder_;
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         * @return Whether the table field is set.
+         */
+        public boolean hasTable() {
+          return ((bitField0_ & 0x00000010) != 0);
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         * @return The table.
+         */
+        public io.keploy.grpc.stubs.Service.Table getTable() {
+          if (tableBuilder_ == null) {
+            return table_ == null ? io.keploy.grpc.stubs.Service.Table.getDefaultInstance() : table_;
+          } else {
+            return tableBuilder_.getMessage();
+          }
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public Builder setTable(io.keploy.grpc.stubs.Service.Table value) {
+          if (tableBuilder_ == null) {
+            if (value == null) {
+              throw new NullPointerException();
+            }
+            table_ = value;
+            onChanged();
+          } else {
+            tableBuilder_.setMessage(value);
+          }
+          bitField0_ |= 0x00000010;
+          return this;
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public Builder setTable(
+            io.keploy.grpc.stubs.Service.Table.Builder builderForValue) {
+          if (tableBuilder_ == null) {
+            table_ = builderForValue.build();
+            onChanged();
+          } else {
+            tableBuilder_.setMessage(builderForValue.build());
+          }
+          bitField0_ |= 0x00000010;
+          return this;
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public Builder mergeTable(io.keploy.grpc.stubs.Service.Table value) {
+          if (tableBuilder_ == null) {
+            if (((bitField0_ & 0x00000010) != 0) &&
+                table_ != null &&
+                table_ != io.keploy.grpc.stubs.Service.Table.getDefaultInstance()) {
+              table_ =
+                io.keploy.grpc.stubs.Service.Table.newBuilder(table_).mergeFrom(value).buildPartial();
+            } else {
+              table_ = value;
+            }
+            onChanged();
+          } else {
+            tableBuilder_.mergeFrom(value);
+          }
+          bitField0_ |= 0x00000010;
+          return this;
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public Builder clearTable() {
+          if (tableBuilder_ == null) {
+            table_ = null;
+            onChanged();
+          } else {
+            tableBuilder_.clear();
+          }
+          bitField0_ = (bitField0_ & ~0x00000010);
+          return this;
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public io.keploy.grpc.stubs.Service.Table.Builder getTableBuilder() {
+          bitField0_ |= 0x00000010;
+          onChanged();
+          return getTableFieldBuilder().getBuilder();
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        public io.keploy.grpc.stubs.Service.TableOrBuilder getTableOrBuilder() {
+          if (tableBuilder_ != null) {
+            return tableBuilder_.getMessageOrBuilder();
+          } else {
+            return table_ == null ?
+                io.keploy.grpc.stubs.Service.Table.getDefaultInstance() : table_;
+          }
+        }
+        /**
+         * <code>optional .services.Table Table = 9;</code>
+         */
+        private com.google.protobuf.SingleFieldBuilderV3<
+            io.keploy.grpc.stubs.Service.Table, io.keploy.grpc.stubs.Service.Table.Builder, io.keploy.grpc.stubs.Service.TableOrBuilder> 
+            getTableFieldBuilder() {
+          if (tableBuilder_ == null) {
+            tableBuilder_ = new com.google.protobuf.SingleFieldBuilderV3<
+                io.keploy.grpc.stubs.Service.Table, io.keploy.grpc.stubs.Service.Table.Builder, io.keploy.grpc.stubs.Service.TableOrBuilder>(
+                    getTable(),
+                    getParentForChildren(),
+                    isClean());
+            table_ = null;
+          }
+          return tableBuilder_;
+        }
+
+        private long int_ ;
+        /**
+         * <code>int64 Int = 10;</code>
+         * @return The int.
+         */
+        @java.lang.Override
+        public long getInt() {
+          return int_;
+        }
+        /**
+         * <code>int64 Int = 10;</code>
+         * @param value The int to set.
+         * @return This builder for chaining.
+         */
+        public Builder setInt(long value) {
+          
+          int_ = value;
+          onChanged();
+          return this;
+        }
+        /**
+         * <code>int64 Int = 10;</code>
+         * @return This builder for chaining.
+         */
+        public Builder clearInt() {
+          
+          int_ = 0L;
           onChanged();
           return this;
         }
@@ -25705,6 +26173,1900 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
 
     @java.lang.Override
     public io.keploy.grpc.stubs.Service.Mock getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface TableOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:services.Table)
+      com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    java.util.List<io.keploy.grpc.stubs.Service.SqlCol> 
+        getColsList();
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    io.keploy.grpc.stubs.Service.SqlCol getCols(int index);
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    int getColsCount();
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    java.util.List<? extends io.keploy.grpc.stubs.Service.SqlColOrBuilder> 
+        getColsOrBuilderList();
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    io.keploy.grpc.stubs.Service.SqlColOrBuilder getColsOrBuilder(
+        int index);
+
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @return A list containing the rows.
+     */
+    java.util.List<java.lang.String>
+        getRowsList();
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @return The count of rows.
+     */
+    int getRowsCount();
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @param index The index of the element to return.
+     * @return The rows at the given index.
+     */
+    java.lang.String getRows(int index);
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the rows at the given index.
+     */
+    com.google.protobuf.ByteString
+        getRowsBytes(int index);
+  }
+  /**
+   * Protobuf type {@code services.Table}
+   */
+  public static final class Table extends
+      com.google.protobuf.GeneratedMessageV3 implements
+      // @@protoc_insertion_point(message_implements:services.Table)
+      TableOrBuilder {
+  private static final long serialVersionUID = 0L;
+    // Use Table.newBuilder() to construct.
+    private Table(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
+      super(builder);
+    }
+    private Table() {
+      cols_ = java.util.Collections.emptyList();
+      rows_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+    }
+
+    @java.lang.Override
+    @SuppressWarnings({"unused"})
+    protected java.lang.Object newInstance(
+        UnusedPrivateParameter unused) {
+      return new Table();
+    }
+
+    @java.lang.Override
+    public final com.google.protobuf.UnknownFieldSet
+    getUnknownFields() {
+      return this.unknownFields;
+    }
+    private Table(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      this();
+      if (extensionRegistry == null) {
+        throw new java.lang.NullPointerException();
+      }
+      int mutable_bitField0_ = 0;
+      com.google.protobuf.UnknownFieldSet.Builder unknownFields =
+          com.google.protobuf.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            case 10: {
+              if (!((mutable_bitField0_ & 0x00000001) != 0)) {
+                cols_ = new java.util.ArrayList<io.keploy.grpc.stubs.Service.SqlCol>();
+                mutable_bitField0_ |= 0x00000001;
+              }
+              cols_.add(
+                  input.readMessage(io.keploy.grpc.stubs.Service.SqlCol.parser(), extensionRegistry));
+              break;
+            }
+            case 18: {
+              java.lang.String s = input.readStringRequireUtf8();
+              if (!((mutable_bitField0_ & 0x00000002) != 0)) {
+                rows_ = new com.google.protobuf.LazyStringArrayList();
+                mutable_bitField0_ |= 0x00000002;
+              }
+              rows_.add(s);
+              break;
+            }
+            default: {
+              if (!parseUnknownField(
+                  input, unknownFields, extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+          }
+        }
+      } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new com.google.protobuf.InvalidProtocolBufferException(
+            e).setUnfinishedMessage(this);
+      } finally {
+        if (((mutable_bitField0_ & 0x00000001) != 0)) {
+          cols_ = java.util.Collections.unmodifiableList(cols_);
+        }
+        if (((mutable_bitField0_ & 0x00000002) != 0)) {
+          rows_ = rows_.getUnmodifiableView();
+        }
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return io.keploy.grpc.stubs.Service.internal_static_services_Table_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return io.keploy.grpc.stubs.Service.internal_static_services_Table_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              io.keploy.grpc.stubs.Service.Table.class, io.keploy.grpc.stubs.Service.Table.Builder.class);
+    }
+
+    public static final int COLS_FIELD_NUMBER = 1;
+    private java.util.List<io.keploy.grpc.stubs.Service.SqlCol> cols_;
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    @java.lang.Override
+    public java.util.List<io.keploy.grpc.stubs.Service.SqlCol> getColsList() {
+      return cols_;
+    }
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    @java.lang.Override
+    public java.util.List<? extends io.keploy.grpc.stubs.Service.SqlColOrBuilder> 
+        getColsOrBuilderList() {
+      return cols_;
+    }
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    @java.lang.Override
+    public int getColsCount() {
+      return cols_.size();
+    }
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.SqlCol getCols(int index) {
+      return cols_.get(index);
+    }
+    /**
+     * <code>repeated .services.SqlCol Cols = 1;</code>
+     */
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.SqlColOrBuilder getColsOrBuilder(
+        int index) {
+      return cols_.get(index);
+    }
+
+    public static final int ROWS_FIELD_NUMBER = 2;
+    private com.google.protobuf.LazyStringList rows_;
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @return A list containing the rows.
+     */
+    public com.google.protobuf.ProtocolStringList
+        getRowsList() {
+      return rows_;
+    }
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @return The count of rows.
+     */
+    public int getRowsCount() {
+      return rows_.size();
+    }
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @param index The index of the element to return.
+     * @return The rows at the given index.
+     */
+    public java.lang.String getRows(int index) {
+      return rows_.get(index);
+    }
+    /**
+     * <code>repeated string Rows = 2;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the rows at the given index.
+     */
+    public com.google.protobuf.ByteString
+        getRowsBytes(int index) {
+      return rows_.getByteString(index);
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      for (int i = 0; i < cols_.size(); i++) {
+        output.writeMessage(1, cols_.get(i));
+      }
+      for (int i = 0; i < rows_.size(); i++) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 2, rows_.getRaw(i));
+      }
+      unknownFields.writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      for (int i = 0; i < cols_.size(); i++) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeMessageSize(1, cols_.get(i));
+      }
+      {
+        int dataSize = 0;
+        for (int i = 0; i < rows_.size(); i++) {
+          dataSize += computeStringSizeNoTag(rows_.getRaw(i));
+        }
+        size += dataSize;
+        size += 1 * getRowsList().size();
+      }
+      size += unknownFields.getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof io.keploy.grpc.stubs.Service.Table)) {
+        return super.equals(obj);
+      }
+      io.keploy.grpc.stubs.Service.Table other = (io.keploy.grpc.stubs.Service.Table) obj;
+
+      if (!getColsList()
+          .equals(other.getColsList())) return false;
+      if (!getRowsList()
+          .equals(other.getRowsList())) return false;
+      if (!unknownFields.equals(other.unknownFields)) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      if (getColsCount() > 0) {
+        hash = (37 * hash) + COLS_FIELD_NUMBER;
+        hash = (53 * hash) + getColsList().hashCode();
+      }
+      if (getRowsCount() > 0) {
+        hash = (37 * hash) + ROWS_FIELD_NUMBER;
+        hash = (53 * hash) + getRowsList().hashCode();
+      }
+      hash = (29 * hash) + unknownFields.hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.Table parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(io.keploy.grpc.stubs.Service.Table prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code services.Table}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:services.Table)
+        io.keploy.grpc.stubs.Service.TableOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_Table_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_Table_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                io.keploy.grpc.stubs.Service.Table.class, io.keploy.grpc.stubs.Service.Table.Builder.class);
+      }
+
+      // Construct using io.keploy.grpc.stubs.Service.Table.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (com.google.protobuf.GeneratedMessageV3
+                .alwaysUseFieldBuilders) {
+          getColsFieldBuilder();
+        }
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        if (colsBuilder_ == null) {
+          cols_ = java.util.Collections.emptyList();
+          bitField0_ = (bitField0_ & ~0x00000001);
+        } else {
+          colsBuilder_.clear();
+        }
+        rows_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000002);
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_Table_descriptor;
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.Table getDefaultInstanceForType() {
+        return io.keploy.grpc.stubs.Service.Table.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.Table build() {
+        io.keploy.grpc.stubs.Service.Table result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.Table buildPartial() {
+        io.keploy.grpc.stubs.Service.Table result = new io.keploy.grpc.stubs.Service.Table(this);
+        int from_bitField0_ = bitField0_;
+        if (colsBuilder_ == null) {
+          if (((bitField0_ & 0x00000001) != 0)) {
+            cols_ = java.util.Collections.unmodifiableList(cols_);
+            bitField0_ = (bitField0_ & ~0x00000001);
+          }
+          result.cols_ = cols_;
+        } else {
+          result.cols_ = colsBuilder_.build();
+        }
+        if (((bitField0_ & 0x00000002) != 0)) {
+          rows_ = rows_.getUnmodifiableView();
+          bitField0_ = (bitField0_ & ~0x00000002);
+        }
+        result.rows_ = rows_;
+        onBuilt();
+        return result;
+      }
+
+      @java.lang.Override
+      public Builder clone() {
+        return super.clone();
+      }
+      @java.lang.Override
+      public Builder setField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.setField(field, value);
+      }
+      @java.lang.Override
+      public Builder clearField(
+          com.google.protobuf.Descriptors.FieldDescriptor field) {
+        return super.clearField(field);
+      }
+      @java.lang.Override
+      public Builder clearOneof(
+          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+        return super.clearOneof(oneof);
+      }
+      @java.lang.Override
+      public Builder setRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          int index, java.lang.Object value) {
+        return super.setRepeatedField(field, index, value);
+      }
+      @java.lang.Override
+      public Builder addRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.addRepeatedField(field, value);
+      }
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof io.keploy.grpc.stubs.Service.Table) {
+          return mergeFrom((io.keploy.grpc.stubs.Service.Table)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(io.keploy.grpc.stubs.Service.Table other) {
+        if (other == io.keploy.grpc.stubs.Service.Table.getDefaultInstance()) return this;
+        if (colsBuilder_ == null) {
+          if (!other.cols_.isEmpty()) {
+            if (cols_.isEmpty()) {
+              cols_ = other.cols_;
+              bitField0_ = (bitField0_ & ~0x00000001);
+            } else {
+              ensureColsIsMutable();
+              cols_.addAll(other.cols_);
+            }
+            onChanged();
+          }
+        } else {
+          if (!other.cols_.isEmpty()) {
+            if (colsBuilder_.isEmpty()) {
+              colsBuilder_.dispose();
+              colsBuilder_ = null;
+              cols_ = other.cols_;
+              bitField0_ = (bitField0_ & ~0x00000001);
+              colsBuilder_ = 
+                com.google.protobuf.GeneratedMessageV3.alwaysUseFieldBuilders ?
+                   getColsFieldBuilder() : null;
+            } else {
+              colsBuilder_.addAllMessages(other.cols_);
+            }
+          }
+        }
+        if (!other.rows_.isEmpty()) {
+          if (rows_.isEmpty()) {
+            rows_ = other.rows_;
+            bitField0_ = (bitField0_ & ~0x00000002);
+          } else {
+            ensureRowsIsMutable();
+            rows_.addAll(other.rows_);
+          }
+          onChanged();
+        }
+        this.mergeUnknownFields(other.unknownFields);
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        io.keploy.grpc.stubs.Service.Table parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          parsedMessage = (io.keploy.grpc.stubs.Service.Table) e.getUnfinishedMessage();
+          throw e.unwrapIOException();
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+      private int bitField0_;
+
+      private java.util.List<io.keploy.grpc.stubs.Service.SqlCol> cols_ =
+        java.util.Collections.emptyList();
+      private void ensureColsIsMutable() {
+        if (!((bitField0_ & 0x00000001) != 0)) {
+          cols_ = new java.util.ArrayList<io.keploy.grpc.stubs.Service.SqlCol>(cols_);
+          bitField0_ |= 0x00000001;
+         }
+      }
+
+      private com.google.protobuf.RepeatedFieldBuilderV3<
+          io.keploy.grpc.stubs.Service.SqlCol, io.keploy.grpc.stubs.Service.SqlCol.Builder, io.keploy.grpc.stubs.Service.SqlColOrBuilder> colsBuilder_;
+
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public java.util.List<io.keploy.grpc.stubs.Service.SqlCol> getColsList() {
+        if (colsBuilder_ == null) {
+          return java.util.Collections.unmodifiableList(cols_);
+        } else {
+          return colsBuilder_.getMessageList();
+        }
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public int getColsCount() {
+        if (colsBuilder_ == null) {
+          return cols_.size();
+        } else {
+          return colsBuilder_.getCount();
+        }
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public io.keploy.grpc.stubs.Service.SqlCol getCols(int index) {
+        if (colsBuilder_ == null) {
+          return cols_.get(index);
+        } else {
+          return colsBuilder_.getMessage(index);
+        }
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder setCols(
+          int index, io.keploy.grpc.stubs.Service.SqlCol value) {
+        if (colsBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureColsIsMutable();
+          cols_.set(index, value);
+          onChanged();
+        } else {
+          colsBuilder_.setMessage(index, value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder setCols(
+          int index, io.keploy.grpc.stubs.Service.SqlCol.Builder builderForValue) {
+        if (colsBuilder_ == null) {
+          ensureColsIsMutable();
+          cols_.set(index, builderForValue.build());
+          onChanged();
+        } else {
+          colsBuilder_.setMessage(index, builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder addCols(io.keploy.grpc.stubs.Service.SqlCol value) {
+        if (colsBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureColsIsMutable();
+          cols_.add(value);
+          onChanged();
+        } else {
+          colsBuilder_.addMessage(value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder addCols(
+          int index, io.keploy.grpc.stubs.Service.SqlCol value) {
+        if (colsBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          ensureColsIsMutable();
+          cols_.add(index, value);
+          onChanged();
+        } else {
+          colsBuilder_.addMessage(index, value);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder addCols(
+          io.keploy.grpc.stubs.Service.SqlCol.Builder builderForValue) {
+        if (colsBuilder_ == null) {
+          ensureColsIsMutable();
+          cols_.add(builderForValue.build());
+          onChanged();
+        } else {
+          colsBuilder_.addMessage(builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder addCols(
+          int index, io.keploy.grpc.stubs.Service.SqlCol.Builder builderForValue) {
+        if (colsBuilder_ == null) {
+          ensureColsIsMutable();
+          cols_.add(index, builderForValue.build());
+          onChanged();
+        } else {
+          colsBuilder_.addMessage(index, builderForValue.build());
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder addAllCols(
+          java.lang.Iterable<? extends io.keploy.grpc.stubs.Service.SqlCol> values) {
+        if (colsBuilder_ == null) {
+          ensureColsIsMutable();
+          com.google.protobuf.AbstractMessageLite.Builder.addAll(
+              values, cols_);
+          onChanged();
+        } else {
+          colsBuilder_.addAllMessages(values);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder clearCols() {
+        if (colsBuilder_ == null) {
+          cols_ = java.util.Collections.emptyList();
+          bitField0_ = (bitField0_ & ~0x00000001);
+          onChanged();
+        } else {
+          colsBuilder_.clear();
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public Builder removeCols(int index) {
+        if (colsBuilder_ == null) {
+          ensureColsIsMutable();
+          cols_.remove(index);
+          onChanged();
+        } else {
+          colsBuilder_.remove(index);
+        }
+        return this;
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public io.keploy.grpc.stubs.Service.SqlCol.Builder getColsBuilder(
+          int index) {
+        return getColsFieldBuilder().getBuilder(index);
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public io.keploy.grpc.stubs.Service.SqlColOrBuilder getColsOrBuilder(
+          int index) {
+        if (colsBuilder_ == null) {
+          return cols_.get(index);  } else {
+          return colsBuilder_.getMessageOrBuilder(index);
+        }
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public java.util.List<? extends io.keploy.grpc.stubs.Service.SqlColOrBuilder> 
+           getColsOrBuilderList() {
+        if (colsBuilder_ != null) {
+          return colsBuilder_.getMessageOrBuilderList();
+        } else {
+          return java.util.Collections.unmodifiableList(cols_);
+        }
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public io.keploy.grpc.stubs.Service.SqlCol.Builder addColsBuilder() {
+        return getColsFieldBuilder().addBuilder(
+            io.keploy.grpc.stubs.Service.SqlCol.getDefaultInstance());
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public io.keploy.grpc.stubs.Service.SqlCol.Builder addColsBuilder(
+          int index) {
+        return getColsFieldBuilder().addBuilder(
+            index, io.keploy.grpc.stubs.Service.SqlCol.getDefaultInstance());
+      }
+      /**
+       * <code>repeated .services.SqlCol Cols = 1;</code>
+       */
+      public java.util.List<io.keploy.grpc.stubs.Service.SqlCol.Builder> 
+           getColsBuilderList() {
+        return getColsFieldBuilder().getBuilderList();
+      }
+      private com.google.protobuf.RepeatedFieldBuilderV3<
+          io.keploy.grpc.stubs.Service.SqlCol, io.keploy.grpc.stubs.Service.SqlCol.Builder, io.keploy.grpc.stubs.Service.SqlColOrBuilder> 
+          getColsFieldBuilder() {
+        if (colsBuilder_ == null) {
+          colsBuilder_ = new com.google.protobuf.RepeatedFieldBuilderV3<
+              io.keploy.grpc.stubs.Service.SqlCol, io.keploy.grpc.stubs.Service.SqlCol.Builder, io.keploy.grpc.stubs.Service.SqlColOrBuilder>(
+                  cols_,
+                  ((bitField0_ & 0x00000001) != 0),
+                  getParentForChildren(),
+                  isClean());
+          cols_ = null;
+        }
+        return colsBuilder_;
+      }
+
+      private com.google.protobuf.LazyStringList rows_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+      private void ensureRowsIsMutable() {
+        if (!((bitField0_ & 0x00000002) != 0)) {
+          rows_ = new com.google.protobuf.LazyStringArrayList(rows_);
+          bitField0_ |= 0x00000002;
+         }
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @return A list containing the rows.
+       */
+      public com.google.protobuf.ProtocolStringList
+          getRowsList() {
+        return rows_.getUnmodifiableView();
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @return The count of rows.
+       */
+      public int getRowsCount() {
+        return rows_.size();
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param index The index of the element to return.
+       * @return The rows at the given index.
+       */
+      public java.lang.String getRows(int index) {
+        return rows_.get(index);
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the rows at the given index.
+       */
+      public com.google.protobuf.ByteString
+          getRowsBytes(int index) {
+        return rows_.getByteString(index);
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param index The index to set the value at.
+       * @param value The rows to set.
+       * @return This builder for chaining.
+       */
+      public Builder setRows(
+          int index, java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  ensureRowsIsMutable();
+        rows_.set(index, value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param value The rows to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRows(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  ensureRowsIsMutable();
+        rows_.add(value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param values The rows to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllRows(
+          java.lang.Iterable<java.lang.String> values) {
+        ensureRowsIsMutable();
+        com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, rows_);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearRows() {
+        rows_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000002);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Rows = 2;</code>
+       * @param value The bytes of the rows to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRowsBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+        ensureRowsIsMutable();
+        rows_.add(value);
+        onChanged();
+        return this;
+      }
+      @java.lang.Override
+      public final Builder setUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.setUnknownFields(unknownFields);
+      }
+
+      @java.lang.Override
+      public final Builder mergeUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.mergeUnknownFields(unknownFields);
+      }
+
+
+      // @@protoc_insertion_point(builder_scope:services.Table)
+    }
+
+    // @@protoc_insertion_point(class_scope:services.Table)
+    private static final io.keploy.grpc.stubs.Service.Table DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new io.keploy.grpc.stubs.Service.Table();
+    }
+
+    public static io.keploy.grpc.stubs.Service.Table getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<Table>
+        PARSER = new com.google.protobuf.AbstractParser<Table>() {
+      @java.lang.Override
+      public Table parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return new Table(input, extensionRegistry);
+      }
+    };
+
+    public static com.google.protobuf.Parser<Table> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<Table> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.Table getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface SqlColOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:services.SqlCol)
+      com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>string Name = 1;</code>
+     * @return The name.
+     */
+    java.lang.String getName();
+    /**
+     * <code>string Name = 1;</code>
+     * @return The bytes for name.
+     */
+    com.google.protobuf.ByteString
+        getNameBytes();
+
+    /**
+     * <code>string Type = 2;</code>
+     * @return The type.
+     */
+    java.lang.String getType();
+    /**
+     * <code>string Type = 2;</code>
+     * @return The bytes for type.
+     */
+    com.google.protobuf.ByteString
+        getTypeBytes();
+
+    /**
+     * <pre>
+     *optional fields
+     * </pre>
+     *
+     * <code>int64 Precision = 3;</code>
+     * @return The precision.
+     */
+    long getPrecision();
+
+    /**
+     * <code>int64 Scale = 4;</code>
+     * @return The scale.
+     */
+    long getScale();
+  }
+  /**
+   * Protobuf type {@code services.SqlCol}
+   */
+  public static final class SqlCol extends
+      com.google.protobuf.GeneratedMessageV3 implements
+      // @@protoc_insertion_point(message_implements:services.SqlCol)
+      SqlColOrBuilder {
+  private static final long serialVersionUID = 0L;
+    // Use SqlCol.newBuilder() to construct.
+    private SqlCol(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
+      super(builder);
+    }
+    private SqlCol() {
+      name_ = "";
+      type_ = "";
+    }
+
+    @java.lang.Override
+    @SuppressWarnings({"unused"})
+    protected java.lang.Object newInstance(
+        UnusedPrivateParameter unused) {
+      return new SqlCol();
+    }
+
+    @java.lang.Override
+    public final com.google.protobuf.UnknownFieldSet
+    getUnknownFields() {
+      return this.unknownFields;
+    }
+    private SqlCol(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      this();
+      if (extensionRegistry == null) {
+        throw new java.lang.NullPointerException();
+      }
+      com.google.protobuf.UnknownFieldSet.Builder unknownFields =
+          com.google.protobuf.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            case 10: {
+              java.lang.String s = input.readStringRequireUtf8();
+
+              name_ = s;
+              break;
+            }
+            case 18: {
+              java.lang.String s = input.readStringRequireUtf8();
+
+              type_ = s;
+              break;
+            }
+            case 24: {
+
+              precision_ = input.readInt64();
+              break;
+            }
+            case 32: {
+
+              scale_ = input.readInt64();
+              break;
+            }
+            default: {
+              if (!parseUnknownField(
+                  input, unknownFields, extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+          }
+        }
+      } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (com.google.protobuf.UninitializedMessageException e) {
+        throw e.asInvalidProtocolBufferException().setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new com.google.protobuf.InvalidProtocolBufferException(
+            e).setUnfinishedMessage(this);
+      } finally {
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return io.keploy.grpc.stubs.Service.internal_static_services_SqlCol_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return io.keploy.grpc.stubs.Service.internal_static_services_SqlCol_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              io.keploy.grpc.stubs.Service.SqlCol.class, io.keploy.grpc.stubs.Service.SqlCol.Builder.class);
+    }
+
+    public static final int NAME_FIELD_NUMBER = 1;
+    private volatile java.lang.Object name_;
+    /**
+     * <code>string Name = 1;</code>
+     * @return The name.
+     */
+    @java.lang.Override
+    public java.lang.String getName() {
+      java.lang.Object ref = name_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        name_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string Name = 1;</code>
+     * @return The bytes for name.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getNameBytes() {
+      java.lang.Object ref = name_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        name_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int TYPE_FIELD_NUMBER = 2;
+    private volatile java.lang.Object type_;
+    /**
+     * <code>string Type = 2;</code>
+     * @return The type.
+     */
+    @java.lang.Override
+    public java.lang.String getType() {
+      java.lang.Object ref = type_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        type_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string Type = 2;</code>
+     * @return The bytes for type.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getTypeBytes() {
+      java.lang.Object ref = type_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        type_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int PRECISION_FIELD_NUMBER = 3;
+    private long precision_;
+    /**
+     * <pre>
+     *optional fields
+     * </pre>
+     *
+     * <code>int64 Precision = 3;</code>
+     * @return The precision.
+     */
+    @java.lang.Override
+    public long getPrecision() {
+      return precision_;
+    }
+
+    public static final int SCALE_FIELD_NUMBER = 4;
+    private long scale_;
+    /**
+     * <code>int64 Scale = 4;</code>
+     * @return The scale.
+     */
+    @java.lang.Override
+    public long getScale() {
+      return scale_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(name_)) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 1, name_);
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 2, type_);
+      }
+      if (precision_ != 0L) {
+        output.writeInt64(3, precision_);
+      }
+      if (scale_ != 0L) {
+        output.writeInt64(4, scale_);
+      }
+      unknownFields.writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(name_)) {
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(1, name_);
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, type_);
+      }
+      if (precision_ != 0L) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeInt64Size(3, precision_);
+      }
+      if (scale_ != 0L) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeInt64Size(4, scale_);
+      }
+      size += unknownFields.getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof io.keploy.grpc.stubs.Service.SqlCol)) {
+        return super.equals(obj);
+      }
+      io.keploy.grpc.stubs.Service.SqlCol other = (io.keploy.grpc.stubs.Service.SqlCol) obj;
+
+      if (!getName()
+          .equals(other.getName())) return false;
+      if (!getType()
+          .equals(other.getType())) return false;
+      if (getPrecision()
+          != other.getPrecision()) return false;
+      if (getScale()
+          != other.getScale()) return false;
+      if (!unknownFields.equals(other.unknownFields)) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      hash = (37 * hash) + NAME_FIELD_NUMBER;
+      hash = (53 * hash) + getName().hashCode();
+      hash = (37 * hash) + TYPE_FIELD_NUMBER;
+      hash = (53 * hash) + getType().hashCode();
+      hash = (37 * hash) + PRECISION_FIELD_NUMBER;
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+          getPrecision());
+      hash = (37 * hash) + SCALE_FIELD_NUMBER;
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+          getScale());
+      hash = (29 * hash) + unknownFields.hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static io.keploy.grpc.stubs.Service.SqlCol parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(io.keploy.grpc.stubs.Service.SqlCol prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code services.SqlCol}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:services.SqlCol)
+        io.keploy.grpc.stubs.Service.SqlColOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_SqlCol_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_SqlCol_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                io.keploy.grpc.stubs.Service.SqlCol.class, io.keploy.grpc.stubs.Service.SqlCol.Builder.class);
+      }
+
+      // Construct using io.keploy.grpc.stubs.Service.SqlCol.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (com.google.protobuf.GeneratedMessageV3
+                .alwaysUseFieldBuilders) {
+        }
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        name_ = "";
+
+        type_ = "";
+
+        precision_ = 0L;
+
+        scale_ = 0L;
+
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return io.keploy.grpc.stubs.Service.internal_static_services_SqlCol_descriptor;
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.SqlCol getDefaultInstanceForType() {
+        return io.keploy.grpc.stubs.Service.SqlCol.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.SqlCol build() {
+        io.keploy.grpc.stubs.Service.SqlCol result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public io.keploy.grpc.stubs.Service.SqlCol buildPartial() {
+        io.keploy.grpc.stubs.Service.SqlCol result = new io.keploy.grpc.stubs.Service.SqlCol(this);
+        result.name_ = name_;
+        result.type_ = type_;
+        result.precision_ = precision_;
+        result.scale_ = scale_;
+        onBuilt();
+        return result;
+      }
+
+      @java.lang.Override
+      public Builder clone() {
+        return super.clone();
+      }
+      @java.lang.Override
+      public Builder setField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.setField(field, value);
+      }
+      @java.lang.Override
+      public Builder clearField(
+          com.google.protobuf.Descriptors.FieldDescriptor field) {
+        return super.clearField(field);
+      }
+      @java.lang.Override
+      public Builder clearOneof(
+          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+        return super.clearOneof(oneof);
+      }
+      @java.lang.Override
+      public Builder setRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          int index, java.lang.Object value) {
+        return super.setRepeatedField(field, index, value);
+      }
+      @java.lang.Override
+      public Builder addRepeatedField(
+          com.google.protobuf.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.addRepeatedField(field, value);
+      }
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof io.keploy.grpc.stubs.Service.SqlCol) {
+          return mergeFrom((io.keploy.grpc.stubs.Service.SqlCol)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(io.keploy.grpc.stubs.Service.SqlCol other) {
+        if (other == io.keploy.grpc.stubs.Service.SqlCol.getDefaultInstance()) return this;
+        if (!other.getName().isEmpty()) {
+          name_ = other.name_;
+          onChanged();
+        }
+        if (!other.getType().isEmpty()) {
+          type_ = other.type_;
+          onChanged();
+        }
+        if (other.getPrecision() != 0L) {
+          setPrecision(other.getPrecision());
+        }
+        if (other.getScale() != 0L) {
+          setScale(other.getScale());
+        }
+        this.mergeUnknownFields(other.unknownFields);
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        io.keploy.grpc.stubs.Service.SqlCol parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          parsedMessage = (io.keploy.grpc.stubs.Service.SqlCol) e.getUnfinishedMessage();
+          throw e.unwrapIOException();
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+
+      private java.lang.Object name_ = "";
+      /**
+       * <code>string Name = 1;</code>
+       * @return The name.
+       */
+      public java.lang.String getName() {
+        java.lang.Object ref = name_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          name_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string Name = 1;</code>
+       * @return The bytes for name.
+       */
+      public com.google.protobuf.ByteString
+          getNameBytes() {
+        java.lang.Object ref = name_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          name_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string Name = 1;</code>
+       * @param value The name to set.
+       * @return This builder for chaining.
+       */
+      public Builder setName(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  
+        name_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Name = 1;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearName() {
+        
+        name_ = getDefaultInstance().getName();
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Name = 1;</code>
+       * @param value The bytes for name to set.
+       * @return This builder for chaining.
+       */
+      public Builder setNameBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+        
+        name_ = value;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object type_ = "";
+      /**
+       * <code>string Type = 2;</code>
+       * @return The type.
+       */
+      public java.lang.String getType() {
+        java.lang.Object ref = type_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          type_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string Type = 2;</code>
+       * @return The bytes for type.
+       */
+      public com.google.protobuf.ByteString
+          getTypeBytes() {
+        java.lang.Object ref = type_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          type_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string Type = 2;</code>
+       * @param value The type to set.
+       * @return This builder for chaining.
+       */
+      public Builder setType(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  
+        type_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Type = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearType() {
+        
+        type_ = getDefaultInstance().getType();
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Type = 2;</code>
+       * @param value The bytes for type to set.
+       * @return This builder for chaining.
+       */
+      public Builder setTypeBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  checkByteStringIsUtf8(value);
+        
+        type_ = value;
+        onChanged();
+        return this;
+      }
+
+      private long precision_ ;
+      /**
+       * <pre>
+       *optional fields
+       * </pre>
+       *
+       * <code>int64 Precision = 3;</code>
+       * @return The precision.
+       */
+      @java.lang.Override
+      public long getPrecision() {
+        return precision_;
+      }
+      /**
+       * <pre>
+       *optional fields
+       * </pre>
+       *
+       * <code>int64 Precision = 3;</code>
+       * @param value The precision to set.
+       * @return This builder for chaining.
+       */
+      public Builder setPrecision(long value) {
+        
+        precision_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <pre>
+       *optional fields
+       * </pre>
+       *
+       * <code>int64 Precision = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearPrecision() {
+        
+        precision_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private long scale_ ;
+      /**
+       * <code>int64 Scale = 4;</code>
+       * @return The scale.
+       */
+      @java.lang.Override
+      public long getScale() {
+        return scale_;
+      }
+      /**
+       * <code>int64 Scale = 4;</code>
+       * @param value The scale to set.
+       * @return This builder for chaining.
+       */
+      public Builder setScale(long value) {
+        
+        scale_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>int64 Scale = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearScale() {
+        
+        scale_ = 0L;
+        onChanged();
+        return this;
+      }
+      @java.lang.Override
+      public final Builder setUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.setUnknownFields(unknownFields);
+      }
+
+      @java.lang.Override
+      public final Builder mergeUnknownFields(
+          final com.google.protobuf.UnknownFieldSet unknownFields) {
+        return super.mergeUnknownFields(unknownFields);
+      }
+
+
+      // @@protoc_insertion_point(builder_scope:services.SqlCol)
+    }
+
+    // @@protoc_insertion_point(class_scope:services.SqlCol)
+    private static final io.keploy.grpc.stubs.Service.SqlCol DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new io.keploy.grpc.stubs.Service.SqlCol();
+    }
+
+    public static io.keploy.grpc.stubs.Service.SqlCol getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<SqlCol>
+        PARSER = new com.google.protobuf.AbstractParser<SqlCol>() {
+      @java.lang.Override
+      public SqlCol parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return new SqlCol(input, extensionRegistry);
+      }
+    };
+
+    public static com.google.protobuf.Parser<SqlCol> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<SqlCol> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.SqlCol getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
 
@@ -29871,6 +32233,16 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_services_Mock_SpecSchema_AssertionsEntry_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_services_Table_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_services_Table_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_services_SqlCol_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_services_SqlCol_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
     internal_static_services_PutMockReq_descriptor;
   private static final 
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
@@ -29967,7 +32339,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       "eNoiseResponse\022\017\n\007message\030\001 \001(\t\"k\n\014testR" +
       "esponse\022.\n\004pass\030\001 \003(\0132 .services.testRes" +
       "ponse.PassEntry\032+\n\tPassEntry\022\013\n\003key\030\001 \001(" +
-      "\t\022\r\n\005value\030\002 \001(\010:\0028\001\"\336\005\n\004Mock\022\017\n\007Version" +
+      "\t\022\r\n\005value\030\002 \001(\010:\0028\001\"\250\006\n\004Mock\022\017\n\007Version" +
       "\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\022\014\n\004Kind\030\003 \001(\t\022\'\n\004Sp" +
       "ec\030\004 \001(\0132\031.services.Mock.SpecSchema\032\321\001\n\007" +
       "Request\022\016\n\006Method\030\001 \001(\t\022\022\n\nProtoMajor\030\002 " +
@@ -29976,39 +32348,44 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       "derEntry\022\014\n\004Body\030\006 \001(\t\032?\n\013HeaderEntry\022\013\n" +
       "\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.Str" +
       "Arr:\0028\001\032$\n\006Object\022\014\n\004Type\030\001 \001(\t\022\014\n\004Data\030" +
-      "\002 \001(\014\032\205\003\n\nSpecSchema\0229\n\010Metadata\030\001 \003(\0132\'" +
+      "\002 \001(\014\032\317\003\n\nSpecSchema\0229\n\010Metadata\030\001 \003(\0132\'" +
       ".services.Mock.SpecSchema.MetadataEntry\022" +
       "&\n\007Objects\030\002 \003(\0132\025.services.Mock.Object\022" +
       "\036\n\003Req\030\003 \001(\0132\021.services.HttpReq\022\037\n\003Res\030\004" +
       " \001(\0132\022.services.HttpResp\022\r\n\005Mocks\030\005 \003(\t\022" +
       "=\n\nAssertions\030\006 \003(\0132).services.Mock.Spec" +
-      "Schema.AssertionsEntry\022\017\n\007Created\030\007 \001(\003\032" +
-      "/\n\rMetadataEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002" +
-      " \001(\t:\0028\001\032C\n\017AssertionsEntry\022\013\n\003key\030\001 \001(\t" +
-      "\022\037\n\005value\030\002 \001(\0132\020.services.StrArr:\0028\001\"8\n" +
-      "\nPutMockReq\022\034\n\004Mock\030\001 \001(\0132\016.services.Moc" +
-      "k\022\014\n\004Path\030\002 \001(\t\"\037\n\013PutMockResp\022\020\n\010Insert" +
-      "ed\030\001 \001(\003\"(\n\nGetMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004" +
-      "Name\030\002 \001(\t\",\n\013getMockResp\022\035\n\005Mocks\030\001 \003(\013" +
-      "2\016.services.Mock\"*\n\014StartMockReq\022\014\n\004Path" +
-      "\030\001 \001(\t\022\014\n\004Mode\030\002 \001(\t\"\037\n\rStartMockResp\022\016\n" +
-      "\006Exists\030\001 \001(\0102\314\004\n\021RegressionService\0222\n\003E" +
-      "nd\022\024.services.endRequest\032\025.services.endR" +
-      "esponse\0228\n\005Start\022\026.services.startRequest" +
-      "\032\027.services.startResponse\0223\n\005GetTC\022\026.ser" +
-      "vices.getTCRequest\032\022.services.TestCase\022;" +
-      "\n\006GetTCS\022\027.services.getTCSRequest\032\030.serv" +
-      "ices.getTCSResponse\0229\n\006PostTC\022\025.services" +
-      ".TestCaseReq\032\030.services.postTCResponse\0227" +
-      "\n\007DeNoise\022\021.services.TestReq\032\031.services." +
-      "deNoiseResponse\0221\n\004Test\022\021.services.TestR" +
-      "eq\032\026.services.testResponse\0226\n\007PutMock\022\024." +
-      "services.PutMockReq\032\025.services.PutMockRe" +
-      "sp\0227\n\010GetMocks\022\024.services.GetMockReq\032\025.s" +
-      "ervices.getMockResp\022?\n\014StartMocking\022\026.se" +
-      "rvices.StartMockReq\032\027.services.StartMock" +
-      "RespB;\n\024io.keploy.grpc.stubsZ#go.keploy." +
-      "io/server/grpc/regressionb\006proto3"
+      "Schema.AssertionsEntry\022\017\n\007Created\030\007 \001(\003\022" +
+      "\014\n\004Type\030\010 \001(\t\022#\n\005Table\030\t \001(\0132\017.services." +
+      "TableH\000\210\001\001\022\013\n\003Int\030\n \001(\003\032/\n\rMetadataEntry" +
+      "\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032C\n\017Asse" +
+      "rtionsEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132" +
+      "\020.services.StrArr:\0028\001B\010\n\006_Table\"5\n\005Table" +
+      "\022\036\n\004Cols\030\001 \003(\0132\020.services.SqlCol\022\014\n\004Rows" +
+      "\030\002 \003(\t\"F\n\006SqlCol\022\014\n\004Name\030\001 \001(\t\022\014\n\004Type\030\002" +
+      " \001(\t\022\021\n\tPrecision\030\003 \001(\003\022\r\n\005Scale\030\004 \001(\003\"8" +
+      "\n\nPutMockReq\022\034\n\004Mock\030\001 \001(\0132\016.services.Mo" +
+      "ck\022\014\n\004Path\030\002 \001(\t\"\037\n\013PutMockResp\022\020\n\010Inser" +
+      "ted\030\001 \001(\003\"(\n\nGetMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n" +
+      "\004Name\030\002 \001(\t\",\n\013getMockResp\022\035\n\005Mocks\030\001 \003(" +
+      "\0132\016.services.Mock\"*\n\014StartMockReq\022\014\n\004Pat" +
+      "h\030\001 \001(\t\022\014\n\004Mode\030\002 \001(\t\"\037\n\rStartMockResp\022\016" +
+      "\n\006Exists\030\001 \001(\0102\314\004\n\021RegressionService\0222\n\003" +
+      "End\022\024.services.endRequest\032\025.services.end" +
+      "Response\0228\n\005Start\022\026.services.startReques" +
+      "t\032\027.services.startResponse\0223\n\005GetTC\022\026.se" +
+      "rvices.getTCRequest\032\022.services.TestCase\022" +
+      ";\n\006GetTCS\022\027.services.getTCSRequest\032\030.ser" +
+      "vices.getTCSResponse\0229\n\006PostTC\022\025.service" +
+      "s.TestCaseReq\032\030.services.postTCResponse\022" +
+      "7\n\007DeNoise\022\021.services.TestReq\032\031.services" +
+      ".deNoiseResponse\0221\n\004Test\022\021.services.Test" +
+      "Req\032\026.services.testResponse\0226\n\007PutMock\022\024" +
+      ".services.PutMockReq\032\025.services.PutMockR" +
+      "esp\0227\n\010GetMocks\022\024.services.GetMockReq\032\025." +
+      "services.getMockResp\022?\n\014StartMocking\022\026.s" +
+      "ervices.StartMockReq\032\027.services.StartMoc" +
+      "kRespB;\n\024io.keploy.grpc.stubsZ#go.keploy" +
+      ".io/server/grpc/regressionb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -30205,7 +32582,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     internal_static_services_Mock_SpecSchema_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_Mock_SpecSchema_descriptor,
-        new java.lang.String[] { "Metadata", "Objects", "Req", "Res", "Mocks", "Assertions", "Created", });
+        new java.lang.String[] { "Metadata", "Objects", "Req", "Res", "Mocks", "Assertions", "Created", "Type", "Table", "Int", "Table", });
     internal_static_services_Mock_SpecSchema_MetadataEntry_descriptor =
       internal_static_services_Mock_SpecSchema_descriptor.getNestedTypes().get(0);
     internal_static_services_Mock_SpecSchema_MetadataEntry_fieldAccessorTable = new
@@ -30218,38 +32595,50 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_Mock_SpecSchema_AssertionsEntry_descriptor,
         new java.lang.String[] { "Key", "Value", });
-    internal_static_services_PutMockReq_descriptor =
+    internal_static_services_Table_descriptor =
       getDescriptor().getMessageTypes().get(20);
+    internal_static_services_Table_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_services_Table_descriptor,
+        new java.lang.String[] { "Cols", "Rows", });
+    internal_static_services_SqlCol_descriptor =
+      getDescriptor().getMessageTypes().get(21);
+    internal_static_services_SqlCol_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_services_SqlCol_descriptor,
+        new java.lang.String[] { "Name", "Type", "Precision", "Scale", });
+    internal_static_services_PutMockReq_descriptor =
+      getDescriptor().getMessageTypes().get(22);
     internal_static_services_PutMockReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_PutMockReq_descriptor,
         new java.lang.String[] { "Mock", "Path", });
     internal_static_services_PutMockResp_descriptor =
-      getDescriptor().getMessageTypes().get(21);
+      getDescriptor().getMessageTypes().get(23);
     internal_static_services_PutMockResp_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_PutMockResp_descriptor,
         new java.lang.String[] { "Inserted", });
     internal_static_services_GetMockReq_descriptor =
-      getDescriptor().getMessageTypes().get(22);
+      getDescriptor().getMessageTypes().get(24);
     internal_static_services_GetMockReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_GetMockReq_descriptor,
         new java.lang.String[] { "Path", "Name", });
     internal_static_services_getMockResp_descriptor =
-      getDescriptor().getMessageTypes().get(23);
+      getDescriptor().getMessageTypes().get(25);
     internal_static_services_getMockResp_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_getMockResp_descriptor,
         new java.lang.String[] { "Mocks", });
     internal_static_services_StartMockReq_descriptor =
-      getDescriptor().getMessageTypes().get(24);
+      getDescriptor().getMessageTypes().get(26);
     internal_static_services_StartMockReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_StartMockReq_descriptor,
         new java.lang.String[] { "Path", "Mode", });
     internal_static_services_StartMockResp_descriptor =
-      getDescriptor().getMessageTypes().get(25);
+      getDescriptor().getMessageTypes().get(27);
     internal_static_services_StartMockResp_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_StartMockResp_descriptor,

@@ -21,7 +21,9 @@ public class Mock {
 
     public enum Kind {
         HTTP_EXPORT("Http"),
-        GENERIC_EXPORT("Generic");
+        GENERIC_EXPORT("Generic"),
+
+        SQL("SQL");
 
         public final String value;
 
