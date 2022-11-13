@@ -56,7 +56,7 @@ public class KResultSet implements ResultSet {
    if (kctx.getMode() == Mode.ModeType.MODE_TEST) {
     String xml = null;
     try {
-     xml = readFile("/Users/sarthak_1/Documents/Keploy/java-sdk/rs1.txt", StandardCharsets.UTF_8);
+     xml = readFile("/Users/sarthak_1/Documents/Keploy/KeployJava/java-sdk/PostgresResultSet.txt", StandardCharsets.UTF_8);
     } catch (IOException e) {
      throw new RuntimeException(e);
     }
@@ -207,6 +207,11 @@ public class KResultSet implements ResultSet {
 
  @Override
  public void close() throws SQLException {
+//  Kcontext kctx = Context.getCtx();
+//  Mode.ModeType mode = kctx.getMode();
+//  if (mode == Mode.ModeType.MODE_TEST) {
+//   return;
+//  }
   wrappedResultSet.close();
  }
 
