@@ -1,5 +1,7 @@
 package io.keploy.advice.ksql;
 
+import io.keploy.agent.KAgent;
+import io.keploy.ksql.KDriver;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import org.springframework.stereotype.Component;
@@ -14,6 +16,10 @@ public class RegisterDriverAdvice_Interceptor {
         System.out.println("Inside RegisterDriverAdvice_Interceptor -> " + method);
         String s = client.call();
         System.out.println("determineDriverClassName returns : " + s);
+        if (s != null && !s.equals("io.keploy.ksql.KDriver")) {
+            KDriver.DriverName = s;
+        }
+
 //        mode.ModeType KEPLOY_MODE = mode.getMode();
 //        System.out.println(KEPLOY_MODE);
 //        if (KEPLOY_MODE.equals(mode.ModeType.MODE_OFF)){

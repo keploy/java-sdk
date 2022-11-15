@@ -21,7 +21,7 @@ public class KResultSetMetaData implements ResultSetMetaData {
         if (mode == Mode.ModeType.MODE_TEST) {
             return 5;
         }
-        System.out.println("I am column count !! " + wrappedResultSetMetaData.getColumnCount());
+        System.out.println(wrappedResultSetMetaData.getColumnCount());
         return wrappedResultSetMetaData.getColumnCount();
     }
 

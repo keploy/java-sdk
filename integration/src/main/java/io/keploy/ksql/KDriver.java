@@ -1,5 +1,6 @@
 package io.keploy.ksql;
 
+
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mode;
@@ -27,7 +28,7 @@ public class KDriver implements java.sql.Driver {
     private String _databaseName;
     public final Kcontext kctx = Context.getCtx();
     Mode.ModeType mode = null;
-
+    public static String DriverName = "";
     private Integer _version = 1;
     private Connection _connection;
     public Boolean _isConnected = false;
@@ -45,19 +46,26 @@ public class KDriver implements java.sql.Driver {
     }
 
     private java.sql.Driver getWrappedDriver() throws SQLException {
-        String driver = "postgres";
+        String driver = DriverName;
+
+        java.sql.Driver d;
         switch (driver) {
-            case "postgres":
-//                return new org.postgresql.Driver();
-            case "mysql":
-//                return new com.mysql.cj.jdbc.Driver();
-            case "h2":
-//                return new org.h2.Driver();
-            case "oracle":
-                return new OracleDriver();
+            case "org.postgresql.Driver":
+                d =  new org.postgresql.Driver();
+                break;
+            case "com.mysql.cj.jdbc.Driver":
+                d =  new com.mysql.cj.jdbc.Driver();
+                break;
+            case "org.h2.Driver":
+                d = new org.h2.Driver();
+                break;
+            case "oracle.jdbc.driver.OracleDriver":
+                d = new OracleDriver();
+                break;
             default:
-                return null;
+                d =  null;
         }
+        return d;
     }
 
 

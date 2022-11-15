@@ -50,29 +50,9 @@ public class KResultSet implements ResultSet {
 
   Kcontext kctx = Context.getCtx();
   if (kctx != null) {
-   Map<String, String> meta;
-//   meta = ProcessD.getMeta(rs);
-//   meta.put("operation", "ResultSet");
    if (kctx.getMode() == Mode.ModeType.MODE_TEST) {
-//    String xml = null;
-//    try {
-//     xml = readFile("/Users/sarthak_1/Documents/Keploy/KeployJava/java-sdk/OracleResultSet.txt", StandardCharsets.UTF_8);
-//    } catch (IOException e) {
-//     throw new RuntimeException(e);
-//    }
-//    xstream.addPermission(AnyTypePermission.ANY);
-//    rs = (ResultSet) xstream.fromXML(xml);
     rs = Mockito.mock(ResultSet.class);
    }
-//   depsobj rs2;
-//   try {
-//    rs2 = ProcessD.ProcessDep(meta, rs);
-//   } catch (InvalidProtocolBufferException e) {
-//    throw new RuntimeException(e);
-//   }
-//   if (rs2.isMock() && rs2.getRes() != null) {
-//    rs = (ResultSet) rs2.getRes().get(0);
-//   }
   }
   //post k case m jo select aata h use chahiye hota h
   if (KConnection.FirstTime<1){
@@ -137,6 +117,7 @@ public class KResultSet implements ResultSet {
   }
   TableData = testTable;
  }
+
  // for getting rows from testcase exported as yamls
 
  // it should return a single row at a time and should and if row is not null it should go to the underlying methods which set the result for
