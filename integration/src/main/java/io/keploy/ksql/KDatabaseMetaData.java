@@ -676,6 +676,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getTypeInfo() throws SQLException {
+        System.out.println("Inside Get Type INFO ::");
         return new KResultSet(wrappedDatabaseMetaData.getTypeInfo());
     }
 

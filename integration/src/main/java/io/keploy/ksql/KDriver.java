@@ -3,7 +3,7 @@ package io.keploy.ksql;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mode;
-//import oracle.jdbc.driver.OracleDriver;
+import oracle.jdbc.driver.OracleDriver;
 import oracle.jdbc.*;
 import org.postgresql.Driver;
 //import com.mysql.cj.jdbc.Driver;
@@ -17,7 +17,7 @@ import java.util.Properties;
 import java.util.logging.Logger;
 
 public class KDriver implements java.sql.Driver {
-    public org.postgresql.Driver wrappedDriver;
+    public java.sql.Driver wrappedDriver;
 
 
     private String _url;
@@ -44,17 +44,17 @@ public class KDriver implements java.sql.Driver {
         System.out.println("hello inside no-arg constructor");
     }
 
-    private Driver getWrappedDriver() throws SQLException {
+    private java.sql.Driver getWrappedDriver() throws SQLException {
         String driver = "postgres";
         switch (driver) {
             case "postgres":
-                return new org.postgresql.Driver();
+//                return new org.postgresql.Driver();
             case "mysql":
 //                return new com.mysql.cj.jdbc.Driver();
             case "h2":
 //                return new org.h2.Driver();
             case "oracle":
-//                return new OracleDriver();
+                return new OracleDriver();
             default:
                 return null;
         }

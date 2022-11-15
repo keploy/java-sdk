@@ -331,11 +331,11 @@ public class ProcessD {
         String temp = xstream.toXML(output);
         int x = c.incrementAndGet();
 
-//        try (PrintWriter out = new PrintWriter("rs" + x + ".txt")) {
-//            out.println(temp);
-//        } catch (FileNotFoundException e) {
-//            throw new RuntimeException(e);
-//        }
+        try (PrintWriter out = new PrintWriter("OracleResultSet" + x + ".txt")) {
+            out.println(temp);
+        } catch (FileNotFoundException e) {
+            throw new RuntimeException(e);
+        }
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         OutputStreamWriter writer = new OutputStreamWriter(outputStream);
         xstream.toXML(output, writer);
