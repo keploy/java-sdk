@@ -2,7 +2,6 @@ package io.keploy.ksql;
 
 import com.thoughtworks.xstream.XStream;
 import com.thoughtworks.xstream.security.AnyTypePermission;
-import io.keploy.utils.ProcessD;
 
 import java.sql.*;
 class App{
@@ -29,7 +28,7 @@ class App{
 
 //step4 execute query  
             ResultSet rs=stmt.executeQuery("select * from user_table");
-            ProcessD.encodedResultSet(rs);
+//            ProcessD.encodedResultSet(rs);
             while(rs.next())
                 System.out.println(rs.getInt(1)+"  "+rs.getString(2)+"  "+rs.getString(3));
 

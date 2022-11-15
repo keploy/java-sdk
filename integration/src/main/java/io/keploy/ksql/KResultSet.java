@@ -1,29 +1,22 @@
 package io.keploy.ksql;
 
 import com.google.protobuf.InvalidProtocolBufferException;
-import com.thoughtworks.xstream.security.AnyTypePermission;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
-import io.keploy.utils.ProcessD;
 import io.keploy.utils.ProcessSQL;
 import org.mockito.Mockito;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.*;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
-
-import static io.keploy.utils.ProcessD.readFile;
-import static io.keploy.utils.ProcessD.xstream;
 
 public class KResultSet implements ResultSet {
  ResultSet wrappedResultSet;
@@ -58,17 +51,18 @@ public class KResultSet implements ResultSet {
   Kcontext kctx = Context.getCtx();
   if (kctx != null) {
    Map<String, String> meta;
-   meta = ProcessD.getMeta(rs);
-   meta.put("operation", "ResultSet");
+//   meta = ProcessD.getMeta(rs);
+//   meta.put("operation", "ResultSet");
    if (kctx.getMode() == Mode.ModeType.MODE_TEST) {
-    String xml = null;
-    try {
-     xml = readFile("/Users/sarthak_1/Documents/Keploy/KeployJava/java-sdk/OracleResultSet.txt", StandardCharsets.UTF_8);
-    } catch (IOException e) {
-     throw new RuntimeException(e);
-    }
-    xstream.addPermission(AnyTypePermission.ANY);
-    rs = (ResultSet) xstream.fromXML(xml);
+//    String xml = null;
+//    try {
+//     xml = readFile("/Users/sarthak_1/Documents/Keploy/KeployJava/java-sdk/OracleResultSet.txt", StandardCharsets.UTF_8);
+//    } catch (IOException e) {
+//     throw new RuntimeException(e);
+//    }
+//    xstream.addPermission(AnyTypePermission.ANY);
+//    rs = (ResultSet) xstream.fromXML(xml);
+    rs = Mockito.mock(ResultSet.class);
    }
 //   depsobj rs2;
 //   try {
