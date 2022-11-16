@@ -1,13 +1,10 @@
 package io.keploy.ksql;
 
 
+import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
-import io.keploy.regression.Mode;
 import oracle.jdbc.driver.OracleDriver;
-import oracle.jdbc.*;
-import org.postgresql.Driver;
-//import com.mysql.cj.jdbc.Driver;
 
 import java.sql.Connection;
 import java.sql.DriverPropertyInfo;
@@ -61,6 +58,9 @@ public class KDriver implements java.sql.Driver {
                 break;
             case "oracle.jdbc.driver.OracleDriver":
                 d = new OracleDriver();
+                break;
+            case "org.mariadb.jdbc.Driver":
+                d = new org.mariadb.jdbc.Driver();
                 break;
             default:
                 d =  null;

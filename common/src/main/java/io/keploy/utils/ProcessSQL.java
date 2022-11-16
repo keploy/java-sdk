@@ -27,7 +27,6 @@ public class ProcessSQL {
             logger.error("dependency mocking failed: failed to get Keploy context");
             return null;
         }
-        List<Service.Dependency> deps = kctx.getDeps();
         switch (kctx.getMode()) {
             case MODE_TEST:
 //                kctx.getMock().get(0).getKind().equals(Mock.Kind.SQL.value)
@@ -47,8 +46,9 @@ public class ProcessSQL {
 
                 Service.Mock.SpecSchema specSchema = null;
                 if (commits != 0) {
-                    specSchema = Service.Mock.SpecSchema.newBuilder().setInt(commits).setType("INT").build();
+                    specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(commits).setType("INT").build();
                 } else {
+                    System.out.println(meta + "This is meta !!!");
                     specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setTable(table).setType("TABLE").build();
                 }
 

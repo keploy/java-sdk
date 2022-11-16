@@ -19,10 +19,11 @@ public class KResultSetMetaData implements ResultSetMetaData {
         Kcontext kctx = Context.getCtx();
         Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            return 5;
+            return Integer.parseInt(KResultSet.meta.get("getColumnCount"));
         }
-        System.out.println(wrappedResultSetMetaData.getColumnCount());
-        return wrappedResultSetMetaData.getColumnCount();
+        int gc = wrappedResultSetMetaData.getColumnCount();
+        KResultSet.meta.put("getColumnCount", Integer.toString(gc));
+        return gc;
     }
 
     @Override

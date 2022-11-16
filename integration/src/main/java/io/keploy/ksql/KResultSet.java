@@ -21,6 +21,7 @@ import java.util.*;
 public class KResultSet implements ResultSet {
  ResultSet wrappedResultSet;
 
+ static HashMap<String, String> meta = new HashMap<>();
  private List<Service.SqlCol> sqlColList;
 
  private List<String> rowsList;
@@ -55,13 +56,14 @@ public class KResultSet implements ResultSet {
    }
   }
   //post k case m jo select aata h use chahiye hota h
-  if (KConnection.FirstTime<1){
+  if (KConnection.FirstTime < 1) {
    KResultSet.SetCommit(0);
-  }else {
+  } else {
    KResultSet.SetCommit(1);
   }
-  KConnection.FirstTime  = 0;
-
+  KConnection.FirstTime = 0;
+  System.out.println("cleared Meta");
+  KResultSet.meta.clear();
   wrappedResultSet = rs;
  }
 
@@ -101,8 +103,9 @@ public class KResultSet implements ResultSet {
    return;
   }
   Kcontext kctx = Context.getCtx();
-  // yha pe ids nikal agar ids h to id set kar
   id = kctx.getMock().get(0).getSpec().getInt();
+  Map<String, String> s = kctx.getMock().get(0).getSpec().getMetadataMap();
+  meta = convertMap(s);
   if (id != 0) {
    kctx.getMock().remove(0);
    return;
@@ -115,6 +118,7 @@ public class KResultSet implements ResultSet {
   } catch (InvalidProtocolBufferException e) {
    throw new RuntimeException(e);
   }
+
   TableData = testTable;
  }
 
@@ -150,6 +154,9 @@ public class KResultSet implements ResultSet {
  public boolean next() throws SQLException {
   Kcontext kctx = Context.getCtx();
   if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.next();
+   }
    return false;
   }
   Mode.ModeType mode = kctx.getMode();
@@ -161,6 +168,8 @@ public class KResultSet implements ResultSet {
      commited--;
      List<Service.Mock> mocks = kctx.getMock();
      id = mocks.get(0).getSpec().getInt();
+     Map<String, String> s = mocks.get(0).getSpec().getMetadataMap();
+     meta = convertMap(s);
      mocks.remove(0);
      return true;
     }
@@ -177,7 +186,6 @@ public class KResultSet implements ResultSet {
      Service.Table table = tableBuilder.build();
      System.out.println(table);
      try {
-      HashMap<String, String> meta = new HashMap<>();
       meta.put("method", "next()");
       ProcessSQL.ProcessDep(meta, table, 0);
      } catch (InvalidProtocolBufferException e) {
@@ -197,6 +205,9 @@ public class KResultSet implements ResultSet {
   Kcontext kctx = Context.getCtx();
 //  Mode.ModeType mode = kctx.getMode();
   if (kctx == null) {
+    if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+      wrappedResultSet.close();
+    }
    return;
   }
   wrappedResultSet.close();
@@ -205,6 +216,11 @@ public class KResultSet implements ResultSet {
  @Override
  public boolean wasNull() throws SQLException {
   Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.wasNull();
+   }
+  }
   Mode.ModeType mode = kctx.getMode();
   if (mode == Mode.ModeType.MODE_TEST) {
    return wasNull;
@@ -216,29 +232,59 @@ public class KResultSet implements ResultSet {
 
  @Override
  public String getString(int columnIndex) throws SQLException {
+  Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getString(columnIndex);
+   }
+  }
   String x = wrappedResultSet.getString(columnIndex);
   return x;
  }
 
  @Override
  public boolean getBoolean(int columnIndex) throws SQLException {
+  Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getBoolean(columnIndex);
+   }
+  }
   return wrappedResultSet.getBoolean(columnIndex);
  }
 
  @Override
  public byte getByte(int columnIndex) throws SQLException {
+  Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getByte(columnIndex);
+   }
+  }
   byte gb = wrappedResultSet.getByte(columnIndex);
   return gb;
  }
 
  @Override
  public short getShort(int columnIndex) throws SQLException {
+  Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getShort(columnIndex);
+   }
+  }
   short gs = wrappedResultSet.getShort(columnIndex);
   return gs;
  }
 
  @Override
  public int getInt(int columnIndex) throws SQLException {
+  Kcontext kctx = Context.getCtx();
+  if (kctx == null) {
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getInt(columnIndex);
+   }
+  }
   int gi = wrappedResultSet.getInt(columnIndex);
   return gi;
  }
@@ -246,6 +292,12 @@ public class KResultSet implements ResultSet {
  @Override
  public long getLong(int columnIndex) throws SQLException {
   Kcontext kctx = Context.getCtx();
+  if (kctx==null){
+   if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+    return wrappedResultSet.getLong(columnIndex);
+   }
+  }
+  assert kctx != null;
   Mode.ModeType mode = kctx.getMode();
   if (mode == Mode.ModeType.MODE_TEST) {
    long gl = id;
@@ -256,7 +308,7 @@ public class KResultSet implements ResultSet {
 
   long gl = wrappedResultSet.getLong(columnIndex);
   System.out.println(gl + "Hi there is get long ");
-  HashMap<String, String> meta = new HashMap<>();
+
   meta.put("method", "getLong()");
 
   try {
@@ -392,7 +444,7 @@ public class KResultSet implements ResultSet {
 
  void RecordIds(long id) {
   try {
-   HashMap<String, String> meta = new HashMap<>();
+
    meta.put("method", "next()");
 
    ProcessSQL.ProcessDep(meta, null, Math.toIntExact(id));
@@ -507,9 +559,16 @@ public class KResultSet implements ResultSet {
  public Timestamp getTimestamp(String columnLabel) throws SQLException {
   Kcontext kctx = Context.getCtx();
   Mode.ModeType mode = kctx.getMode();
-//  if (mode == Mode.ModeType.MODE_TEST) {
-//   return
-//  }
+  if (mode == Mode.ModeType.MODE_TEST) {
+   wasNull = false;
+   SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss.SSS");
+   try {
+    return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
+   } catch (ParseException e) {
+    throw new RuntimeException(e);
+   }
+
+  }
   Timestamp gts = wrappedResultSet.getTimestamp(columnLabel);
   sb.append(gts).append(",");
   addSqlColToList(columnLabel, gts.getClass().getSimpleName());
@@ -1323,6 +1382,10 @@ public class KResultSet implements ResultSet {
  @Override
  public boolean isWrapperFor(Class<?> iface) throws SQLException {
   return wrappedResultSet.isWrapperFor(iface);
+ }
+
+ HashMap<String, String> convertMap(Map<String, String> s) {
+  return new HashMap<>(s);
  }
 
 }
