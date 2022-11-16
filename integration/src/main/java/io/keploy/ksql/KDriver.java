@@ -39,7 +39,7 @@ public class KDriver implements java.sql.Driver {
             mode = Mode.ModeType.MODE_TEST;
         }
         wrappedDriver = getWrappedDriver();
-        System.out.println("hello inside no-arg constructor");
+//        System.out.println("hello inside no-arg constructor");
     }
 
     private java.sql.Driver getWrappedDriver() throws SQLException {

@@ -48,7 +48,6 @@ public class ProcessSQL {
                 if (commits != 0) {
                     specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(commits).setType("INT").build();
                 } else {
-                    System.out.println(meta + "This is meta !!!");
                     specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setTable(table).setType("TABLE").build();
                 }
 

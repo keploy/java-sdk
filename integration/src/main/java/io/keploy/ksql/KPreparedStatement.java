@@ -44,9 +44,6 @@ public class KPreparedStatement implements PreparedStatement {
    return new KResultSet(resultSet);
   }
   Mode.ModeType mode = kctx.getMode();
-//  if (FirstTime){
-//   KResultSet.SetCommit(0);
-//  }
   ResultSet rs = new KResultSet();
   switch (mode) {
    case MODE_TEST:
@@ -55,7 +52,6 @@ public class KPreparedStatement implements PreparedStatement {
     break;
    case MODE_RECORD:
     rs = wrappedPreparedStatement.executeQuery();
-    System.out.println(rs);
     break;
    default:
     System.out.println("integrations: Not in a valid sdk mode");
@@ -82,7 +78,6 @@ public class KPreparedStatement implements PreparedStatement {
     break;
    case MODE_RECORD:
     rs = wrappedPreparedStatement.executeUpdate();
-    System.out.println(rs);
     break;
    default:
     System.out.println("integrations: Not in a valid sdk mode");
@@ -722,7 +717,6 @@ public class KPreparedStatement implements PreparedStatement {
 
  @Override
  public int executeUpdate(String sql) throws SQLException {
-  System.out.println("second Execute Update !! in prepared Statement ");
   int k = wrappedPreparedStatement.executeUpdate();
   return k;
  }
@@ -825,7 +819,6 @@ public class KPreparedStatement implements PreparedStatement {
 
  @Override
  public boolean getMoreResults() throws SQLException {
-  System.out.println("Inside Prepared statement !!");
   return wrappedPreparedStatement.getMoreResults();
 
  }
@@ -877,7 +870,6 @@ public class KPreparedStatement implements PreparedStatement {
 
  @Override
  public Connection getConnection() throws SQLException {
-  System.out.println("GETTING CONNECTION HUH !!");
   Connection c = wrappedPreparedStatement.getConnection();
   return new KConnection(c);
  }
@@ -907,20 +899,6 @@ public class KPreparedStatement implements PreparedStatement {
    default:
     System.out.println("integrations: Not in a valid sdk mode");
   }
-
-//  Map<String, String> meta = new HashMap<>();
-//  meta = ProcessD.getMeta(rs);
-//  depsobj rs3;
-//  try {
-//   rs3 = ProcessD.ProcessDep(meta, rs);
-//  } catch (InvalidProtocolBufferException e) {
-//   throw new RuntimeException(e);
-//  }
-//  if (rs3.isMock() && rs3.getRes() != null) {
-//   rs = (ResultSet) rs3.getRes().get(0);
-//  }
-
-
   return new KResultSet(rs);
  }
 

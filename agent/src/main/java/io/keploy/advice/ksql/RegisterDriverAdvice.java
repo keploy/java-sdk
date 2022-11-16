@@ -11,7 +11,7 @@ public class RegisterDriverAdvice {
 
     @Advice.OnMethodEnter
     public static void enterMethod(@Advice.Origin Method method, @Advice.Argument(value = 0, readOnly = false) String driverClassName) {
-        System.out.println("Entering method[" + method + "] with argument[" + driverClassName + "] from EnterAdvice");
+//        System.out.println("Entering method[" + method + "] with argument[" + driverClassName + "] from EnterAdvice");
         if (driverClassName != null && !driverClassName.equals("io.keploy.ksql.KDriver")) {
             KDriver.DriverName = driverClassName;
         }

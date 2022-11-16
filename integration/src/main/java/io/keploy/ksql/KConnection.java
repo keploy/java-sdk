@@ -30,6 +30,9 @@ public class KConnection implements Connection {
     public Statement createStatement() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.createStatement();
+            }
             Statement resultSet = Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
@@ -69,6 +72,9 @@ public class KConnection implements Connection {
     public CallableStatement prepareCall(String sql) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.prepareCall(sql);
+            }
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
@@ -90,8 +96,13 @@ public class KConnection implements Connection {
 
     @Override
     public String nativeSQL(String sql) throws SQLException {
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.nativeSQL(sql);
+            }
+        }
         String st = wrappedCon.nativeSQL(sql);
-        System.out.println("HEY ROSS I AM HERE !! "+st);
         return st;
     }
 
@@ -99,6 +110,9 @@ public class KConnection implements Connection {
     public void setAutoCommit(boolean autoCommit) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.setAutoCommit(autoCommit);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -119,6 +133,9 @@ public class KConnection implements Connection {
     public boolean getAutoCommit() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return  wrappedCon.getAutoCommit();
+            }
             return false;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -142,6 +159,9 @@ public class KConnection implements Connection {
     public void commit() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                 wrappedCon.commit();
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -163,6 +183,9 @@ public class KConnection implements Connection {
     public void rollback() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                 wrappedCon.rollback();
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -191,6 +214,9 @@ public class KConnection implements Connection {
     public boolean isClosed() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.isClosed();
+            }
             return true;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -240,6 +266,9 @@ public class KConnection implements Connection {
     public void setReadOnly(boolean readOnly) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.setReadOnly(readOnly);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -261,6 +290,9 @@ public class KConnection implements Connection {
     public boolean isReadOnly() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.isReadOnly();
+            }
             return true;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -284,6 +316,9 @@ public class KConnection implements Connection {
     public void setCatalog(String catalog) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.setCatalog(catalog);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -315,6 +350,9 @@ public class KConnection implements Connection {
     public void setTransactionIsolation(int level) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                 wrappedCon.setTransactionIsolation(level);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -335,6 +373,9 @@ public class KConnection implements Connection {
     public int getTransactionIsolation() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.getTransactionIsolation();
+            }
             return 2;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -358,6 +399,9 @@ public class KConnection implements Connection {
     public SQLWarning getWarnings() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return  wrappedCon.getWarnings();
+            }
             return null;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -380,6 +424,9 @@ public class KConnection implements Connection {
     public void clearWarnings() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.clearWarnings();
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -400,6 +447,9 @@ public class KConnection implements Connection {
     public Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return  wrappedCon.createStatement(resultSetType, resultSetConcurrency);
+            }
             Statement resultSet = Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
@@ -428,6 +478,7 @@ public class KConnection implements Connection {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
             }
         }
+        assert kctx != null;
         Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
@@ -449,6 +500,9 @@ public class KConnection implements Connection {
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.prepareCall(sql, resultSetType, resultSetConcurrency);
+            }
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
@@ -472,6 +526,9 @@ public class KConnection implements Connection {
     public Map<String, Class<?>> getTypeMap() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.getTypeMap();
+            }
             return null;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -496,6 +553,9 @@ public class KConnection implements Connection {
     public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                 wrappedCon.setTypeMap(map);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -518,6 +578,9 @@ public class KConnection implements Connection {
     public void setHoldability(int holdability) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.setHoldability(holdability);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -538,6 +601,9 @@ public class KConnection implements Connection {
     public int getHoldability() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.getHoldability();
+            }
             return 0;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -560,19 +626,21 @@ public class KConnection implements Connection {
 
     @Override
     public Savepoint setSavepoint() throws SQLException {
-        return new KSavepoint(wrappedCon.setSavepoint());
+        return wrappedCon.setSavepoint();
     }
 
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
-        return new KSavepoint(wrappedCon.setSavepoint(name));
+        return wrappedCon.setSavepoint(name);
     }
 
     @Override
     public void rollback(Savepoint savepoint) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
-
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.rollback(savepoint);
+            }
             return;
         }
         Mode.ModeType mode = kctx.getMode();
@@ -599,6 +667,9 @@ public class KConnection implements Connection {
     public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                wrappedCon.createStatement(resultSetType, resultSetConcurrency, resultSetHoldability);
+            }
             Statement resultSet = Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
@@ -620,13 +691,14 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
-        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql);
+//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql);
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
             }
         }
+        assert kctx != null;
         Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
@@ -648,6 +720,9 @@ public class KConnection implements Connection {
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.prepareCall(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
+            }
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
@@ -669,7 +744,7 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException {
-        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql+ " **** " +autoGeneratedKeys);
+//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql+ " **** " +autoGeneratedKeys);
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")){
@@ -724,7 +799,6 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException {
-//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql);
         Kcontext kctx = Context.getCtx();
         if (kctx==null){
             if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")){
@@ -773,6 +847,9 @@ public class KConnection implements Connection {
     public boolean isValid(int timeout) throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
+            if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
+                return wrappedCon.isValid(timeout);
+            }
             return true;
         }
         Mode.ModeType mode = kctx.getMode();

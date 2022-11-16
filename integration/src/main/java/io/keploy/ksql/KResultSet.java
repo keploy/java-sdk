@@ -43,7 +43,6 @@ public class KResultSet implements ResultSet {
  long id = 0;
 
  public KResultSet(ResultSet rs) {
-  System.out.println("Inside ResultSet !! ");
   sqlColList = new ArrayList<>();
   colExists = new HashSet<>();
   rowsList = new ArrayList<>();
@@ -62,7 +61,7 @@ public class KResultSet implements ResultSet {
    KResultSet.SetCommit(1);
   }
   KConnection.FirstTime = 0;
-  System.out.println("cleared Meta");
+
   KResultSet.meta.clear();
   wrappedResultSet = rs;
  }
@@ -112,9 +111,9 @@ public class KResultSet implements ResultSet {
   }
   Service.Table testTable;
   try {
-   System.out.println();
+
    testTable = ProcessSQL.ProcessDep(null, null, 0);
-   System.out.println(testTable);
+//   System.out.println(testTable);
   } catch (InvalidProtocolBufferException e) {
    throw new RuntimeException(e);
   }
@@ -140,7 +139,7 @@ public class KResultSet implements ResultSet {
   }
   String s = rows.get(index);
   String[] split = new StringBuilder(s).substring(1, s.length() - 1).split(",");
-  System.out.println(Arrays.toString(split)); // this returns a single row you just have to
+//  System.out.println(Arrays.toString(split)); // this returns a single row you just have to
   RowData.clear();
   for (int i = 0; i < TableData.getColsCount(); i++) {
    Service.SqlCol col = TableData.getCols(i);
@@ -184,7 +183,7 @@ public class KResultSet implements ResultSet {
      tableBuilder.addAllCols(sqlColList);
      tableBuilder.addAllRows(rowsList);
      Service.Table table = tableBuilder.build();
-     System.out.println(table);
+//     System.out.println(table);
      try {
       meta.put("method", "next()");
       ProcessSQL.ProcessDep(meta, table, 0);
@@ -226,7 +225,6 @@ public class KResultSet implements ResultSet {
    return wasNull;
   }
   boolean val = wrappedResultSet.wasNull();
-  System.out.println(val + "WAS NULL VALUE !! ");
   return val;
  }
 
@@ -307,8 +305,6 @@ public class KResultSet implements ResultSet {
   }
 
   long gl = wrappedResultSet.getLong(columnIndex);
-  System.out.println(gl + "Hi there is get long ");
-
   meta.put("method", "getLong()");
 
   try {
@@ -471,7 +467,7 @@ public class KResultSet implements ResultSet {
   Long gl = wrappedResultSet.getLong(columnLabel);
   sb.append(gl).append(",");
   addSqlColToList(columnLabel, gl.getClass().getSimpleName());
-  System.out.println(commited);
+//  System.out.println(commited);
   if (commited > 0) {
    RecordIds(gl);
   }
@@ -613,10 +609,8 @@ public class KResultSet implements ResultSet {
   if (mode == Mode.ModeType.MODE_TEST) {
    return new KResultSetMetaData(Mockito.mock(ResultSetMetaData.class));
   }
-  System.out.println(">>>>>>>>>>>>>>>>>>>>>> call >>>>>>>>>>>>>>>");
   ResultSetMetaData getMetaData = wrappedResultSet.getMetaData();
-  ResultSetMetaData kgetMetaData = new KResultSetMetaData(getMetaData);
-  return kgetMetaData;
+  return new KResultSetMetaData(getMetaData);
  }
 
  @Override

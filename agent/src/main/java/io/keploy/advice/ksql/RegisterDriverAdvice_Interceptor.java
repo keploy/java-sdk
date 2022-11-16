@@ -13,9 +13,9 @@ import java.util.concurrent.Callable;
 public class RegisterDriverAdvice_Interceptor {
 
     public static String execute(@SuperCall Callable<String> client, @Origin Method method) throws Exception {
-        System.out.println("Inside RegisterDriverAdvice_Interceptor -> " + method);
+//        System.out.println("Inside RegisterDriverAdvice_Interceptor -> " + method);
         String s = client.call();
-        System.out.println("determineDriverClassName returns : " + s);
+//        System.out.println("determineDriverClassName returns : " + s);
         if (s != null && !s.equals("io.keploy.ksql.KDriver")) {
             KDriver.DriverName = s;
         }
