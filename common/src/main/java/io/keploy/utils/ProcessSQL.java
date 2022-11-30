@@ -20,7 +20,7 @@ public class ProcessSQL {
     private static final Logger logger = LogManager.getLogger(ProcessSQL.class);
 
     //    @SafeVarargs
-    public static Service.Table ProcessDep(Map<String, String> meta, Service.Table table, int commits) throws InvalidProtocolBufferException {
+    public static Service.Table ProcessDep(Map<String, String> meta, Service.Table table, int id) throws InvalidProtocolBufferException {
 
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
@@ -29,12 +29,10 @@ public class ProcessSQL {
         }
         switch (kctx.getMode()) {
             case MODE_TEST:
-//                kctx.getMock().get(0).getKind().equals(Mock.Kind.SQL.value)
                 if (kctx.getMock().size() > 0) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0) {
                         final Service.Table ttable = mocks.get(0).getSpec().getTable();
-
                         mocks.remove(0);
                         return ttable;
                     }
@@ -45,11 +43,11 @@ public class ProcessSQL {
             case MODE_RECORD:
 
                 Service.Mock.SpecSchema specSchema = null;
-                if (commits != 0) {
-                    specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(commits).setType("INT").build();
-                } else {
-                    specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setTable(table).setType("TABLE").build();
-                }
+//                if (id != 0) {
+//                    specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(id).setType("INT").build();
+//                } else {
+                specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setTable(table).setType("TABLE").build();
+//                }
 
                 Service.Mock mock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
