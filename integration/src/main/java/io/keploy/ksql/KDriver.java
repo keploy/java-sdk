@@ -24,13 +24,15 @@ public class KDriver implements java.sql.Driver {
 
     private String _databaseName;
     public final Kcontext kctx = Context.getCtx();
-    Mode.ModeType mode = null;
+    static Mode.ModeType mode = null;
     public static String DriverName = "";
     private Integer _version = 1;
     private Connection _connection;
     public Boolean _isConnected = false;
 
     private String _lastInsertId = "-1";
+    public static Mode.ModeType testMode = Mode.ModeType.MODE_TEST;
+    public static Mode.ModeType recordMode = Mode.ModeType.MODE_TEST;
 
     public KDriver() throws SQLException {
         if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
@@ -39,7 +41,6 @@ public class KDriver implements java.sql.Driver {
             mode = Mode.ModeType.MODE_TEST;
         }
         wrappedDriver = getWrappedDriver();
-//        System.out.println("hello inside no-arg constructor");
     }
 
     private java.sql.Driver getWrappedDriver() throws SQLException {
@@ -72,23 +73,28 @@ public class KDriver implements java.sql.Driver {
     @Override
     public Connection connect(String url, Properties info) throws SQLException {
 
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (Objects.equals(DriverName, "org.h2.Driver")) {
+            return wrappedDriver.connect(url, info);
+        }
+        if (mode == testMode) {
             return new KConnection();
         }
-        Connection resultSet = null;
+        Connection conn = null;
         try {
-            resultSet = wrappedDriver.connect(url, info);
+            conn = wrappedDriver.connect(url, info);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
-        return new KConnection(resultSet);
+        return new KConnection(conn);
 
     }
 
     @Override
     public boolean acceptsURL(String url) throws SQLException {
-        boolean acceptsURL = wrappedDriver.acceptsURL(url);
-        return acceptsURL;
+        if (mode == testMode) {
+            return true;
+        }
+        return wrappedDriver.acceptsURL(url);
     }
 
     @Override
@@ -98,21 +104,27 @@ public class KDriver implements java.sql.Driver {
 
     @Override
     public int getMajorVersion() {
-        int getMajor = wrappedDriver.getMajorVersion();
-        return getMajor;
+        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+            return 1;
+        }
+        return wrappedDriver.getMajorVersion();
     }
 
 
     @Override
     public int getMinorVersion() {
-        int getMinor = wrappedDriver.getMinorVersion();
-        return getMinor;
+        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+            return 1;
+        }
+        return wrappedDriver.getMinorVersion();
     }
 
     @Override
     public boolean jdbcCompliant() {
-        boolean jdbcCompliant = wrappedDriver.jdbcCompliant();
-        return jdbcCompliant;
+        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+            return true;
+        }
+        return wrappedDriver.jdbcCompliant();
     }
 
     @Override
