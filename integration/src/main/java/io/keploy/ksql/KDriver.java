@@ -27,7 +27,11 @@ public class KDriver implements java.sql.Driver {
     static Mode.ModeType mode = null;
     public static String DriverName = "";
     private Integer _version = 1;
+
     private Connection _connection;
+
+    public static String Dialect = "";
+
     public Boolean _isConnected = false;
 
     private String _lastInsertId = "-1";

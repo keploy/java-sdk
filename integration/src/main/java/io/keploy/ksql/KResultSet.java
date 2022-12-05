@@ -27,6 +27,8 @@ public class KResultSet implements ResultSet {
  static HashMap<String, String> meta = new HashMap<>();
  private List<Service.SqlCol> sqlColList;
 
+ private List<Service.SqlCol> CopysqlColList;
+
  private List<String> rowsList;
 
  private StringBuilder sb;
@@ -40,12 +42,16 @@ public class KResultSet implements ResultSet {
 
  boolean wasNull = true;
 
- int cnt = 1;
- int index = 0;
+ private int rowIndex = 0;
+ private int index = 0;
+ private int colIndex = 0;
+
+ private int maxSizeColList = 0;
 // long id = 0;
 
  public KResultSet(ResultSet rs) {
   sqlColList = new ArrayList<>();
+  CopysqlColList = new ArrayList<>();
   colExists = new HashSet<>();
   rowsList = new ArrayList<>();
   sb = new StringBuilder();
@@ -68,11 +74,24 @@ public class KResultSet implements ResultSet {
  private void addSqlColToList(String colName, String colType) {
   final Service.SqlCol sqlCol = Service.SqlCol.newBuilder().setName(colName).setType(colType).build();
   final boolean exist = colExists.contains(sqlCol);
-
+  if (colIndex == 0) {
+   CopysqlColList.clear();
+  }
+  CopysqlColList.add(sqlCol);
+  colIndex++;
   if (!exist) {
    sqlColList.add(sqlCol);
    colExists.add(sqlCol);
   }
+ }
+
+ String Helper() {
+  StringBuilder cols = new StringBuilder();
+  for (Service.SqlCol sqlCol : CopysqlColList) {
+   cols.append(sqlCol.getName()).append(",");
+  }
+  cols.deleteCharAt(cols.length() - 1);
+  return cols.toString();
  }
 
  private void addRows() {
@@ -81,6 +100,13 @@ public class KResultSet implements ResultSet {
    sb.insert(0, "[");
    sb.append("]");
    rowsList.add(sb.toString());
+   colIndex = 0;
+   if (sqlColList.size() != CopysqlColList.size() || (rowIndex != 0 && maxSizeColList < sqlColList.size())) { // || max size till now is less of sqlCol
+    String cols = Helper();
+    meta.put(String.valueOf(rowIndex), cols);
+   }
+   rowIndex++;
+   maxSizeColList = Math.max(maxSizeColList, sqlColList.size());
   }
   sb = new StringBuilder();
  }
@@ -112,14 +138,24 @@ public class KResultSet implements ResultSet {
   }
   String s = rows.get(index);
   String[] split = new StringBuilder(s).substring(1, s.length() - 1).split("\\$");
-  System.out.println(Arrays.toString(split));
   RowData.clear();
-  for (int i = 0; i < TableData.getColsCount(); i++) {
+  String newCol = "";
+  String[] splitCol = new String[0];
+  if (meta.containsKey(String.valueOf(index))) {
+   newCol = meta.get(String.valueOf(index));
+   splitCol = new StringBuilder(newCol).substring(0, newCol.length()).split(",");
+  }
+  for (int i = 0; i < split.length; i++) {
    Service.SqlCol col = TableData.getCols(i);
-   RowData.put(col.getName(), split[i]);
+   if (!newCol.equals("")) {
+    RowData.put(splitCol[i], split[i]);
+   } else {
+    RowData.put(col.getName(), split[i]);
+   }
   }
   return true;
  }
+
 
  @Override
  public boolean next() throws SQLException {
@@ -147,7 +183,6 @@ public class KResultSet implements ResultSet {
      tableBuilder.addAllCols(sqlColList);
      tableBuilder.addAllRows(rowsList);
      Service.Table table = tableBuilder.build();
-//     System.out.println(table);
      try {
       meta.put("method", "next()");
       ProcessSQL.ProcessDep(meta, table, 0);
@@ -166,7 +201,6 @@ public class KResultSet implements ResultSet {
  @Override
  public void close() throws SQLException {
   Kcontext kctx = Context.getCtx();
-//  Mode.ModeType mode = kctx.getMode();
   if (kctx == null) {
    if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
     wrappedResultSet.close();
@@ -206,11 +240,9 @@ public class KResultSet implements ResultSet {
   assert kctx != null;
   Mode.ModeType mode = kctx.getMode();
   if (mode == Mode.ModeType.MODE_TEST) {
-//   System.out.println(wasNull+"****");
    return wasNull;
   }
   boolean val = wrappedResultSet.wasNull();
-//  System.out.println(val+"****");
   return val;
  }
 

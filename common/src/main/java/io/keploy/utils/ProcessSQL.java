@@ -29,7 +29,7 @@ public class ProcessSQL {
         }
         switch (kctx.getMode()) {
             case MODE_TEST:
-                if (kctx.getMock().size() > 0) {
+                if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals("SQL")) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0) {
                         final Service.Table ttable = mocks.get(0).getSpec().getTable();

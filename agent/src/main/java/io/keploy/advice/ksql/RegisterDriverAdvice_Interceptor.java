@@ -4,6 +4,7 @@ import io.keploy.agent.KAgent;
 import io.keploy.ksql.KDriver;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
+import oracle.jdbc.driver.OracleDriver;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
@@ -18,6 +19,20 @@ public class RegisterDriverAdvice_Interceptor {
 //        System.out.println("determineDriverClassName returns : " + s);
         if (s != null && !s.equals("io.keploy.ksql.KDriver")) {
             KDriver.DriverName = s;
+
+            switch (s) {
+                case "org.postgresql.Driver":
+                    KDriver.Dialect = "org.hibernate.dialect.PostgreSQLDialect";
+                    break;
+                case "com.mysql.cj.jdbc.Driver":
+                    KDriver.Dialect = "org.hibernate.dialect.MySQLDialect";
+                    break;
+                case "oracle.jdbc.driver.OracleDriver":
+                    KDriver.Dialect = "org.hibernate.dialect.OracleDialect";
+                    break;
+                default:
+                    System.out.println("Dialect for driver: " + s + " is not supported yet");
+            }
         }
 
 //        mode.ModeType KEPLOY_MODE = mode.getMode();
