@@ -35,6 +35,7 @@ public class KResultSet implements ResultSet {
 
  private Set<Service.SqlCol> colExists;
 
+ private Set<String> colReallyExists = new HashSet<>();
  private Map<String, String> RowData = new HashMap<>();
 
  private Service.Table TableData;
@@ -85,6 +86,25 @@ public class KResultSet implements ResultSet {
   }
  }
 
+ String HelperRow() {
+  String[] split = new StringBuilder(sb).substring(1, sb.length() - 1).split("\\$");
+  StringBuilder test = new StringBuilder();
+  for (Service.SqlCol sqlCol : CopysqlColList) {
+   colReallyExists.add(sqlCol.getName());
+  }
+  System.out.println(sqlColList.size());
+  int j = 0;
+  for (Service.SqlCol sqlCol : sqlColList) {
+   if (!colReallyExists.contains(sqlCol.getName())) {
+    test.append("NA$");
+    continue;
+   }
+   test.append(split[j++]).append("$");
+  }
+  return test.toString();
+  //apply 2 matrix approach
+ }
+
  String Helper() {
   StringBuilder cols = new StringBuilder();
   for (Service.SqlCol sqlCol : CopysqlColList) {
@@ -99,15 +119,23 @@ public class KResultSet implements ResultSet {
    sb.deleteCharAt(sb.length() - 1);
    sb.insert(0, "[");
    sb.append("]");
-   rowsList.add(sb.toString());
    colIndex = 0;
+   StringBuilder row = new StringBuilder();
+   // TO-Do: fill NA at last in 2D matrix of table in next or close
    if (sqlColList.size() != CopysqlColList.size() || (rowIndex != 0 && maxSizeColList < sqlColList.size())) { // || max size till now is less of sqlCol
     String cols = Helper();
-    meta.put(String.valueOf(rowIndex), cols);
+    row = new StringBuilder(HelperRow());
+    row.deleteCharAt(row.length() - 1);
+    row.insert(0, "[");
+    row.append("]");
+    sb = row;
    }
+
    rowIndex++;
    maxSizeColList = Math.max(maxSizeColList, sqlColList.size());
+   rowsList.add(sb.toString());
   }
+
   sb = new StringBuilder();
  }
 
@@ -139,17 +167,9 @@ public class KResultSet implements ResultSet {
   String s = rows.get(index);
   String[] split = new StringBuilder(s).substring(1, s.length() - 1).split("\\$");
   RowData.clear();
-  String newCol = "";
-  String[] splitCol = new String[0];
-  if (meta.containsKey(String.valueOf(index))) {
-   newCol = meta.get(String.valueOf(index));
-   splitCol = new StringBuilder(newCol).substring(0, newCol.length()).split(",");
-  }
   for (int i = 0; i < split.length; i++) {
    Service.SqlCol col = TableData.getCols(i);
-   if (!newCol.equals("")) {
-    RowData.put(splitCol[i], split[i]);
-   } else {
+   if (!Objects.equals(split[i], "NA")) {
     RowData.put(col.getName(), split[i]);
    }
   }

@@ -150,19 +150,25 @@ public class KAgent {
                 .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
 
-                    System.out.println("Inside RegisterDriverAdvice2 Transformer");
+//                    System.out.println("Inside RegisterDriverAdvice2 Transformer");
                     return builder.method(named("determineDriverClassName"))
                             .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
                 })
                 .type(named("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    System.out.println("Inside HibernateProperties Transformer");
+//                    System.out.println("Inside HibernateProperties Transformer");
                     return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 })
                 .type(named("org.springframework.boot.autoconfigure.orm.jpa.JpaProperties"))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    System.out.println("Inside RegisterDialect Transformer");
+//                    System.out.println("Inside RegisterDialect Transformer");
                     return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                }))
+//               //"org.springframework.boot.actuate.health.Health.Builder"
+                .type(named("org.springframework.boot.actuate.health.Health$Builder"))
+                .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+//                    System.out.println("Inside HealthEndpoint Transformer");
+                    return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
                 .installOn(instrumentation);
     }

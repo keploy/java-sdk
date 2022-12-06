@@ -25,7 +25,6 @@ public class KConnection implements Connection {
 
     }
 
-
     @Override
     public Statement createStatement() throws SQLException {
         Kcontext kctx = Context.getCtx();
