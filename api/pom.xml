@@ -19,7 +19,7 @@
             <groupId>io.keploy</groupId>
             <artifactId>core</artifactId>
             <version>1.0.0-SNAPSHOT</version>
-            <scope>compile</scope>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
@@ -50,6 +50,12 @@
             <groupId>io.keploy</groupId>
             <artifactId>common</artifactId>
             <version>1.0.0-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.10.0</version>
             <scope>compile</scope>
         </dependency>
     </dependencies>
