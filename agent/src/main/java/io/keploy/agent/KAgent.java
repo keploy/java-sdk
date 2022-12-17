@@ -1,16 +1,20 @@
 package io.keploy.agent;
 
+import io.keploy.ksql.KDriver;
+//import io.keploy.regression.Mode;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
+import net.bytebuddy.implementation.FixedValue;
 import net.bytebuddy.implementation.MethodDelegation;
 import net.bytebuddy.pool.TypePool;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.lang.instrument.Instrumentation;
+import java.sql.SQLException;
 import java.util.Objects;
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
@@ -24,9 +28,10 @@ public class KAgent {
 
         logger.debug("inside premain method");
 
+        System.out.println("Inside premain");
         System.out.println(System.getenv("KEPLOY_MODE"));
-//        setMode();
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
+//        KDriver.mode = Mode.ModeType.valueOf(System.getenv("KEPLOY_MODE"));
+        if (System.getenv("KEPLOY_MODE") == null || Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
         }
 
@@ -39,8 +44,8 @@ public class KAgent {
 
         new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
                 .with(new AgentBuilder.InitializationStrategy.SelfInjection.Eager())
+//                .ignore(none())
 //                .with(AgentBuilder.Listener.StreamWriting.toSystemOut())
-
                 //for okhttp client interceptor upto version 2.7.5
                 .type(named(okhttp_java))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
@@ -170,6 +175,22 @@ public class KAgent {
 //                    System.out.println("Inside HealthEndpoint Transformer");
                     return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
+//                .type(named("java.sql.DriverManager"))
+//                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+//                    System.out.println("Inside getDriver Transformer");
+//                    try {
+//                        return builder.method(named("getDriver").and(takesArgument(0, String.class))).intercept(FixedValue.value(new KDriver()));
+//                    } catch (SQLException e) {
+//                        throw new RuntimeException(e);
+//                    }
+//                })
+                .type(named("java.sql.DriverManager"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    System.out.println("INSIDE REGISTER DRIVER of DriverManager TRANSFORMER !!!! ");
+                    return builder.method(named("registerDriver").and(takesArguments(1)))
+                            .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverManagerAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+//                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.ksql.RegisterDriverInterceptor").resolve()));
+                })
                 .installOn(instrumentation);
     }
 }

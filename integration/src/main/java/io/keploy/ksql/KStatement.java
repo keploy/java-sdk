@@ -8,7 +8,8 @@ public class KStatement implements Statement {
     public KStatement(Statement st) {
         wrappedStatement = st;
     }
-    public KStatement(){
+
+    public KStatement() {
 
     }
 

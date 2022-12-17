@@ -9,8 +9,10 @@ import lombok.NoArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
 
 @NoArgsConstructor
 
@@ -61,4 +63,35 @@ public class ProcessSQL {
         }
         return null;
     }
+
+    public static List<String> toRowList(List<Map<String, String>> preTable, List<String> columns) {
+//        System.out.println(preTable+"PRE TABLE");
+        List<String> rows = new ArrayList<>();
+        for (Map<String, String> stringStringMap : preTable) {
+            StringBuilder row = new StringBuilder();
+            for (String column : columns) {
+                if (stringStringMap.get(column) != null) {
+//                    System.out.print(stringStringMap.get(column) + ",");
+                    row.append("`").append(stringStringMap.get(column)).append("`|");
+                } else {
+//                    System.out.print("NA ,");
+                    row.append("`NA`|");
+                }
+            }
+            row.deleteCharAt(row.length() - 1);
+            row.insert(0, "[");
+            row.append("]");
+            rows.add(String.valueOf(row));
+        }
+        return rows;
+    }
+
+    public static List<String> toColumnList(List<Service.SqlCol> sqlColList) {
+        List<String> col = new ArrayList<>();
+        for (Service.SqlCol v : sqlColList) {
+            col.add(v.getName());
+        }
+        return col;
+    }
+
 }

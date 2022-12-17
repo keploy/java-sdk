@@ -4,11 +4,12 @@ import java.sql.*;
 
 public class KDatabaseMetaData implements DatabaseMetaData {
 
-    public DatabaseMetaData  wrappedDatabaseMetaData = null;
+    public DatabaseMetaData wrappedDatabaseMetaData = null;
 
-    KDatabaseMetaData(DatabaseMetaData dbm){
-        wrappedDatabaseMetaData =dbm;
+    KDatabaseMetaData(DatabaseMetaData dbm) {
+        wrappedDatabaseMetaData = dbm;
     }
+
     @Override
     public boolean allProceduresAreCallable() throws SQLException {
         return false;
