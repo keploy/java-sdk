@@ -26,10 +26,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -57,9 +54,9 @@ public class KeployMiddleware implements Filter {
 
         //Path for exported tests
         String kpath = System.getenv("KTEST_PATH");
-
+        Path path = Paths.get("");
         if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
-            Path effectivePath = Paths.get("").resolve(kpath).toAbsolutePath();
+            Path effectivePath = path.resolve(kpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setTestPath(absolutePath);
         } else if (kpath == null || kpath.length() == 0) {
@@ -76,7 +73,7 @@ public class KeployMiddleware implements Filter {
         String mpath = System.getenv("KMOCK_PATH");
 
         if (mpath != null && mpath.length() > 0 && !Paths.get(mpath).isAbsolute()) {
-            Path effectivePath = Paths.get("").resolve(mpath).toAbsolutePath();
+            Path effectivePath = path.resolve(mpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setMockPath(absolutePath);
         } else if (mpath == null || mpath.length() == 0) {
@@ -223,6 +220,11 @@ public class KeployMiddleware implements Filter {
 
         String requestBody = this.getStringValue(reqArr, reqEncoding);
         String responseBody = this.getStringValue(resArr, resEncoding);
+        String resContentType = response.getContentType();
+        if (resContentType != null && resContentType.contains("image")) {
+            logger.debug("request contains image");
+            responseBody = this.getStringValue(Base64.getEncoder().encode(resArr), "UTF-8");
+        }
 
         logger.debug("request body inside middleware: {}", requestBody);
         logger.debug("response body inside middleware: {}", responseBody);
