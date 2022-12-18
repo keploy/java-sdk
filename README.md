@@ -76,8 +76,8 @@ or to *build.gradle*:
     - `DELAY`              (default DELAY = 5)(It is the estimate application startup time (in sec))
     - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:6789/api)
     - `KEPLOY_MODE`        (default KEPLOY_MODE = off)
-    - `KTEST_PATH`         (default **/src/test/e2e/keploy-tests** directory of your application)
-    - `KMOCK_PATH`         (default **/src/test/e2e/mocks directory** of your application)
+    - `KEPLOY_TEST_PATH`         (default **/src/test/e2e/keploy-tests** directory of your application)
+    - `KEPLOY_MOCK_PATH`         (default **/src/test/e2e/mocks directory** of your application)
     - `DENOISE`            (default DENOISE = false)
       **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = true)
