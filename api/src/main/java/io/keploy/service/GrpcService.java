@@ -543,20 +543,20 @@ public class GrpcService {
             case "GET":
                 return reqBuilder.get()
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             case "DELETE":
                 return reqBuilder.delete()
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             default:
                 return reqBuilder.method(method, RequestBody.create(body.getBytes(StandardCharsets.UTF_8)))
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
         }
     }

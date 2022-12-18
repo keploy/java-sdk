@@ -139,7 +139,6 @@ public class KStatement implements Statement {
 
     @Override
     public void addBatch(String sql) throws SQLException {
-        System.out.println("Mocked KStatement !");
         wrappedStatement.addBatch(sql);
     }
 
@@ -150,7 +149,6 @@ public class KStatement implements Statement {
 
     @Override
     public int[] executeBatch() throws SQLException {
-        System.out.println("hrelp");
         return wrappedStatement.executeBatch();
     }
 

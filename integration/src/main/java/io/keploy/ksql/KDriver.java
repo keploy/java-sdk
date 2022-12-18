@@ -5,6 +5,7 @@ import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import oracle.jdbc.driver.OracleDriver;
+import org.apache.logging.log4j.LogManager;
 
 import java.sql.*;
 import java.util.*;
@@ -35,14 +36,14 @@ public class KDriver implements Driver {
     private String _lastInsertId = "-1";
     public static Mode.ModeType testMode = Mode.ModeType.MODE_TEST;
     public static Mode.ModeType recordMode = Mode.ModeType.MODE_RECORD;
-    Logger logger = Logger.getLogger(KDriver.class.getName());
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KDriver.class);
     public KDriver(Driver driver) {
         if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
             mode = Mode.ModeType.MODE_RECORD;
         } else if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
             mode = Mode.ModeType.MODE_TEST;
         }
-        logger.log(Level.INFO,"Keploy Driver Init");
+        logger.debug("KEPLOY DRIVER INITIALIZE");
 
         this.wrappedDriver = driver;
     }
@@ -50,12 +51,10 @@ public class KDriver implements Driver {
     public static void WrapDriver() throws SQLException {
         final Enumeration<Driver> drivers = DriverManager.getDrivers();
         ArrayList<Driver> list = Collections.list(drivers);
-        System.out.println("Number of Drivers outside loop in wrapDriver:" + list
+        logger.debug("Number of Drivers to wrap:{}", list
                 .size());
         for (Driver dr : list) {
-            System.out.println("Registering Driver:" + dr);
-            System.out.println("Number of Drivers inside loop in wrapDriver:" + list
-                    .size());
+            logger.debug("wrapping and registering driver:{}", dr);
             DriverManager.deregisterDriver(dr);
             DriverManager.registerDriver(new KDriver(dr));
         }

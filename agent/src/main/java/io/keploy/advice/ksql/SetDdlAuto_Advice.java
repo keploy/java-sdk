@@ -14,6 +14,6 @@ public class SetDdlAuto_Advice {
 
     @Advice.OnMethodExit
     public static void exitMethod(@Advice.Origin Method method) {
-        System.out.println("exit advice -> " + method);
+//        System.out.println("exit advice -> " + method);
     }
 }
