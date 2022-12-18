@@ -6,7 +6,6 @@ public class HaltThread {
     private static volatile HaltThread haltThread;
     private final CountDownLatch countDownLatch;
 
-
     private HaltThread() {
         countDownLatch = new CountDownLatch(2);
     }
