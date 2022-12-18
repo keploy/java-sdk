@@ -2,11 +2,11 @@ package io.keploy.advice.ksql;
 
 import io.keploy.ksql.KDriver;
 import net.bytebuddy.asm.Advice;
-import org.springframework.stereotype.Component;
+//import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 
-@Component
+//@Component
 public class RegisterDriverAdvice {
 
     @Advice.OnMethodEnter
