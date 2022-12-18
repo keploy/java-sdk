@@ -203,7 +203,10 @@ public class KeployMiddleware implements Filter {
         if (keploy_test_id != null) {
             kctx.setTestId(keploy_test_id);
             kctx.setMode(Mode.ModeType.MODE_TEST);
-            kctx.getMock().addAll(k.getMocks().get(keploy_test_id));
+            List<Service.Mock> mocks = k.getMocks().get(keploy_test_id);
+            if (mocks!=null){
+                kctx.getMock().addAll(mocks);
+            }
         }
 
 

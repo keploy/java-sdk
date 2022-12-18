@@ -6,6 +6,7 @@ import net.bytebuddy.asm.Advice;
 import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
+import net.bytebuddy.implementation.FixedValue;
 import net.bytebuddy.implementation.MethodDelegation;
 import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.pool.TypePool;
@@ -15,6 +16,8 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
+import java.sql.Driver;
+import java.util.Objects;
 import java.util.jar.JarFile;
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
@@ -26,6 +29,11 @@ public class KAgent {
     public static void premain(String arg, Instrumentation instrumentation) {
 
         logger.debug("inside premain method");
+        logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
+        if (System.getenv("KEPLOY_MODE") == null || Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
+            return;
+        }
+
 
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
@@ -138,6 +146,34 @@ public class KAgent {
 //                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe(internalAsyncInterceptor).resolve()));
 //
 //                })
+                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("Inside RegisterDriverAdvice1 Transformer");
+                    return builder.method(named("setDriverClassName"))
+                            .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("Inside RegisterDriverAdvice2 Transformer");
+                    return builder.method(named("determineDriverClassName"))
+                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("Inside HibernateProperties Transformer");
+                    return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.orm.jpa.JpaProperties"))
+                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    logger.debug("Inside RegisterDialect Transformer");
+                    return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                }))
+//               //"org.springframework.boot.actuate.health.Health.Builder"
+                .type(named("org.springframework.boot.actuate.health.Health$Builder"))
+                .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("Inside HealthEndpoint Transformer");
+                    return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                }))
                 .installOn(instrumentation);
     }
 }

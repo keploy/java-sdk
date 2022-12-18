@@ -276,8 +276,9 @@ public class GrpcService {
     }
 
     public static void Test() {
+        String delay = "5";
         try {
-            String delay = System.getenv("DELAY");
+            delay = System.getenv("DELAY");
             if (delay != null) {
                 k.getCfg().getApp().setDelay(Duration.ofSeconds(Long.parseLong(delay)));
             }
@@ -286,7 +287,7 @@ public class GrpcService {
             logger.error(CROSS + " (Test): unable to sleep", e);
         }
         logger.debug("entering test mode");
-        logger.info("test starting in 5 sec");
+        logger.info("test starting in " + delay + " sec");
 
         List<Service.TestCase> tcs = fetch();
 
@@ -542,20 +543,20 @@ public class GrpcService {
             case "GET":
                 return reqBuilder.get()
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             case "DELETE":
                 return reqBuilder.delete()
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             default:
                 return reqBuilder.method(method, RequestBody.create(body.getBytes(StandardCharsets.UTF_8)))
                         .url(targetUrl)
-                        .addHeader("content-type", "application/json")
-                        .addHeader("accept", "application/json")
+//                        .addHeader("content-type", "application/json")
+//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
         }
     }
