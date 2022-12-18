@@ -7,8 +7,7 @@ import io.keploy.regression.context.Kcontext;
 import oracle.jdbc.driver.OracleDriver;
 
 import java.sql.*;
-import java.util.Objects;
-import java.util.Properties;
+import java.util.*;
 import java.util.logging.Logger;
 
 public class KDriver implements java.sql.Driver {
@@ -37,6 +36,20 @@ public class KDriver implements java.sql.Driver {
 
     public KDriver(Driver driver) {
         this.wrappedDriver = driver;
+    }
+
+    public static void WrapDriver() throws SQLException {
+        final Enumeration<Driver> drivers = DriverManager.getDrivers();
+        ArrayList<Driver> list = Collections.list(drivers);
+        System.out.println("Number of Drivers outside loop in wrapDriver:" + list
+                .size());
+        for (Driver dr : list) {
+            System.out.println("Registering Driver:" + dr);
+            System.out.println("Number of Drivers inside loop in wrapDriver:" + list
+                    .size());
+            DriverManager.deregisterDriver(dr);
+            DriverManager.registerDriver(new KDriver(dr));
+        }
     }
 
     public KDriver() throws SQLException {

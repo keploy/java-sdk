@@ -198,7 +198,7 @@ public class KResultSet implements ResultSet {
             tableBuilder.addAllCols(sqlColList);
             cols = ProcessSQL.toColumnList(sqlColList);
             tableRows = ProcessSQL.toRowList(preTable, cols);
-            System.out.println(tableRows);
+//            System.out.println(tableRows);
             tableBuilder.addAllRows(tableRows);
             Service.Table table = tableBuilder.build();
             System.out.println(table);
@@ -232,13 +232,15 @@ public class KResultSet implements ResultSet {
     @Override
     public String getString(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        if (kctx == null) {
-            if (mode == recordMode) {
-                return wrappedResultSet.getString(columnIndex);
-            }
+        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return RowData.get(String.valueOf(columnIndex));
         }
-        String x = wrappedResultSet.getString(columnIndex);
-        return x;
+        String gs = wrappedResultSet.getString(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
+        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        return gs;
     }
 
     @Override
@@ -424,7 +426,6 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             if (RowData.get(columnLabel) == null || Integer.parseInt(RowData.get(columnLabel)) == 0) {
                 wasNull = true;
-                System.out.println(columnLabel);
                 return 0;
             }
             int x = Integer.parseInt(RowData.get(columnLabel));
@@ -501,7 +502,6 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
-            System.out.println(RowData.get(columnLabel));
             if (RowData.get(columnLabel) == null) {
                 wasNull = true;
                 return null;

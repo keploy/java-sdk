@@ -18,7 +18,6 @@ import static io.keploy.ksql.KDriver.*;
 public class KConnection implements Connection {
 
     private Connection wrappedCon = null;
-    static int FirstTime = 0;
 
     public KConnection(Connection connection) {
         this.wrappedCon = connection;
@@ -754,7 +753,7 @@ public class KConnection implements Connection {
         }
         Mode.ModeType mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
-        FirstTime++;
+
         switch (mode) {
             case MODE_TEST:
                 // don't run
