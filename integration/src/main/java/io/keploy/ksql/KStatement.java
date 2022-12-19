@@ -15,7 +15,7 @@ public class KStatement implements Statement {
 
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
-        System.out.println("mocked execute Query !!");
+//        System.out.println("mocked execute Query !!");
         ResultSet _rs = wrappedStatement.executeQuery(sql);
         ResultSet krs = new KResultSet(_rs);
         return krs;

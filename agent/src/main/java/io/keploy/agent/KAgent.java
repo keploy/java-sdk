@@ -14,11 +14,10 @@ import org.apache.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
 import java.lang.instrument.Instrumentation;
-import java.sql.Driver;
+import java.sql.DatabaseMetaData;
 import java.util.Objects;
-import java.util.jar.JarFile;
+
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
@@ -173,6 +172,11 @@ public class KAgent {
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside HealthEndpoint Transformer");
                     return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                }))
+                .type(named("com.mchange.v2.c3p0.impl.NewProxyDatabaseMetaData"))
+                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    logger.debug("Inside DatabaseMetaData transformer");
+                    return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
                 .installOn(instrumentation);
     }
