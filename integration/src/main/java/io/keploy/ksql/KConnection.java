@@ -19,7 +19,6 @@ public class KConnection implements Connection {
     private Connection wrappedCon = null;
 
     public KConnection(Connection connection) {
-        System.out.println("init kconnection");
         this.wrappedCon = connection;
     }
 

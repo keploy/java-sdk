@@ -6,8 +6,12 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     public DatabaseMetaData wrappedDatabaseMetaData = null;
 
-    KDatabaseMetaData(DatabaseMetaData dbm) {
+    public KDatabaseMetaData(DatabaseMetaData dbm) {
         wrappedDatabaseMetaData = dbm;
+    }
+
+    public KDatabaseMetaData() {
+
     }
 
     @Override
@@ -97,7 +101,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsMixedCaseIdentifiers() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -117,7 +121,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsMixedCaseQuotedIdentifiers() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -172,22 +176,22 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getExtraNameCharacters() throws SQLException {
-        return null;
+        return "";
     }
 
     @Override
     public boolean supportsAlterTableWithAddColumn() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsAlterTableWithDropColumn() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsColumnAliasing() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -197,117 +201,117 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsConvert() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsConvert(int fromType, int toType) throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsTableCorrelationNames() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsDifferentTableCorrelationNames() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsExpressionsInOrderBy() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOrderByUnrelated() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsGroupBy() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsGroupByUnrelated() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsGroupByBeyondSelect() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsLikeEscapeClause() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsMultipleResultSets() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsMultipleTransactions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsNonNullableColumns() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsMinimumSQLGrammar() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCoreSQLGrammar() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsExtendedSQLGrammar() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsANSI92EntryLevelSQL() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsANSI92IntermediateSQL() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsANSI92FullSQL() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsIntegrityEnhancementFacility() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOuterJoins() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsFullOuterJoins() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsLimitedOuterJoins() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -337,127 +341,127 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsSchemasInDataManipulation() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSchemasInProcedureCalls() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSchemasInTableDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSchemasInIndexDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSchemasInPrivilegeDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCatalogsInDataManipulation() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCatalogsInProcedureCalls() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCatalogsInTableDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCatalogsInIndexDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCatalogsInPrivilegeDefinitions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsPositionedDelete() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsPositionedUpdate() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSelectForUpdate() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsStoredProcedures() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSubqueriesInComparisons() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSubqueriesInExists() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSubqueriesInIns() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsSubqueriesInQuantifieds() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsCorrelatedSubqueries() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsUnion() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsUnionAll() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOpenCursorsAcrossCommit() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOpenCursorsAcrossRollback() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOpenStatementsAcrossCommit() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsOpenStatementsAcrossRollback() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -572,22 +576,22 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsTransactions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsTransactionIsolationLevel(int level) throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsDataDefinitionAndDataManipulationTransactions() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsDataManipulationTransactionsOnly() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -677,7 +681,6 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getTypeInfo() throws SQLException {
-        System.out.println("Inside Get Type INFO ::");
         return new KResultSet(wrappedDatabaseMetaData.getTypeInfo());
     }
 
@@ -688,12 +691,12 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsResultSetType(int type) throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsResultSetConcurrency(int type, int concurrency) throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -743,7 +746,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsBatchUpdates() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -758,22 +761,22 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsSavepoints() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsNamedParameters() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsMultipleOpenResults() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
     public boolean supportsGetGeneratedKeys() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -793,7 +796,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsResultSetHoldability(int holdability) throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -833,7 +836,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsStatementPooling() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override
@@ -848,7 +851,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsStoredFunctionsUsingCallSyntax() throws SQLException {
-        return false;
+        return true;
     }
 
     @Override

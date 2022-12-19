@@ -538,7 +538,7 @@ public class KPreparedStatement implements PreparedStatement {
 
     @Override
     public boolean execute() throws SQLException {
-        System.out.println("Executed ");
+//        System.out.println("Executed ");
         return wrappedPreparedStatement.execute();
     }
 
@@ -595,7 +595,6 @@ public class KPreparedStatement implements PreparedStatement {
 
     @Override
     public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {
-        System.out.println("second null");
         wrappedPreparedStatement.setNull(parameterIndex, sqlType);
     }
 

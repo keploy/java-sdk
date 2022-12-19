@@ -201,7 +201,7 @@ public class KResultSet implements ResultSet {
 //            System.out.println(tableRows);
             tableBuilder.addAllRows(tableRows);
             Service.Table table = tableBuilder.build();
-            System.out.println(table);
+//            System.out.println(table);
             try {
                 meta.put("method", "close()");
                 ProcessSQL.ProcessDep(meta, table, 0);
@@ -329,7 +329,6 @@ public class KResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        System.out.println("getDate is Here ----");
         return wrappedResultSet.getDate(columnIndex);
     }
 
