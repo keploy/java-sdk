@@ -204,7 +204,7 @@ public class KeployMiddleware implements Filter {
             kctx.setTestId(keploy_test_id);
             kctx.setMode(Mode.ModeType.MODE_TEST);
             List<Service.Mock> mocks = k.getMocks().get(keploy_test_id);
-            if (mocks!=null){
+            if (mocks != null) {
                 kctx.getMock().addAll(mocks);
             }
         }
@@ -256,6 +256,11 @@ public class KeployMiddleware implements Filter {
             InternalThreadLocalMap.remove();
             logger.debug("response in keploy resp map: {}", k.getResp().get(keploy_test_id));
         } else {
+            Mode.ModeType mode = Mode.getMode();
+            // to prevent recording testcases in test mode.
+            if (mode != null && mode.equals(Mode.ModeType.MODE_TEST)) {
+                return;
+            }
 
             Map<String, String> urlParams = setUrlParams(requestWrapper.getParameterMap());
 

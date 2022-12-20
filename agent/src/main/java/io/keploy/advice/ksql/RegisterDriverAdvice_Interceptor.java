@@ -17,7 +17,6 @@ public class RegisterDriverAdvice_Interceptor {
 //        System.out.println("determineDriverClassName returns : " + s);
         if (s != null && !s.equals("io.keploy.ksql.KDriver")) {
             KDriver.DriverName = s;
-
             switch (s) {
                 case "org.postgresql.Driver":
                     KDriver.Dialect = "org.hibernate.dialect.PostgreSQLDialect";
@@ -27,6 +26,9 @@ public class RegisterDriverAdvice_Interceptor {
                     break;
                 case "oracle.jdbc.driver.OracleDriver":
                     KDriver.Dialect = "org.hibernate.dialect.OracleDialect";
+                    break;
+                case "org.h2.Driver":
+                    KDriver.Dialect = "org.hibernate.dialect.H2Dialect";
                     break;
                 default:
                     System.out.println("Dialect for driver: " + s + " is not supported yet");
