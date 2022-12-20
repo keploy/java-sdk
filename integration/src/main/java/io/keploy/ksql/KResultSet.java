@@ -105,6 +105,7 @@ public class KResultSet implements ResultSet {
         }
 
         TableData = testTable;
+//        System.out.println("Table: " + testTable);
     }
 
     // Used in test mode for extracting single row in the form of string from mocks
@@ -308,12 +309,30 @@ public class KResultSet implements ResultSet {
 
     @Override
     public float getFloat(int columnIndex) throws SQLException {
-        return wrappedResultSet.getFloat(columnIndex);
+        Kcontext kctx = Context.getCtx();
+        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return Float.parseFloat(RowData.get(String.valueOf(columnIndex)));
+        }
+        Float gs = wrappedResultSet.getFloat(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
+        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        return gs;
     }
 
     @Override
     public double getDouble(int columnIndex) throws SQLException {
-        return wrappedResultSet.getDouble(columnIndex);
+        Kcontext kctx = Context.getCtx();
+        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return Double.parseDouble(RowData.get(String.valueOf(columnIndex)));
+        }
+        Double gs = wrappedResultSet.getDouble(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
+        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        return gs;
     }
 
     @Override
@@ -620,12 +639,30 @@ public class KResultSet implements ResultSet {
 
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
-        return wrappedResultSet.getBigDecimal(columnIndex);
+        Kcontext kctx = Context.getCtx();
+        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return new BigDecimal(Double.parseDouble(RowData.get(String.valueOf(columnIndex))));
+        }
+        BigDecimal gs = wrappedResultSet.getBigDecimal(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
+        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        return gs;
     }
 
     @Override
     public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
-        return wrappedResultSet.getBigDecimal(columnLabel);
+        Kcontext kctx = Context.getCtx();
+        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return new BigDecimal(Double.parseDouble(RowData.get(columnLabel)));
+        }
+        BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
+        RowDict.put(columnLabel, String.valueOf(gl));
+        addSqlColToList(columnLabel, gl.getClass().getSimpleName());
+        return gl;
     }
 
     @Override

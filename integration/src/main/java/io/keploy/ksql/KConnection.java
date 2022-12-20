@@ -113,7 +113,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -136,7 +135,6 @@ public class KConnection implements Connection {
             }
             return false;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         boolean rs = false;
         switch (mode) {
@@ -162,7 +160,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -186,7 +183,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -217,7 +213,6 @@ public class KConnection implements Connection {
             }
             return true;
         }
-        Mode.ModeType mode = kctx.getMode();
         boolean rs = true;
         switch (mode) {
             case MODE_TEST:
@@ -242,7 +237,6 @@ public class KConnection implements Connection {
             }
             return new KDatabaseMetaData(Mockito.mock(DatabaseMetaData.class));
         }
-        Mode.ModeType mode = kctx.getMode();
 
         DatabaseMetaData rs = null;
         switch (mode) {
@@ -268,7 +262,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -288,11 +281,10 @@ public class KConnection implements Connection {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
-                wrappedCon.isReadOnly();
+                return wrappedCon.isReadOnly();
             }
-            return true;
+            return false;
         }
-        Mode.ModeType mode = kctx.getMode();
         boolean rs = false;
 
         switch (mode) {
@@ -318,7 +310,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
 
         switch (mode) {
@@ -352,7 +343,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -375,7 +365,6 @@ public class KConnection implements Connection {
             }
             return 2;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         int rs = 2;
         switch (mode) {
@@ -401,7 +390,6 @@ public class KConnection implements Connection {
             }
             return null;
         }
-        Mode.ModeType mode = kctx.getMode();
         SQLWarning rs = null;
         switch (mode) {
             case MODE_TEST:
@@ -426,7 +414,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -450,7 +437,6 @@ public class KConnection implements Connection {
             Statement resultSet = Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
 
         Statement rs = new KStatement();
         switch (mode) {
@@ -476,7 +462,6 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-        Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
@@ -503,7 +488,6 @@ public class KConnection implements Connection {
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
 
         CallableStatement rs = new KCallableStatement();
         switch (mode) {
@@ -528,7 +512,6 @@ public class KConnection implements Connection {
             }
             return null;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         Map<String, Class<?>> rs = null;
         switch (mode) {
@@ -555,7 +538,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
 
         switch (mode) {
@@ -580,7 +562,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -603,7 +584,6 @@ public class KConnection implements Connection {
             }
             return 0;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         int rs = 0;
         switch (mode) {
@@ -640,7 +620,6 @@ public class KConnection implements Connection {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
 
 
         switch (mode) {
@@ -670,7 +649,6 @@ public class KConnection implements Connection {
             Statement resultSet = Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
 
         Statement rs = new KStatement();
         switch (mode) {
@@ -696,7 +674,6 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-        Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
@@ -723,7 +700,6 @@ public class KConnection implements Connection {
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
 
         CallableStatement rs = new KCallableStatement();
         switch (mode) {
@@ -750,7 +726,6 @@ public class KConnection implements Connection {
             PreparedStatement resultSet = Mockito.mock(PreparedStatement.class);
             return new KPreparedStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
 
         switch (mode) {
@@ -777,7 +752,6 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-        Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
@@ -803,7 +777,6 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-        Mode.ModeType mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
@@ -849,7 +822,6 @@ public class KConnection implements Connection {
             }
             return true;
         }
-        Mode.ModeType mode = kctx.getMode();
 
         boolean rs = true;
         switch (mode) {
