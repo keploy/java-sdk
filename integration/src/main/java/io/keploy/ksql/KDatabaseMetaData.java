@@ -1,10 +1,14 @@
 package io.keploy.ksql;
 
+import org.apache.logging.log4j.LogManager;
+
 import java.sql.*;
 
 public class KDatabaseMetaData implements DatabaseMetaData {
 
     public DatabaseMetaData wrappedDatabaseMetaData = null;
+
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KDatabaseMetaData.class);
 
     public KDatabaseMetaData(DatabaseMetaData dbm) {
         wrappedDatabaseMetaData = dbm;

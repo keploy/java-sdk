@@ -6,6 +6,7 @@ import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.utils.ProcessSQL;
+import org.apache.logging.log4j.LogManager;
 import org.mockito.Mockito;
 
 import java.io.InputStream;
@@ -38,6 +39,8 @@ public class KResultSet implements ResultSet {
     List<String> tableRows = new ArrayList<>();
 
     private Map<String, String> RowDict = new HashMap<>();
+
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSet.class);
     private Service.Table TableData;
     boolean select = false;
     boolean wasNull = true;
@@ -161,11 +164,12 @@ public class KResultSet implements ResultSet {
                     tableBuilder.addAllCols(sqlColList);
                     cols = ProcessSQL.toColumnList(sqlColList);
                     tableRows = ProcessSQL.toRowList(preTable, cols);
-                    System.out.println(tableRows);
+//                    System.out.println(tableRows);
                     tableBuilder.addAllRows(tableRows);
                     Service.Table table = tableBuilder.build();
                     try {
                         meta.put("method", "next()");
+                        meta.put("SQL-Query", KConnection.MyQuery);
                         ProcessSQL.ProcessDep(meta, table, 0);
                     } catch (InvalidProtocolBufferException e) {
                         throw new RuntimeException(e);
@@ -206,6 +210,7 @@ public class KResultSet implements ResultSet {
             try {
                 meta.put("method", "close()");
                 ProcessSQL.ProcessDep(meta, table, 0);
+                meta.put("SQL-Query", KConnection.MyQuery);
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }

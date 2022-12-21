@@ -9,7 +9,6 @@ import org.apache.logging.log4j.LogManager;
 
 import java.sql.*;
 import java.util.*;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class KDriver implements Driver {
@@ -99,10 +98,11 @@ public class KDriver implements Driver {
     @Override
     public Connection connect(String url, Properties info) throws SQLException {
 
-        if (Objects.equals(DriverName, "org.h2.Driver")) {
-            return wrappedDriver.connect(url, info);
-        }
         if (mode == testMode) {
+            if (Objects.equals(DriverName, "org.h2.Driver")) {
+                logger.info("starting test connection for H2 ");
+                return wrappedDriver.connect(url, info);
+            }
             return new KConnection();
         }
         Connection conn = null;
@@ -130,7 +130,7 @@ public class KDriver implements Driver {
 
     @Override
     public int getMajorVersion() {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 1;
         }
         return wrappedDriver.getMajorVersion();
@@ -139,15 +139,15 @@ public class KDriver implements Driver {
 
     @Override
     public int getMinorVersion() {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
-            return 1;
+        if (mode == testMode) {
+            return 0;
         }
         return wrappedDriver.getMinorVersion();
     }
 
     @Override
     public boolean jdbcCompliant() {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return true;
         }
         return wrappedDriver.jdbcCompliant();

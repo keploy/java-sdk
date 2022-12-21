@@ -4,7 +4,6 @@ import io.keploy.ksql.KDriver;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 
-
 import java.lang.reflect.Method;
 import java.util.concurrent.Callable;
 
@@ -34,12 +33,6 @@ public class RegisterDriverAdvice_Interceptor {
                     System.out.println("Dialect for driver: " + s + " is not supported yet");
             }
         }
-
-//        mode.ModeType KEPLOY_MODE = mode.getMode();
-//        System.out.println(KEPLOY_MODE);
-//        if (KEPLOY_MODE.equals(mode.ModeType.MODE_OFF)){
-//            return "";
-//        }
         return "io.keploy.ksql.KDriver";
     }
 }

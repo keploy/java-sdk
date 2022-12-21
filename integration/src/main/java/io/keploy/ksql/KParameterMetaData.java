@@ -4,6 +4,9 @@ import java.sql.ParameterMetaData;
 import java.sql.SQLException;
 import java.util.Objects;
 
+import static io.keploy.ksql.KDriver.mode;
+import static io.keploy.ksql.KDriver.testMode;
+
 public class KParameterMetaData implements ParameterMetaData {
     ParameterMetaData wrappedParameterMetaData;
 
@@ -13,7 +16,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int getParameterCount() throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.getParameterCount();
@@ -21,7 +24,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int isNullable(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.isNullable(param);
@@ -29,7 +32,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public boolean isSigned(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return true;
         }
         return wrappedParameterMetaData.isSigned(param);
@@ -37,7 +40,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int getPrecision(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.getPrecision(param);
@@ -45,7 +48,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int getScale(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.getScale(param);
@@ -53,7 +56,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int getParameterType(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.getParameterType(param);
@@ -61,7 +64,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public String getParameterTypeName(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return "";
         }
         return wrappedParameterMetaData.getParameterTypeName(param);
@@ -69,7 +72,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public String getParameterClassName(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return "";
         }
         return wrappedParameterMetaData.getParameterClassName(param);
@@ -77,7 +80,7 @@ public class KParameterMetaData implements ParameterMetaData {
 
     @Override
     public int getParameterMode(int param) throws SQLException {
-        if (Objects.equals(System.getenv("KEPLOY_MODE"), "test")) {
+        if (mode == testMode) {
             return 0;
         }
         return wrappedParameterMetaData.getParameterMode(param);
