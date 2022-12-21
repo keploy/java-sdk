@@ -3,6 +3,7 @@ package io.keploy.ksql;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import org.apache.logging.log4j.LogManager;
 import org.mockito.Mockito;
 
 import java.io.InputStream;
@@ -17,6 +18,8 @@ import static io.keploy.ksql.KDriver.*;
 public class KPreparedStatement implements PreparedStatement {
     PreparedStatement wrappedPreparedStatement;
     Kcontext kctx = null;
+
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KPreparedStatement.class);
 
     public KPreparedStatement(PreparedStatement pst) {
         kctx = Context.getCtx();

@@ -3,6 +3,7 @@ package io.keploy.ksql;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import org.apache.logging.log4j.LogManager;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -10,6 +11,7 @@ import java.sql.SQLException;
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
 
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSetMetaData.class);
     public KResultSetMetaData(ResultSetMetaData getMetaData) {
         wrappedResultSetMetaData = getMetaData;
     }

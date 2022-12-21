@@ -281,6 +281,8 @@ public class GrpcService {
             delay = System.getenv("DELAY");
             if (delay != null) {
                 k.getCfg().getApp().setDelay(Duration.ofSeconds(Long.parseLong(delay)));
+            } else {
+                delay = "5";
             }
             TimeUnit.SECONDS.sleep(k.getCfg().getApp().getDelay().getSeconds());
         } catch (InterruptedException e) {
