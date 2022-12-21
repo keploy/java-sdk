@@ -145,6 +145,15 @@ public class KAgent {
 //                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe(internalAsyncInterceptor).resolve()));
 //
 //                })
+                //for google-maps-services
+                .type(named(okHttpPendingResult))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("inside GoogleMapsInterceptor transformer");
+                    System.out.println("[java-sdk]:Inside google-maps OkHttpPendingResult transformer");
+                    return builder
+                            .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
+                            .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
                 .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside RegisterDriverAdvice1 Transformer");
