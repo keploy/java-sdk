@@ -1,6 +1,5 @@
 package io.keploy.ksql;
 
-import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import org.apache.logging.log4j.LogManager;
@@ -40,7 +39,7 @@ public class KPreparedStatement implements PreparedStatement {
             ResultSet resultSet = Mockito.mock(ResultSet.class);
             return new KResultSet(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         ResultSet rs = new KResultSet();
         switch (mode) {
             case MODE_TEST:
@@ -66,7 +65,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return 0;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         int rs = 1;
         switch (mode) {
@@ -91,7 +90,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -116,7 +115,7 @@ public class KPreparedStatement implements PreparedStatement {
             return;
         }
 
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -139,7 +138,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -163,7 +162,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -187,7 +186,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -211,7 +210,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -234,7 +233,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -258,7 +257,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -281,7 +280,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -305,7 +304,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -329,7 +328,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -353,7 +352,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -377,7 +376,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -400,7 +399,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -423,7 +422,7 @@ public class KPreparedStatement implements PreparedStatement {
             }
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -444,7 +443,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -464,7 +463,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -484,7 +483,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -504,7 +503,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -524,7 +523,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         switch (mode) {
             case MODE_TEST:
@@ -723,7 +722,7 @@ public class KPreparedStatement implements PreparedStatement {
         if (kctx == null) {
             return;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
 
         switch (mode) {
@@ -882,7 +881,7 @@ public class KPreparedStatement implements PreparedStatement {
             ResultSet resultSet = Mockito.mock(ResultSet.class);
             return new KResultSet(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         ResultSet rs = new KResultSet();
         switch (mode) {
