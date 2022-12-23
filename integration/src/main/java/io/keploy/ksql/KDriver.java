@@ -4,7 +4,7 @@ package io.keploy.ksql;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
-import oracle.jdbc.driver.OracleDriver;
+import oracle.jdbc.OracleDriver;
 import org.apache.logging.log4j.LogManager;
 
 import java.sql.*;
@@ -66,6 +66,11 @@ public class KDriver implements Driver {
             mode = Mode.ModeType.MODE_TEST;
         }
         wrappedDriver = getWrappedDriver();
+        // set record mode as
+        if (Objects.equals(DriverName, "org.h2.Driver")) {
+            logger.info("starting test connection for H2 ");
+            mode = recordMode;
+        }
     }
 
     private Driver getWrappedDriver() throws SQLException {
@@ -83,6 +88,9 @@ public class KDriver implements Driver {
                 d = new org.h2.Driver();
                 break;
             case "oracle.jdbc.driver.OracleDriver":
+                d = new oracle.jdbc.driver.OracleDriver();
+                break;
+            case "oracle.jdbc.OracleDriver":
                 d = new OracleDriver();
                 break;
             case "org.mariadb.jdbc.Driver":
@@ -99,10 +107,6 @@ public class KDriver implements Driver {
     public Connection connect(String url, Properties info) throws SQLException {
 
         if (mode == testMode) {
-            if (Objects.equals(DriverName, "org.h2.Driver")) {
-                logger.info("starting test connection for H2 ");
-                return wrappedDriver.connect(url, info);
-            }
             return new KConnection();
         }
         Connection conn = null;

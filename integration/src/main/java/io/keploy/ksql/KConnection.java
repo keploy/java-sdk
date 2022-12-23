@@ -64,7 +64,7 @@ public class KConnection implements Connection {
             PreparedStatement resultSet = Mockito.mock(PreparedStatement.class);
             return new KPreparedStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         logger.debug("KPrepared statement after setting context with query" + sql);
         PreparedStatement ps = new KPreparedStatement();
         switch (mode) {
@@ -91,7 +91,7 @@ public class KConnection implements Connection {
             CallableStatement resultSet = Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         CallableStatement rs = null;
         switch (mode) {

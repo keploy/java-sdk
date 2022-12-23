@@ -43,21 +43,21 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.1.6)
+      <version>N.N.N</version> (eg: 1.2.1)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.1.6)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.1)
 
 ## Usage
 
 - **Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)**
 
 - **For Spring based application**
-  - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
+    - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
 - **For Java EE application**
-    - Specify the below filter above all other filters and servlets in the **web.xml** file. 
+    - Specify the below filter above all other filters and servlets in the **web.xml** file.
       ```xml
         <filter>
             <filter-name>middleware</filter-name>
@@ -69,7 +69,17 @@ or to *build.gradle*:
         </filter-mapping>
       ```
 
-
+- **Run along with agent to mock external calls of your API 🤩🔥**
+    - Download the latest - Download the latest agent jar
+      from [here](https://search.maven.org/artifact/io.keploy/agent/1.2.1/jar)  (eg: 1.2.1)
+    - Prefix `-javaagent:` with absolute classpath of agent jar for
+      ex: `-javaagent:/Users/gouravkumar/Desktop/Rough-work/agent-1.2.1.jar`
+    - Using Intellij : Go to Edit Configuration-> add VM options -> paste _java agent_ edited above .
+    - Using Command Line : `export JAVA_OPTS="$JAVA_OPTS -javaagent:
+      /Users/gouravkumar/Desktop/Rough-work/agent-1.2.1.jar"`
+    - For Running via Tomcat Server :
+      -> `export CATALINA_OPTS="$CATALINA_OPTS -javaagent:
+      /Users/gouravkumar/Desktop/Keploy/Keploy-SDK's/java-sdk/agent/target/agent-1.2.1.jar "`
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
     - `APP_PORT`           (default APP_PORT = 8080)

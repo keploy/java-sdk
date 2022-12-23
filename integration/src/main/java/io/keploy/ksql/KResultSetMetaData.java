@@ -8,6 +8,8 @@ import org.apache.logging.log4j.LogManager;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
+import static io.keploy.ksql.KDriver.mode;
+
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
 
@@ -18,8 +20,8 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getColumnCount() throws SQLException {
-        Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Kcontext kctx = Context.getCtx();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return Integer.parseInt(KResultSet.meta.get("getColumnCount"));
         }

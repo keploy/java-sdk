@@ -48,6 +48,10 @@ public class KResultSet implements ResultSet {
     private int index = 0;
 
     public KResultSet(ResultSet rs) {
+        if (Objects.equals(DriverName, "org.h2.Driver")) {
+            logger.info("starting test connection for H2 ");
+            mode = testMode;
+        }
         sqlColList = new ArrayList<>();
 
         colExists = new HashSet<>();
@@ -59,7 +63,7 @@ public class KResultSet implements ResultSet {
 
         Kcontext kctx = Context.getCtx();
         if (kctx != null) {
-            if (kctx.getMode() == Mode.ModeType.MODE_TEST) {
+            if (mode == Mode.ModeType.MODE_TEST) {
                 rs = Mockito.mock(ResultSet.class);
             }
         }
@@ -147,7 +151,7 @@ public class KResultSet implements ResultSet {
             }
             return false;
         }
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 
         boolean hasNext = false;
         switch (mode) {
@@ -227,7 +231,7 @@ public class KResultSet implements ResultSet {
             }
         }
         assert kctx != null;
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return wasNull;
         }
@@ -238,7 +242,7 @@ public class KResultSet implements ResultSet {
     @Override
     public String getString(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return RowData.get(String.valueOf(columnIndex));
@@ -287,7 +291,7 @@ public class KResultSet implements ResultSet {
     @Override
     public int getInt(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Integer.parseInt(RowData.get(String.valueOf(columnIndex)));
@@ -301,7 +305,7 @@ public class KResultSet implements ResultSet {
     @Override
     public long getLong(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Long.parseLong(RowData.get(String.valueOf(columnIndex)));
@@ -315,7 +319,7 @@ public class KResultSet implements ResultSet {
     @Override
     public float getFloat(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Float.parseFloat(RowData.get(String.valueOf(columnIndex)));
@@ -329,7 +333,7 @@ public class KResultSet implements ResultSet {
     @Override
     public double getDouble(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Double.parseDouble(RowData.get(String.valueOf(columnIndex)));
@@ -385,7 +389,7 @@ public class KResultSet implements ResultSet {
     @Override
     public String getString(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return RowData.get(columnLabel);
@@ -400,7 +404,7 @@ public class KResultSet implements ResultSet {
     @Override
     public boolean getBoolean(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Boolean.parseBoolean(RowData.get(columnLabel));
@@ -415,7 +419,7 @@ public class KResultSet implements ResultSet {
     @Override
     public byte getByte(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Byte.parseByte(RowData.get(columnLabel));
@@ -430,7 +434,7 @@ public class KResultSet implements ResultSet {
     @Override
     public short getShort(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Short.parseShort(RowData.get(columnLabel));
@@ -444,7 +448,7 @@ public class KResultSet implements ResultSet {
     @Override
     public int getInt(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             if (RowData.get(columnLabel) == null || Integer.parseInt(RowData.get(columnLabel)) == 0) {
@@ -464,7 +468,7 @@ public class KResultSet implements ResultSet {
     @Override
     public long getLong(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Long.parseLong(RowData.get(columnLabel));
@@ -478,7 +482,7 @@ public class KResultSet implements ResultSet {
     @Override
     public float getFloat(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Float.parseFloat(RowData.get(columnLabel));
@@ -492,7 +496,7 @@ public class KResultSet implements ResultSet {
     @Override
     public double getDouble(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Double.parseDouble(RowData.get(columnLabel));
@@ -521,7 +525,7 @@ public class KResultSet implements ResultSet {
     @Override
     public Date getDate(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
@@ -545,7 +549,7 @@ public class KResultSet implements ResultSet {
     @Override
     public Time getTime(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
 //  if (mode == Mode.ModeType.MODE_TEST) {
 //   return
 //  }
@@ -558,7 +562,7 @@ public class KResultSet implements ResultSet {
     @Override
     public Timestamp getTimestamp(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss.SSS");
@@ -609,7 +613,7 @@ public class KResultSet implements ResultSet {
     @Override
     public ResultSetMetaData getMetaData() throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return new KResultSetMetaData(Mockito.mock(ResultSetMetaData.class));
         }
@@ -645,7 +649,7 @@ public class KResultSet implements ResultSet {
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return new BigDecimal(Double.parseDouble(RowData.get(String.valueOf(columnIndex))));
@@ -659,7 +663,7 @@ public class KResultSet implements ResultSet {
     @Override
     public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        Mode.ModeType mode = kctx.getMode();
+//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return new BigDecimal(Double.parseDouble(RowData.get(columnLabel)));
