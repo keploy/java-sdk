@@ -25,7 +25,7 @@ public class CustomGoogleResponseAdvice {
         Kcontext kctx = Context.getCtx();
 
         if (kctx == null) {
-            logger.debug("keploy context is null");
+            logger.debug("[CustomGoogleResponseAdvice] keploy context is null");
         } else if (kctx.getMode().getModeFromContext().equals(Mode.ModeType.MODE_RECORD)) {
             logger.debug("[CustomGoogleResponseAdvice] keploy mode: " + kctx.getMode());
             CustomHttpResponses.googleMapResponse = response;
