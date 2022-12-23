@@ -22,7 +22,8 @@ public class RegisterDriverAdvice {
                     KDriver.Dialect = "org.hibernate.dialect.MySQLDialect";
                     break;
                 case "oracle.jdbc.driver.OracleDriver":
-                    KDriver.Dialect = "org.hibernate.dialect.OracleDialect";
+                case "oracle.jdbc.OracleDriver":
+                    KDriver.Dialect = "org.hibernate.dialect.Oracle10gDialect";
                     break;
                 case "org.h2.Driver":
                     KDriver.Dialect = "org.hibernate.dialect.H2Dialect";
