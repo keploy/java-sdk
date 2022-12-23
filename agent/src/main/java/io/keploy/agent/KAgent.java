@@ -15,7 +15,11 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.lang.instrument.Instrumentation;
+import java.lang.reflect.Field;
 import java.sql.DatabaseMetaData;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 
@@ -29,10 +33,29 @@ public class KAgent {
 
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
-        if (System.getenv("KEPLOY_MODE") == null || Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
+        if (System.getenv("KEPLOY_MODE") != null && Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
         }
 
+        if (System.getenv("KEPLOY_MODE") == null) {
+
+//            if (!isJUnitTest()) {
+//                System.out.println("not a JUnit test");
+//                return;
+//            }
+//            System.out.println("yes its a junit test");
+//
+//            Map<String, String> mode = new HashMap<>();
+//            mode.put("KEPLOY_MODE", "test");
+//            try {
+//                setEnv(mode);
+//                final String keploy_mode = System.getenv("KEPLOY_MODE");
+//                System.out.println("env variable for keploy mode in premain:" + keploy_mode);
+//            } catch (Exception e) {
+//                throw new RuntimeException(e);
+//            }
+            return;
+        }
 
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
@@ -149,7 +172,6 @@ public class KAgent {
                 .type(named(okHttpPendingResult))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("inside GoogleMapsInterceptor transformer");
-                    System.out.println("[java-sdk]:Inside google-maps OkHttpPendingResult transformer");
                     return builder
                             .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
                             .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
@@ -189,4 +211,41 @@ public class KAgent {
                 }))
                 .installOn(instrumentation);
     }
+
+    private static boolean isJUnitTest() {
+        for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
+            if (element.getClassName().startsWith("org.junit.")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    protected static void setEnv(Map<String, String> newenv) throws Exception {
+        try {
+            Class<?> processEnvironmentClass = Class.forName("java.lang.ProcessEnvironment");
+            Field theEnvironmentField = processEnvironmentClass.getDeclaredField("theEnvironment");
+            theEnvironmentField.setAccessible(true);
+            Map<String, String> env = (Map<String, String>) theEnvironmentField.get(null);
+            env.putAll(newenv);
+            Field theCaseInsensitiveEnvironmentField = processEnvironmentClass.getDeclaredField("theCaseInsensitiveEnvironment");
+            theCaseInsensitiveEnvironmentField.setAccessible(true);
+            Map<String, String> cienv = (Map<String, String>) theCaseInsensitiveEnvironmentField.get(null);
+            cienv.putAll(newenv);
+        } catch (NoSuchFieldException e) {
+            Class[] classes = Collections.class.getDeclaredClasses();
+            Map<String, String> env = System.getenv();
+            for (Class cl : classes) {
+                if ("java.util.Collections$UnmodifiableMap".equals(cl.getName())) {
+                    Field field = cl.getDeclaredField("m");
+                    field.setAccessible(true);
+                    Object obj = field.get(env);
+                    Map<String, String> map = (Map<String, String>) obj;
+                    map.clear();
+                    map.putAll(newenv);
+                }
+            }
+        }
+    }
+
 }

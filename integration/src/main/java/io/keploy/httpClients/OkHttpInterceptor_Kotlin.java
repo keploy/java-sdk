@@ -36,7 +36,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         Kcontext kctx = Context.getCtx();
 
         if (kctx == null) {
-            logger.debug("[OkHttpInterceptor]: simulate call ");
+            logger.debug("simulate call");
             return chain.proceed(request);
         }
 
@@ -64,7 +64,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.HTTP_EXPORT.value)) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0 && mocks.get(0).getSpec().getObjectsCount() > 0) {
-                        logger.debug("[OkHttpInterceptor]: test mode");
+                        logger.debug("test mode");
 
                         ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
 
@@ -97,17 +97,17 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                     }
 
                     if (response == null) {
-                        logger.error(CROSS + " [OkHttpInterceptor]: unable to read response");
+                        logger.error(CROSS + " unable to read response");
                         throw new RuntimeException("unable to read response");
                     }
 
                     return response;
                 } else {
-                    logger.error(CROSS + " [OkHttpInterceptor]: mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
+                    logger.error(CROSS + " mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
                     throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:
-                logger.debug("[OkHttpInterceptor]: record mode");
+                logger.debug("record mode");
 
                 response = chain.proceed(request);
                 String responseBody = getResponseBody(response);
@@ -264,7 +264,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 Objects.requireNonNull(copy.body()).writeTo(buffer);
                 return buffer.readUtf8();
             } catch (final IOException e) {
-                logger.error(CROSS + " [OkHttpInterceptor]: unable to read request body", e);
+                logger.error(CROSS + " unable to read request body", e);
             }
         }
         return "";

@@ -70,7 +70,7 @@ public class GoogleMapsInterceptor {
                 if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.HTTP_EXPORT.value)) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0 && mocks.get(0).getSpec().getObjectsCount() > 0) {
-                        logger.debug("[GoogleMapsInterceptor]: test mode");
+                        logger.debug("test mode");
 
                         ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
 
@@ -119,7 +119,7 @@ public class GoogleMapsInterceptor {
                     }
 
                     if (response == null) {
-                        logger.error(CROSS + " [GoogleMapsInterceptor]: unable to read response");
+                        logger.error(CROSS + " unable to read response");
                         throw new RuntimeException("unable to read response");
                     }
 
@@ -137,11 +137,11 @@ public class GoogleMapsInterceptor {
 
                     return responseObject;
                 } else {
-                    logger.error(CROSS + " [GoogleMapsInterceptor]: mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
+                    logger.error(CROSS + " mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
                     throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:
-                logger.debug("[GoogleMapsInterceptor]: record mode");
+                logger.debug("record mode");
                 Object responseObject = client.call();
 
 
@@ -233,7 +233,7 @@ public class GoogleMapsInterceptor {
                 Objects.requireNonNull(copy.body()).writeTo(buffer);
                 return buffer.readUtf8();
             } catch (final IOException e) {
-                logger.error(CROSS + " [GoogleMapsInterceptor]: unable to read request body", e);
+                logger.error(CROSS + " unable to read request body", e);
             }
         }
         return "";

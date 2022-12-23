@@ -537,28 +537,36 @@ public class GrpcService {
 
         Request.Builder reqBuilder = setCustomRequestHeaderMap(headerMap);
 
+        String contentType = headerMap.containsKey("content-type") ? headerMap.get("content-type").getValue(0) : "application/json; charset=utf-8";
+        MediaType mediatype = MediaType.parse(contentType);
+
         if (method.equals("GET") && !body.isEmpty()) {
             logger.warn("keploy doesn't support get request with body");
         }
+
+
+        RequestBody requestBody;
+        // TODO: did the below hack to support both versions of oktthp 3.x and 4.x.
+        try {
+            requestBody = RequestBody.create(body.getBytes(StandardCharsets.UTF_8), mediatype);
+        } catch (Exception e) {
+            logger.debug("okhttp 3.x is being used", e);
+            requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
+        }
+
 
         switch (method) {
             case "GET":
                 return reqBuilder.get()
                         .url(targetUrl)
-//                        .addHeader("content-type", "application/json")
-//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             case "DELETE":
                 return reqBuilder.delete()
                         .url(targetUrl)
-//                        .addHeader("content-type", "application/json")
-//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
             default:
-                return reqBuilder.method(method, RequestBody.create(body.getBytes(StandardCharsets.UTF_8)))
+                return reqBuilder.method(method, requestBody)
                         .url(targetUrl)
-//                        .addHeader("content-type", "application/json")
-//                        .addHeader("accept", "application/json")
                         .addHeader("KEPLOY_TEST_ID", testId).build();
         }
     }

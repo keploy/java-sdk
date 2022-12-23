@@ -40,7 +40,7 @@ public class ApacheInterceptor {
 
     public static CloseableHttpResponse doProceed(@Origin Method method, @SuperCall Callable<CloseableHttpResponse> callable, @AllArguments Object[] args) {
 
-        logger.debug("[ApacheInterceptor]: inside ApacheInterceptor for method: " + method);
+        logger.debug("inside ApacheInterceptor for method: " + method);
 
         HttpUriRequest request = null;
 
@@ -52,7 +52,7 @@ public class ApacheInterceptor {
 
 
         if (request == null) {
-            logger.error(CROSS + " [ApacheInterceptor]: failed to fetch request");
+            logger.error(CROSS + " failed to fetch request");
             return null;
         }
 
@@ -61,11 +61,11 @@ public class ApacheInterceptor {
         Kcontext kctx = Context.getCtx();
 
         if (kctx == null) {
-            logger.debug("[ApacheInterceptor]: failed to get keploy context");
+            logger.debug("failed to get keploy context");
             try {
                 return callable.call();
             } catch (Exception e) {
-                logger.error(CROSS + " [ApacheInterceptor]: unable to execute request", e);
+                logger.error(CROSS + " unable to execute request", e);
                 return null;
             }
         }
@@ -76,7 +76,7 @@ public class ApacheInterceptor {
             try {
                 return callable.call();
             } catch (Exception e) {
-                logger.error(CROSS + " [ApacheInterceptor]: unable to execute request", e);
+                logger.error(CROSS + " unable to execute request", e);
                 return null;
             }
         }
@@ -91,7 +91,7 @@ public class ApacheInterceptor {
         try {
             url = request.getURI().toURL().toString();
         } catch (MalformedURLException e) {
-            logger.error("[ApacheInterceptor]: unable to set url for metadata", e);
+            logger.error(CROSS + " unable to set url for metadata", e);
         }
         meta.put("URL", url);
         meta.put("Header", Arrays.toString(request.getAllHeaders()));
@@ -105,7 +105,7 @@ public class ApacheInterceptor {
                 if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.HTTP_EXPORT.value)) {
                     List<Service.Mock> mocks = kctx.getMock();
                     if (mocks.size() > 0 && mocks.get(0).getSpec().getObjectsCount() > 0) {
-                        logger.debug("[ApacheInterceptor]: test mode");
+                        logger.debug("test mode");
 
                         ByteString bin = mocks.get(0).getSpec().getObjectsList().get(0).getData();
 
@@ -121,16 +121,16 @@ public class ApacheInterceptor {
                         mocks.remove(0);
                     }
                     if (response == null) {
-                        logger.error(CROSS + " [ApacheInterceptor]: unable to read response");
+                        logger.error(CROSS + " unable to read response");
                         throw new RuntimeException("unable to read response");
                     }
                     return response;
                 } else {
-                    logger.error(CROSS + " [ApacheInterceptor]: mocks not present");
+                    logger.error(CROSS + " mocks not present");
                     throw new RuntimeException("unable to read mocks from keploy context");
                 }
             case MODE_RECORD:
-                logger.debug("[ApacheInterceptor]: record mode");
+                logger.debug("record mode");
 
 //                wrapping request to re-read its body
 //                try {
@@ -151,13 +151,13 @@ public class ApacheInterceptor {
                     reqBody = getRequestBody(request);
                     meta.put("Body", reqBody);
                 } catch (IOException e) {
-                    logger.error(CROSS + " [ApacheInterceptor]: unable to read request body", e);
+                    logger.error(CROSS + " unable to read request body", e);
                 }
 
                 try {
                     response = callable.call();
                 } catch (Exception e) {
-                    logger.error(CROSS + " [ApacheInterceptor]: unable to execute request", e);
+                    logger.error(CROSS + " unable to execute request", e);
                     return null;
                 }
 
@@ -274,14 +274,14 @@ public class ApacheInterceptor {
         try {
             resBody = EntityUtils.toString(response.getEntity());
         } catch (IOException e) {
-            logger.error(" [ApacheInterceptor]: unable to read response body", e);
+            logger.error(" unable to read response body", e);
             return resBody;
         }
 
         try {
             response.setEntity(new StringEntity(resBody));
         } catch (UnsupportedEncodingException e) {
-            logger.error(" [ApacheInterceptor]: unable to read response body", e);
+            logger.error(" unable to read response body", e);
             return resBody;
         }
         return resBody;
