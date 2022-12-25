@@ -1,20 +1,25 @@
 package io.keploy.ksql;
 
 import io.keploy.regression.Mode;
-import io.keploy.regression.context.Context;
-import io.keploy.regression.context.Kcontext;
 import org.apache.logging.log4j.LogManager;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.HashMap;
 
 import static io.keploy.ksql.KDriver.mode;
 
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
 
+    public HashMap<String, String> PrecisionDict;
+    public HashMap<String, String> ScaleDict;
+
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSetMetaData.class);
+
     public KResultSetMetaData(ResultSetMetaData getMetaData) {
+        PrecisionDict = new HashMap<>();
+        ScaleDict = new HashMap<>();
         wrappedResultSetMetaData = getMetaData;
     }
 
@@ -84,13 +89,24 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getPrecision(int column) throws SQLException {
-        int getPrecision = wrappedResultSetMetaData.getPrecision(column);
+        String columnLabel = getColumnLabel(column);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            return Integer.parseInt(PrecisionDict.get(String.valueOf(columnLabel)));
+        }
+        Integer getPrecision = wrappedResultSetMetaData.getPrecision(column);
+        PrecisionDict.put(columnLabel, String.valueOf(getPrecision));
         return getPrecision;
     }
 
     @Override
     public int getScale(int column) throws SQLException {
-        return wrappedResultSetMetaData.getScale(column);
+        String columnLabel = getColumnLabel(column);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            return Integer.parseInt(ScaleDict.get(String.valueOf(columnLabel)));
+        }
+        Integer getPrecision = wrappedResultSetMetaData.getScale(column);
+        ScaleDict.put(columnLabel, String.valueOf(getPrecision));
+        return getPrecision;
     }
 
     @Override

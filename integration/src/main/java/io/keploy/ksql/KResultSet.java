@@ -205,6 +205,7 @@ public class KResultSet implements ResultSet {
             addRows();
             Service.Table.Builder tableBuilder = Service.Table.newBuilder();
             tableBuilder.addAllCols(sqlColList);
+            SetPrecisionandScale();
             cols = ProcessSQL.toColumnList(sqlColList);
             tableRows = ProcessSQL.toRowList(preTable, cols);
 //            System.out.println(tableRows);
@@ -245,11 +246,21 @@ public class KResultSet implements ResultSet {
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            return RowData.get(String.valueOf(columnIndex));
+            String gs = RowData.get(String.valueOf(columnIndex));
+            if (Objects.equals(gs, "Null")) {
+                wasNull = true;
+                return null;
+            }
+            return gs;
         }
+        String res = null;
         String gs = wrappedResultSet.getString(columnIndex);
-        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
-        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        res = gs;
+        if (isNullValue(gs)) {
+            res = "Null";
+        }
+        RowDict.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "String");
         return gs;
     }
 
@@ -305,7 +316,6 @@ public class KResultSet implements ResultSet {
     @Override
     public long getLong(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Long.parseLong(RowData.get(String.valueOf(columnIndex)));
@@ -392,12 +402,20 @@ public class KResultSet implements ResultSet {
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
+            if (Objects.equals(RowData.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
             return RowData.get(columnLabel);
         }
+        String res = null;
         String gs = wrappedResultSet.getString(columnLabel);
-
-        RowDict.put(columnLabel, gs);
-        addSqlColToList(columnLabel, gs.getClass().getSimpleName());
+        res = gs;
+        if (isNullValue(gs)) {
+            res = "Null";
+        }
+        RowDict.put(columnLabel, res);
+        addSqlColToList(columnLabel, "String");
         return gs;
     }
 
@@ -1408,4 +1426,13 @@ public class KResultSet implements ResultSet {
         return new HashMap<>(s);
     }
 
+    boolean isNullValue(Object obj) {
+        return obj == null;
+    }
+    private void SetPrecisionandScale() {
+        for (int i = 0; i < sqlColList.size(); i++) {
+            String colName = sqlColList.get(i).getName();
+
+        }
+    }
 }
