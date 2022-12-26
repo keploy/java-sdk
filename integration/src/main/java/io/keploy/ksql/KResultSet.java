@@ -7,7 +7,6 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.utils.ProcessSQL;
 import org.apache.logging.log4j.LogManager;
-import org.mockito.Mockito;
 
 import java.io.InputStream;
 import java.io.Reader;
@@ -20,6 +19,8 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 
 import static io.keploy.ksql.KDriver.*;
+import static io.keploy.ksql.KResultSetMetaData.PrecisionDict;
+import static io.keploy.ksql.KResultSetMetaData.ScaleDict;
 
 public class KResultSet implements ResultSet {
     ResultSet wrappedResultSet;
@@ -47,7 +48,32 @@ public class KResultSet implements ResultSet {
 
     private int index = 0;
 
+    public static int commited = 0;
+
     public KResultSet(ResultSet rs) {
+        if (Objects.equals(DriverName, "org.h2.Driver")) {
+            logger.info("starting test connection for H2 ");
+            mode = testMode;
+        }
+        sqlColList = new ArrayList<>();
+        PrecisionDict = new HashMap<>();
+        ScaleDict = new HashMap<>();
+        colExists = new HashSet<>();
+
+        preTable = new ArrayList<>();
+        RowDict = new HashMap<>();
+        cols = new ArrayList<>();
+        tableRows = new ArrayList<>();
+        KResultSet.meta.clear();
+        wrappedResultSet = rs;
+    }
+
+    public KResultSet(boolean rs) {
+
+    }
+
+
+    public KResultSet() {
         if (Objects.equals(DriverName, "org.h2.Driver")) {
             logger.info("starting test connection for H2 ");
             mode = testMode;
@@ -62,19 +88,12 @@ public class KResultSet implements ResultSet {
         tableRows = new ArrayList<>();
 
         Kcontext kctx = Context.getCtx();
-        if (kctx != null) {
-            if (mode == Mode.ModeType.MODE_TEST) {
-                rs = Mockito.mock(ResultSet.class);
-            }
-        }
         KResultSet.meta.clear();
-        wrappedResultSet = rs;
+        if (kctx != null) {
+            wrappedResultSet = new KResultSet(true);
+        }
+
     }
-
-    public KResultSet() {
-
-    }
-
 
     private void addSqlColToList(String colName, String colType) {
         final Service.SqlCol sqlCol = Service.SqlCol.newBuilder().setName(colName).setType(colType).build();
@@ -110,9 +129,8 @@ public class KResultSet implements ResultSet {
         } catch (InvalidProtocolBufferException e) {
             throw new RuntimeException(e);
         }
-
         TableData = testTable;
-//        System.out.println("Table: " + testTable);
+        GetPreAndScale();
     }
 
     // Used in test mode for extracting single row in the form of string from mocks
@@ -165,16 +183,17 @@ public class KResultSet implements ResultSet {
                 if (!hasNext) {
                     select = true;
                     Service.Table.Builder tableBuilder = Service.Table.newBuilder();
+                    sqlColList = SetPreAndScale();
                     tableBuilder.addAllCols(sqlColList);
                     cols = ProcessSQL.toColumnList(sqlColList);
                     tableRows = ProcessSQL.toRowList(preTable, cols);
-//                    System.out.println(tableRows);
                     tableBuilder.addAllRows(tableRows);
                     Service.Table table = tableBuilder.build();
                     try {
                         meta.put("method", "next()");
                         meta.put("SQL-Query", KConnection.MyQuery);
-                        ProcessSQL.ProcessDep(meta, table, 0);
+                        ProcessSQL.ProcessDep(meta, table, commited);
+                        commited = 0;
                     } catch (InvalidProtocolBufferException e) {
                         throw new RuntimeException(e);
                     }
@@ -204,17 +223,16 @@ public class KResultSet implements ResultSet {
         if (!select) {
             addRows();
             Service.Table.Builder tableBuilder = Service.Table.newBuilder();
+            sqlColList = SetPreAndScale();
             tableBuilder.addAllCols(sqlColList);
-            SetPrecisionandScale();
             cols = ProcessSQL.toColumnList(sqlColList);
             tableRows = ProcessSQL.toRowList(preTable, cols);
-//            System.out.println(tableRows);
             tableBuilder.addAllRows(tableRows);
             Service.Table table = tableBuilder.build();
-//            System.out.println(table);
             try {
                 meta.put("method", "close()");
-                ProcessSQL.ProcessDep(meta, table, 0);
+                ProcessSQL.ProcessDep(meta, table, commited);
+                commited = 0;
                 meta.put("SQL-Query", KConnection.MyQuery);
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
@@ -633,7 +651,7 @@ public class KResultSet implements ResultSet {
         Kcontext kctx = Context.getCtx();
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            return new KResultSetMetaData(Mockito.mock(ResultSetMetaData.class));
+            return new KResultSetMetaData();
         }
         ResultSetMetaData getMetaData = wrappedResultSet.getMetaData();
         return new KResultSetMetaData(getMetaData);
@@ -1027,7 +1045,7 @@ public class KResultSet implements ResultSet {
         Kcontext kctx = Context.getCtx();
 //  Mode.ModeType mode = kctx.getMode();
         if (kctx == null) {
-            return new KStatement(Mockito.mock(Statement.class));
+            return new KStatement();
         }
         return new KStatement(wrappedResultSet.getStatement());
     }
@@ -1429,10 +1447,38 @@ public class KResultSet implements ResultSet {
     boolean isNullValue(Object obj) {
         return obj == null;
     }
-    private void SetPrecisionandScale() {
-        for (int i = 0; i < sqlColList.size(); i++) {
-            String colName = sqlColList.get(i).getName();
 
+    //During Test Mode
+    public void GetPreAndScale() {
+        PrecisionDict = new HashMap<>();
+        ScaleDict = new HashMap<>();
+        assert TableData != null;
+        List<Service.SqlCol> columns = TableData.getColsList();
+        for (Service.SqlCol column : columns) {
+            PrecisionDict.put(column.getName(), String.valueOf(column.getPrecision()));
+            ScaleDict.put(column.getName(), String.valueOf(column.getScale()));
         }
     }
+
+    //During Record Mode
+    private List<Service.SqlCol> SetPreAndScale() {
+        List<Service.SqlCol> sqlColList1 = new ArrayList<>();
+        for (Service.SqlCol col : sqlColList) {
+            String colname = col.getName();
+            String type = col.getType();
+            long precision = 0, scale = 0;
+            if (PrecisionDict.size() > 0) {
+                precision = Long.parseLong(PrecisionDict.get(colname));
+            }
+            if (ScaleDict.size() > 0) {
+                scale = Long.parseLong(ScaleDict.get(colname));
+            }
+            Service.SqlCol sqlCol = Service.SqlCol.newBuilder().setName(colname).setType(type).setPrecision(precision).setScale(scale).build();
+            sqlColList1.add(sqlCol);
+        }
+        PrecisionDict.clear();
+        ScaleDict.clear();
+        return sqlColList1;
+    }
+
 }

@@ -3,7 +3,6 @@ package io.keploy.ksql;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import org.apache.logging.log4j.LogManager;
-import org.mockito.Mockito;
 
 import java.io.InputStream;
 import java.io.Reader;
@@ -36,7 +35,7 @@ public class KPreparedStatement implements PreparedStatement {
             if (mode == recordMode) {
                 return wrappedPreparedStatement.executeQuery();
             }
-            ResultSet resultSet = Mockito.mock(ResultSet.class);
+            ResultSet resultSet = new KResultSet();//Mockito.mock(ResultSet.class);
             return new KResultSet(resultSet);
         }
 //        Mode.ModeType mode = kctx.getMode();
@@ -74,6 +73,7 @@ public class KPreparedStatement implements PreparedStatement {
                 break;
             case MODE_RECORD:
                 rs = wrappedPreparedStatement.executeUpdate();
+                KResultSet.commited = rs;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -878,8 +878,10 @@ public class KPreparedStatement implements PreparedStatement {
     public ResultSet getGeneratedKeys() throws SQLException {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
-            ResultSet resultSet = Mockito.mock(ResultSet.class);
-            return new KResultSet(resultSet);
+            if (mode == recordMode) {
+                return wrappedPreparedStatement.getGeneratedKeys();
+            }
+            return new KResultSet(false);
         }
 //        Mode.ModeType mode = kctx.getMode();
 

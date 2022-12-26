@@ -12,21 +12,20 @@ import static io.keploy.ksql.KDriver.mode;
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
 
-    public HashMap<String, String> PrecisionDict;
-    public HashMap<String, String> ScaleDict;
+    public static HashMap<String, String> PrecisionDict;
+    public static HashMap<String, String> ScaleDict;
 
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSetMetaData.class);
 
     public KResultSetMetaData(ResultSetMetaData getMetaData) {
-        PrecisionDict = new HashMap<>();
-        ScaleDict = new HashMap<>();
         wrappedResultSetMetaData = getMetaData;
+    }
+
+    public KResultSetMetaData() {
     }
 
     @Override
     public int getColumnCount() throws SQLException {
-//        Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return Integer.parseInt(KResultSet.meta.get("getColumnCount"));
         }
@@ -91,7 +90,7 @@ public class KResultSetMetaData implements ResultSetMetaData {
     public int getPrecision(int column) throws SQLException {
         String columnLabel = getColumnLabel(column);
         if (mode == Mode.ModeType.MODE_TEST) {
-            return Integer.parseInt(PrecisionDict.get(String.valueOf(columnLabel)));
+            return Integer.parseInt(PrecisionDict.get(columnLabel));
         }
         Integer getPrecision = wrappedResultSetMetaData.getPrecision(column);
         PrecisionDict.put(columnLabel, String.valueOf(getPrecision));
@@ -102,7 +101,7 @@ public class KResultSetMetaData implements ResultSetMetaData {
     public int getScale(int column) throws SQLException {
         String columnLabel = getColumnLabel(column);
         if (mode == Mode.ModeType.MODE_TEST) {
-            return Integer.parseInt(ScaleDict.get(String.valueOf(columnLabel)));
+            return Integer.parseInt(ScaleDict.get(columnLabel));
         }
         Integer getPrecision = wrappedResultSetMetaData.getScale(column);
         ScaleDict.put(columnLabel, String.valueOf(getPrecision));
