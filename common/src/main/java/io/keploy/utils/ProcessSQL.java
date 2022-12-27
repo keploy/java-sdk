@@ -45,10 +45,8 @@ public class ProcessSQL {
             case MODE_RECORD:
 
                 Service.Mock.SpecSchema specSchema = null;
-//                if (id != 0) {
-//                    specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(id).setType("INT").build();
-//                } else {
-                specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setTable(table).setType("TABLE").build();
+
+                specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(id).setTable(table).setType("TABLE").build();
 //                }
 
                 Service.Mock mock = Service.Mock.newBuilder()
@@ -65,16 +63,13 @@ public class ProcessSQL {
     }
 
     public static List<String> toRowList(List<Map<String, String>> preTable, List<String> columns) {
-//        System.out.println(preTable+"PRE TABLE");
         List<String> rows = new ArrayList<>();
         for (Map<String, String> stringStringMap : preTable) {
             StringBuilder row = new StringBuilder();
             for (String column : columns) {
                 if (stringStringMap.get(column) != null) {
-//                    System.out.print(stringStringMap.get(column) + ",");
                     row.append("`").append(stringStringMap.get(column)).append("`|");
                 } else {
-//                    System.out.print("NA ,");
                     row.append("`NA`|");
                 }
             }

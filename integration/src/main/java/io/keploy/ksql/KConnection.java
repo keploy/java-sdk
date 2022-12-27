@@ -5,7 +5,6 @@ import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import org.apache.logging.log4j.LogManager;
-import org.mockito.Mockito;
 
 import java.sql.*;
 import java.util.Map;
@@ -46,12 +45,24 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.createStatement();
             }
-            Statement resultSet = Mockito.mock(Statement.class);
+            Statement resultSet = new KStatement();
             return new KStatement(resultSet);
         }
-        Statement st = wrappedCon.createStatement();
-        Statement kst = new KStatement(st);
-        return kst;
+        mode = kctx.getMode();
+        logger.debug("KStatement after setting context with query");
+        Statement ps = new KStatement();
+        switch (mode) {
+            case MODE_TEST:
+                ps = new KStatement();
+                break;
+            case MODE_RECORD:
+                ps = wrappedCon.createStatement();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return new KStatement(ps);
     }
 
     @Override
@@ -61,15 +72,15 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql);
             }
-            PreparedStatement resultSet = Mockito.mock(PreparedStatement.class);
+            PreparedStatement resultSet = new KPreparedStatement(); // Mockito.mock(PreparedStatement.class);
             return new KPreparedStatement(resultSet);
         }
-//        Mode.ModeType mode = kctx.getMode();
+        mode = kctx.getMode();
         logger.debug("KPrepared statement after setting context with query" + sql);
         PreparedStatement ps = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
-                ps = Mockito.mock(PreparedStatement.class);
+//                ps = Mockito.mock(PreparedStatement.class);
                 break;
             case MODE_RECORD:
                 ps = wrappedCon.prepareStatement(sql);
@@ -88,12 +99,12 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareCall(sql);
             }
-            CallableStatement resultSet = Mockito.mock(CallableStatement.class);
+            CallableStatement resultSet = new KCallableStatement();//Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
-//        Mode.ModeType mode = kctx.getMode();
+        Mode.ModeType mode = kctx.getMode();
 
-        CallableStatement rs = null;
+        CallableStatement rs = new KCallableStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -250,7 +261,7 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.getMetaData();
             }
-            return new KDatabaseMetaData(Mockito.mock(DatabaseMetaData.class));
+            return new KDatabaseMetaData();
         }
 
         DatabaseMetaData rs = null;
@@ -449,11 +460,12 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.createStatement(resultSetType, resultSetConcurrency);
             }
-            Statement resultSet = Mockito.mock(Statement.class);
+            Statement resultSet = new KStatement();//Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
 
         Statement rs = new KStatement();
+        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -479,6 +491,7 @@ public class KConnection implements Connection {
         assert kctx != null;
 
         PreparedStatement rs = new KPreparedStatement();
+        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -500,7 +513,7 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareCall(sql, resultSetType, resultSetConcurrency);
             }
-            CallableStatement resultSet = Mockito.mock(CallableStatement.class);
+            CallableStatement resultSet = new KCallableStatement();//Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
 
@@ -661,11 +674,12 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 wrappedCon.createStatement(resultSetType, resultSetConcurrency, resultSetHoldability);
             }
-            Statement resultSet = Mockito.mock(Statement.class);
+            Statement resultSet = new KStatement();//Mockito.mock(Statement.class);
             return new KStatement(resultSet);
         }
 
         Statement rs = new KStatement();
+        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -712,7 +726,7 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareCall(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
             }
-            CallableStatement resultSet = Mockito.mock(CallableStatement.class);
+            CallableStatement resultSet = new KCallableStatement();//Mockito.mock(CallableStatement.class);
             return new KCallableStatement(resultSet);
         }
 
@@ -732,21 +746,21 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException {
-//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql+ " **** " +autoGeneratedKeys);
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, autoGeneratedKeys);
             }
-            PreparedStatement resultSet = Mockito.mock(PreparedStatement.class);
+            PreparedStatement resultSet = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
             return new KPreparedStatement(resultSet);
         }
         PreparedStatement rs = new KPreparedStatement();
         logger.debug("KPrepared statement after setting context with query" + sql + "with autoGeneratedKeys : " + autoGeneratedKeys);
+        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
-                rs = Mockito.mock(PreparedStatement.class);
+                rs = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
                 break;
             case MODE_RECORD:
                 rs = wrappedCon.prepareStatement(sql, autoGeneratedKeys);
