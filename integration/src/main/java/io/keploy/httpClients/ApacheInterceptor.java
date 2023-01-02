@@ -3,18 +3,26 @@ package io.keploy.httpClients;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
+import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mock;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mode;
+import io.keploy.regression.keploy.Keploy;
+import io.keploy.service.GrpcService;
+import io.keploy.utils.MagicBytes;
+import io.keploy.utils.MultipartContent;
+import io.keploy.utils.Utility;
 import lombok.SneakyThrows;
 import net.bytebuddy.implementation.bind.annotation.AllArguments;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
+import org.apache.commons.io.IOUtils;
 import org.apache.http.*;
 import org.apache.http.client.methods.*;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.entity.BufferedHttpEntity;
+import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.message.BasicHttpResponse;
@@ -26,6 +34,8 @@ import java.io.*;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Callable;
 
@@ -37,6 +47,9 @@ public class ApacheInterceptor {
     private static final Logger logger = LogManager.getLogger(ApacheInterceptor.class);
 
     private static final String CROSS = new String(Character.toChars(0x274C));
+
+    private static Keploy k = KeployInstance.getInstance().getKeploy();
+
 
     public static CloseableHttpResponse doProceed(@Origin Method method, @SuperCall Callable<CloseableHttpResponse> callable, @AllArguments Object[] args) {
 
@@ -116,8 +129,20 @@ public class ApacheInterceptor {
                         String statusMessage = httpResp.getStatusMessage();
                         long protoMajor = httpResp.getProtoMajor();
                         long protoMinor = httpResp.getProtoMinor();
+                        String filePath = httpResp.getBinary();
+                        String contentType = "";
+                        if (headerMap.containsKey("Content-Type")) {
+                            contentType = headerMap.get("Content-Type").getValue(0);
+                        }
 
-                        response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, respbody);
+                        ContentType contentTypeEntity = getContentTypeEntity(contentType);
+
+                        if (isBinaryFile(contentType)) {
+                            byte[] fileData = getFileData(filePath);
+                            response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, fileData, contentTypeEntity);
+                        } else {
+                            response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, respbody);
+                        }
                         mocks.remove(0);
                     }
                     if (response == null) {
@@ -148,7 +173,14 @@ public class ApacheInterceptor {
 
                 String reqBody = "";
                 try {
-                    reqBody = getRequestBody(request);
+                    String contentType = request.getFirstHeader("Content-Type").getValue();
+
+                    if (!isBinaryFile(contentType)) {
+                        reqBody = getRequestBody(request);
+                    }
+//                        if (!contentType.contains("application/octet-stream")) {
+//                            reqBody = getRequestBody(request);
+//                        }
                     meta.put("Body", reqBody);
                 } catch (IOException e) {
                     logger.error(CROSS + " unable to read request body", e);
@@ -161,7 +193,25 @@ public class ApacheInterceptor {
                     return null;
                 }
 
-                String responseBody = getResponseBody(response);
+
+                String binaryFilePath = "";
+                String responseBody = "";
+                Header type = response.getFirstHeader("Content-Type");
+
+                String contentType = "";
+                if (type != null) {
+                    contentType = type.getValue();
+                }
+
+                if (isBinaryFile(contentType)) {
+                    MultipartContent fileInfo = getFileInfo(response, url);
+                    binaryFilePath = fileInfo.getFileName();
+                    // to improve performance
+                    new Thread(() -> GrpcService.saveFile(fileInfo.getFileName(), fileInfo.getBody())).start();
+//                    GrpcService.saveFile(fileInfo.getFileName(), fileInfo.getBody());
+                } else {
+                    responseBody = getResponseBody(response);
+                }
 
                 int statusCode = response.getStatusLine().getStatusCode();
                 String statusMsg = response.getStatusLine().getReasonPhrase();
@@ -172,6 +222,7 @@ public class ApacheInterceptor {
 
                 Service.HttpResp httpResp = Service.HttpResp.newBuilder()
                         .setBody(responseBody)
+                        .setBinary(binaryFilePath)
                         .setStatusCode(statusCode)
                         .setStatusMessage(statusMsg)
                         .setProtoMajor(ProtoMajor)
@@ -217,6 +268,95 @@ public class ApacheInterceptor {
                     return null;
                 }
         }
+    }
+
+    private static MultipartContent getFileInfo(CloseableHttpResponse response, String url) {
+        String assetsDirectory = k.getCfg().getApp().getAssetPath();
+
+        String fileName = Utility.resolveFileName(assetsDirectory);
+        String fileExt = "";
+        byte[] fileBody = getFileDataFromStream(response);
+
+        //TODO: handle naming of the file where you could find the fileName just use that name otherwise use asset-x.ext
+
+        // from Content-Disposition header
+        if (response.getFirstHeader("Content-Disposition") != null) {
+            String content_disposition = response.getFirstHeader("Content-Disposition").getValue();
+            String fname = Utility.getFileNameFromHeader(content_disposition);
+            String ext = Utility.getExtensionFromFile(fname);
+            if (!ext.isEmpty()) {
+                fileExt = ext;
+                logger.debug("getting file extension from Content-Disposition");
+            }
+        }
+
+        // from magic numbers
+        if (fileExt.isEmpty()) {
+            MagicBytes.Header matches = MagicBytes.matches(fileBody);
+            if (matches != null) {
+                fileExt = MagicBytes.getContentType(matches);
+                if (fileExt.isEmpty()) {
+                    logger.debug("add support for {} in MagicBytes ", fileExt);
+                } else {
+                    logger.debug("getting file extension from magic numbers of the file");
+                }
+            }
+        }
+
+        // from url
+        if (fileExt.isEmpty()) {
+            //NOTE: guessing content-type from url is only for Amazon s3.
+            String ext = Utility.getExtensionFromFile(url);
+            if (!ext.isEmpty()) {
+                fileExt = ext;
+                logger.debug("getting file extension from url");
+            }
+        }
+
+        //could not get file name or ext from any above method
+        //hence saving its data in someFileName.data in base64 format
+        if (fileExt.isEmpty()) {
+            fileExt = "data";
+            logger.debug("could not get file extension hence saving file with .data extension");
+        }
+        logger.debug("returning fileName from getFileInfo():" + fileName + "." + fileExt);
+        String file = fileName + "." + fileExt;
+        return new MultipartContent(file, fileBody);
+    }
+
+    private static byte[] getFileData(String filePath) {
+        File file = new File(filePath);
+        String fileName = file.getName();
+
+        // Get the file path
+        Path path = file.toPath();
+
+        // Read the contents of the file into a byte array
+        byte[] fileBytes;
+        try {
+            fileBytes = Files.readAllBytes(path);
+        } catch (IOException e) {
+            logger.error(CROSS + " unable to read data from file");
+            throw new RuntimeException(e);
+        }
+
+        return fileBytes;
+    }
+
+    private static byte[] getFileDataFromStream(CloseableHttpResponse response) {
+        byte[] resBody = new byte[0];
+        String contentType = "";
+
+        try {
+            InputStream is = response.getEntity().getContent();
+            resBody = EntityUtils.toByteArray(response.getEntity());
+        } catch (IOException e) {
+            logger.error(" unable to read file body from response", e);
+            return resBody;
+        }
+
+        response.setEntity(new ByteArrayEntity(resBody));
+        return resBody;
     }
 
     private static Map<String, String> getUrlParams(HttpUriRequest request) {
@@ -269,9 +409,12 @@ public class ApacheInterceptor {
     }
 
     private static String getResponseBody(HttpResponse response) {
-
         String resBody = "";
         try {
+            if (response.getEntity() == null || response.getEntity().getContent() == null) {
+                logger.debug("no response body found");
+                return resBody;
+            }
             resBody = EntityUtils.toString(response.getEntity());
         } catch (IOException e) {
             logger.error(" unable to read response body", e);
@@ -332,23 +475,33 @@ public class ApacheInterceptor {
 
         InputStream reqStream;
         BufferedHttpEntity bufferedHttpEntity;
-        String actualBody;
+        String actualBody = "";
         switch (METHOD) {
             case "POST":
                 HttpPost httpPost = (HttpPost) request;
 //                bufferedHttpEntity = new BufferedHttpEntity(httpPost.getEntity());
 //                reqStream = bufferedHttpEntity.getContent();
-                reqStream = httpPost.getEntity().getContent();
-                actualBody = getActualRequestBody(reqStream);
-                httpPost.setEntity(new StringEntity(actualBody));
+                HttpEntity postEntity = httpPost.getEntity();
+                if (postEntity != null) {
+                    reqStream = postEntity.getContent();
+                    if (reqStream != null) {
+                        actualBody = getActualRequestBody(reqStream);
+                        httpPost.setEntity(new StringEntity(actualBody));
+                    }
+                }
                 break;
             case "PUT":
                 HttpPut httpPut = (HttpPut) request;
 //                bufferedHttpEntity = new BufferedHttpEntity(httpPut.getEntity());
 //                reqStream = bufferedHttpEntity.getContent();
-                reqStream = httpPut.getEntity().getContent();
-                actualBody = getActualRequestBody(reqStream);
-                httpPut.setEntity(new StringEntity(actualBody));
+                HttpEntity putEntity = httpPut.getEntity();
+                if (putEntity != null) {
+                    reqStream = putEntity.getContent();
+                    if (reqStream != null) {
+                        actualBody = getActualRequestBody(reqStream);
+                        httpPut.setEntity(new StringEntity(actualBody));
+                    }
+                }
                 break;
             case "PATCH":
                 HttpPatch httpPatch = (HttpPatch) request;
@@ -357,6 +510,14 @@ public class ApacheInterceptor {
                 reqStream = httpPatch.getEntity().getContent();
                 actualBody = getActualRequestBody(reqStream);
                 httpPatch.setEntity(new StringEntity(actualBody));
+                HttpEntity patchEntity = httpPatch.getEntity();
+                if (patchEntity != null) {
+                    reqStream = patchEntity.getContent();
+                    if (reqStream != null) {
+                        actualBody = getActualRequestBody(reqStream);
+                        httpPatch.setEntity(new StringEntity(actualBody));
+                    }
+                }
                 break;
             default:
                 return "";
@@ -383,7 +544,7 @@ public class ApacheInterceptor {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         org.apache.commons.io.IOUtils.copy(reqStream, baos);
         byte[] reqArr = baos.toByteArray();
-        return getStringValue(reqArr, StandardCharsets.UTF_8.toString());
+        return IOUtils.toString(reqArr, StandardCharsets.UTF_8.toString());
     }
 
     private static ContentType getContentTypeEntity(String contentType) {
@@ -402,6 +563,7 @@ public class ApacheInterceptor {
             case "image/gif":
                 return ContentType.IMAGE_GIF;
             case "image/jpeg":
+            case "image/jpg":
                 return ContentType.IMAGE_JPEG;
             case "image/png":
                 return ContentType.IMAGE_PNG;
@@ -415,28 +577,43 @@ public class ApacheInterceptor {
         }
     }
 
+    private static boolean isBinaryFile(String resContentType) {
+
+        switch (resContentType) {
+            case "application/octet-stream":
+            case "application/pdf":
+            case "image/jpeg":
+            case "image/jpg":
+            case "image/png":
+            case "image/gif":
+            case "text/plain":
+            case "text/html":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static class ApacheCustomHttpResponse extends BasicHttpResponse implements CloseableHttpResponse {
 
         public ApacheCustomHttpResponse(ProtocolVersion ver, int code, String reason) {
             super(ver, code, reason);
         }
 
+
         public ApacheCustomHttpResponse(ProtocolVersion ver, int statusCode, String statusMsg, String body) {
             this(ver, statusCode, statusMsg);
             setEntity(new StringEntity(body, APPLICATION_JSON));
         }
 
+        //for binary file
+        public ApacheCustomHttpResponse(ProtocolVersion ver, int statusCode, String statusMsg, byte[] body, ContentType contentType) {
+            this(ver, statusCode, statusMsg);
+            setEntity(new ByteArrayEntity(body, contentType));
+        }
+
         @Override
         public void close() {
         }
-    }
-
-    private static String getStringValue(byte[] contentAsByteArray, String characterEncoding) {
-        try {
-            return new String(contentAsByteArray, 0, contentAsByteArray.length, characterEncoding);
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
-        return "";
     }
 }

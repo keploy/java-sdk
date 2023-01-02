@@ -22,18 +22,21 @@ public class AppConfig {
 
     private String MockPath = "";
 
+    private String AssetPath = "";
+
     private Duration Delay = Duration.ofSeconds(5);
 
     private Duration Timeout = Duration.ofSeconds(60);
 
     private Filter Filter;
 
-    public AppConfig(String name, String host, String port, String testPath, String mockPath, Duration delay, Duration timeout, io.keploy.regression.keploy.Filter filter) {
+    public AppConfig(String name, String host, String port, String testPath, String mockPath, String assetPath, Duration delay, Duration timeout, io.keploy.regression.keploy.Filter filter) {
         Name = name;
         Host = host;
         Port = port;
         TestPath = testPath;
         MockPath = mockPath;
+        AssetPath = assetPath;
         Delay = delay;
         Timeout = timeout;
         Filter = filter;

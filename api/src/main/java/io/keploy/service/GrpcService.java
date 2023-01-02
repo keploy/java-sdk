@@ -11,13 +11,18 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.utils.AssertKTests;
+import io.keploy.utils.MultipartContent;
+import io.keploy.utils.Utility;
 import me.tongfei.progressbar.ProgressBar;
 import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -77,7 +82,7 @@ public class GrpcService {
         return url.getAuthority();
     }
 
-    public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType) {
+    public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType, Map<String, List<MultipartContent>> formData) {
         logger.debug("inside CaptureTestCases");
 
         Kcontext kctx = Context.getCtx();
@@ -101,8 +106,6 @@ public class GrpcService {
         httpReqBuilder.setProtoMajor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 3)));
         httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 1)));
 
-        Service.HttpReq httpReq = httpReqBuilder.build();
-
         testCaseReqBuilder.setAppID(k.getCfg().getApp().getName());
         testCaseReqBuilder.setCaptured(Instant.now().getEpochSecond());
 
@@ -117,17 +120,22 @@ public class GrpcService {
 
         testCaseReqBuilder.setURI(ctxReq.getRequestURI());
         testCaseReqBuilder.setHttpResp(httpResp);
-        testCaseReqBuilder.setHttpReq(httpReq);
         testCaseReqBuilder.setTestCasePath(k.getCfg().getApp().getTestPath());
         testCaseReqBuilder.setMockPath(k.getCfg().getApp().getMockPath());
         testCaseReqBuilder.addAllMocks(kctx.getMock());
 
-        Capture(testCaseReqBuilder.build());
+        Capture(testCaseReqBuilder, formData, httpReqBuilder);
     }
 
-    public static void Capture(Service.TestCaseReq testCaseReq) {
+    public static void Capture(Service.TestCaseReq.Builder testCaseReqBuilder, Map<String, List<MultipartContent>> formData, Service.HttpReq.Builder httpReqBuilder) {
         new Thread(() -> {
             try {
+
+                // for multipart-request
+                List<Service.FormData> form = saveFiles(formData);
+                Service.HttpReq httpReq = httpReqBuilder.addAllForm(form).build();
+                Service.TestCaseReq testCaseReq = testCaseReqBuilder.setHttpReq(httpReq).build();
+
                 put(testCaseReq);
             } catch (Exception e) {
                 logger.error(CROSS + " failed to send test case to backend", e);
@@ -545,6 +553,35 @@ public class GrpcService {
         }
 
 
+        if (mediatype.type().contains("multipart")) {
+            MultipartBody.Builder requestBodyBuilder = new MultipartBody.Builder()
+                    .setType(MultipartBody.FORM);
+
+            List<Service.FormData> formList = testCase.getHttpReq().getFormList();
+            for (Service.FormData part : formList) {
+                List<String> vals = new ArrayList<>(part.getValuesList());
+                List<String> paths = new ArrayList<>(part.getPathsList());
+
+                if (!paths.isEmpty()) {
+                    for (String path : paths) {
+                        File file = new File(path);
+                        requestBodyBuilder.addFormDataPart(part.getKey(), file.getName(), RequestBody.create(file, MediaType.parse("text/plain")));
+                    }
+                } else if (!vals.isEmpty()) {
+                    for (String val : vals) {
+                        requestBodyBuilder.addFormDataPart(part.getKey(), val);
+                    }
+                }
+            }
+            MultipartBody requestBody = requestBodyBuilder.build();
+            Request request = new Request.Builder()
+                    .url(targetUrl)
+                    .post(requestBody)
+                    .addHeader("KEPLOY_TEST_ID", testId)
+                    .build();
+            return request;
+        }
+
         RequestBody requestBody;
         // TODO: did the below hack to support both versions of oktthp 3.x and 4.x.
         try {
@@ -635,5 +672,97 @@ public class GrpcService {
             map.put(name, value);
         }
         return map;
+    }
+
+    private static List<Service.FormData> saveFiles(Map<String, List<MultipartContent>> multipartData) {
+        //TODO: same file but different size, handle that case also, just override the file and give a warning for the same.
+        List<Service.FormData> data = new ArrayList<>(multipartData.size());
+
+        for (String partName : multipartData.keySet()) {
+
+            List<MultipartContent> contents = multipartData.get(partName);
+            Service.FormData.Builder formDataBuilder = Service.FormData.newBuilder().setKey(partName);
+
+            List<String> values = new ArrayList<>();
+
+            boolean isFile = false;
+
+            for (MultipartContent content : contents) {
+                String fileName = content.getFileName();
+                byte[] body = content.getBody();
+                if (fileName != null) {
+                    isFile = true;
+                    String filePath = determineFilePath(fileName);
+                    saveFile(filePath, body);
+                    values.add(filePath);
+                } else {
+                    isFile = false;
+                    String nonFileBody = getStringValue(body, String.valueOf(StandardCharsets.UTF_8));
+                    values.add(nonFileBody);
+                }
+            }
+
+            if (isFile) {
+                formDataBuilder.addAllPaths(values);
+            } else {
+                formDataBuilder.addAllValues(values);
+            }
+
+            Service.FormData formData = formDataBuilder.build();
+            data.add(formData);
+        }
+        return data;
+    }
+
+    public static String saveFile(String filePath, byte[] body) {
+        FileOutputStream fos;
+        try {
+            fos = new FileOutputStream(filePath);
+            fos.write(body);
+            fos.close();
+            logger.debug("saved file at location {}", filePath);
+        } catch (
+                IOException e) {
+            logger.error(CROSS + " file not found", e);
+        }
+        return filePath;
+    }
+
+    public static String determineFilePath(String fileName) {
+
+        String ext = Utility.getExtensionFromFile(fileName);
+        String folderPath = k.getCfg().getApp().getAssetPath();
+        File folder = new File(folderPath);
+
+        if (!folder.exists()) {
+            boolean result = folder.mkdir();
+            if (!result) {
+                logger.debug("trying again to create a directory at path: {}", folderPath);
+                result = folder.mkdirs();
+            }
+            if (result) {
+                logger.debug("new folder created:");
+            } else {
+                String WARN = "\u26A0\uFE0F";
+                logger.warn(WARN + " failed to create assets directory, thus saving files in user directory");
+                folderPath = System.getProperty("user.dir");
+            }
+        } else {
+            logger.debug("directory already exists");
+        }
+
+
+        String filePath = Utility.resolveFileName(folderPath) + "." + ext;
+
+        return filePath;
+    }
+
+    private static String getStringValue(byte[] contentAsByteArray, String characterEncoding) {
+        try {
+            return new String(contentAsByteArray, 0, contentAsByteArray.length, characterEncoding);
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        return "";
     }
 }

@@ -11,19 +11,20 @@ import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
 import io.keploy.regression.Mode;
 import io.keploy.service.GrpcService;
-import io.keploy.utils.GenericRequestWrapper;
-import io.keploy.utils.GenericResponseWrapper;
-import io.keploy.utils.HaltThread;
-import io.keploy.utils.HttpStatusReasons;
+import io.keploy.utils.*;
 import lombok.SneakyThrows;
+import org.apache.commons.io.IOUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.Part;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -85,6 +86,24 @@ public class KeployMiddleware implements Filter {
         }
 
         logger.debug("mock path: {}", appConfig.getMockPath());
+
+
+        //Path for exported assets
+        String apath = System.getenv("KEPLOY_ASSET_PATH");
+
+        if (apath != null && apath.length() > 0 && !Paths.get(apath).isAbsolute()) {
+            Path effectivePath = path.resolve(apath).toAbsolutePath();
+            String absolutePath = effectivePath.normalize().toString();
+            appConfig.setAssetPath(absolutePath);
+        } else if (mpath == null || mpath.length() == 0) {
+            String currDir = System.getProperty("user.dir") + "/src/test/e2e/assets";
+            appConfig.setAssetPath(currDir);
+        } else {
+            //if user gives the path
+            appConfig.setAssetPath(mpath);
+        }
+
+        logger.debug("asset path: {}", appConfig.getAssetPath());
 
         ServerConfig serverConfig = new ServerConfig();
 
@@ -213,6 +232,12 @@ public class KeployMiddleware implements Filter {
         GenericRequestWrapper requestWrapper = new GenericRequestWrapper(request);
         GenericResponseWrapper responseWrapper = new GenericResponseWrapper(response);
 
+        Map<String, List<MultipartContent>> formData = new HashMap<>();
+        if (request.getContentType() != null && request.getContentType().startsWith("multipart/form-data")) {
+            formData = processMultipart(request);
+        }
+
+
         filterChain.doFilter(requestWrapper, responseWrapper);
 
         byte[] reqArr = requestWrapper.getData();
@@ -224,9 +249,11 @@ public class KeployMiddleware implements Filter {
         String requestBody = this.getStringValue(reqArr, reqEncoding);
         String responseBody = this.getStringValue(resArr, resEncoding);
         String resContentType = response.getContentType();
-        if (resContentType != null && resContentType.contains("image")) {
-            logger.debug("request contains image");
-            responseBody = this.getStringValue(Base64.getEncoder().encode(resArr), "UTF-8");
+
+        if (resContentType != null && isBinaryFile(resContentType)) {
+            logger.debug("request contains binary file");
+//            responseBody = this.getStringValue(Base64.getEncoder().encode(resArr), "UTF-8");
+            responseBody = "";
         }
 
         logger.debug("request body inside middleware: {}", requestBody);
@@ -275,7 +302,7 @@ public class KeployMiddleware implements Filter {
                     .putAllHeader(headerMap).build();
 
             try {
-                GrpcService.CaptureTestCases(requestBody, urlParams, httpResp, protocolType);
+                GrpcService.CaptureTestCases(requestBody, urlParams, httpResp, protocolType, formData);
             } catch (Exception e) {
                 logger.error(CROSS + " failed to capture testCases", e);
             }
@@ -289,6 +316,51 @@ public class KeployMiddleware implements Filter {
         logger.debug("inside middleware: outgoing response");
     }
 
+    private boolean isBinaryFile(String resContentType) {
+
+        switch (resContentType) {
+            case "application/octet-stream":
+            case "application/pdf":
+            case "image/jpeg":
+            case "image/jpg":
+            case "image/png":
+            case "image/gif":
+            case "text/plain":
+            case "text/html":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private Map<String, List<MultipartContent>> processMultipart(HttpServletRequest request) throws IOException, ServletException {
+        Map<String, List<MultipartContent>> data = new HashMap<>();
+        Collection<Part> parts = request.getParts();
+        for (Part part : parts) {
+            final String partName = part.getName();
+            logger.debug("partName:{}", partName);
+
+            if (part.getContentType() != null) {
+                // read the content of the "file" part and store it in a request attribute
+                InputStream inputStream = part.getInputStream();
+                byte[] content = IOUtils.toByteArray(inputStream);
+                String fileName = part.getSubmittedFileName();
+
+                MultipartContent multipartContent = new MultipartContent(fileName, content);
+                data.computeIfAbsent(partName, x -> new ArrayList<>()).add(multipartContent);
+
+                request.setAttribute("fileContent", content);
+            } else {
+                InputStream inputStream = part.getInputStream();
+                byte[] content = IOUtils.toByteArray(inputStream);
+
+                MultipartContent multipartContent = new MultipartContent(null, content);
+                data.computeIfAbsent(partName, x -> new ArrayList<>()).add(multipartContent);
+                logger.debug("non-file body:{}", getStringValue(content, String.valueOf(StandardCharsets.UTF_8)));
+            }
+        }
+        return data;
+    }
 
     private Map<String, Service.StrArr> getResponseHeaderMap(GenericResponseWrapper responseWrapper) {
 
