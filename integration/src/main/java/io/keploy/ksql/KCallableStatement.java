@@ -995,7 +995,6 @@ public class KCallableStatement implements CallableStatement {
 
     @Override
     public int[] executeBatch() throws SQLException {
-        System.out.println("reir");
         return wrappedCallableStatement.executeBatch();
     }
 

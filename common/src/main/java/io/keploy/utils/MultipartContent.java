@@ -1,37 +1,21 @@
 package io.keploy.utils;
 
-public class FileContent {
-    private String fileName;
-    private String partName;
-    private byte[] fileBody;
+public class MultipartContent {
 
-    public FileContent(String fileName, String partName, byte[] fileBody) {
+    private final String fileName;
+    private final byte[] body;
+
+    public MultipartContent(String fileName, byte[] body) {
         this.fileName = fileName;
-        this.partName = partName;
-        this.fileBody = fileBody;
+        this.body = body;
     }
 
     public String getFileName() {
         return fileName;
     }
 
-    public void setFileName(String fileName) {
-        this.fileName = fileName;
+    public byte[] getBody() {
+        return body;
     }
 
-    public String getPartName() {
-        return partName;
-    }
-
-    public void setPartName(String partName) {
-        this.partName = partName;
-    }
-
-    public byte[] getFileBody() {
-        return fileBody;
-    }
-
-    public void setFileBody(byte[] fileBody) {
-        this.fileBody = fileBody;
-    }
 }
