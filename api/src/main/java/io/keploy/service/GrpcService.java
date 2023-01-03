@@ -36,6 +36,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.keploy.utils.Utility.createFolder;
+
 public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
@@ -723,7 +725,7 @@ public class GrpcService {
             logger.debug("saved file at location {}", filePath);
         } catch (
                 IOException e) {
-            logger.error(CROSS + " file not found", e);
+            logger.error(CROSS + " location not found", e);
         }
         return filePath;
     }
@@ -732,25 +734,8 @@ public class GrpcService {
 
         String ext = Utility.getExtensionFromFile(fileName);
         String folderPath = k.getCfg().getApp().getAssetPath();
-        File folder = new File(folderPath);
 
-        if (!folder.exists()) {
-            boolean result = folder.mkdir();
-            if (!result) {
-                logger.debug("trying again to create a directory at path: {}", folderPath);
-                result = folder.mkdirs();
-            }
-            if (result) {
-                logger.debug("new folder created:");
-            } else {
-                String WARN = "\u26A0\uFE0F";
-                logger.warn(WARN + " failed to create assets directory, thus saving files in user directory");
-                folderPath = System.getProperty("user.dir");
-            }
-        } else {
-            logger.debug("directory already exists");
-        }
-
+        createFolder(folderPath);
 
         String filePath = Utility.resolveFileName(folderPath) + "." + ext;
 

@@ -90,4 +90,26 @@ public class Utility {
             return folderPath + "/asset-0";
         }
     }
+
+    public static void createFolder(String folderPath){
+        File folder = new File(folderPath);
+
+        if (!folder.exists()) {
+            boolean result = folder.mkdir();
+            if (!result) {
+                logger.debug("trying again to create a directory at path: {}", folderPath);
+                result = folder.mkdirs();
+            }
+            if (result) {
+                logger.debug("new folder created:");
+            } else {
+                String WARN = "\u26A0\uFE0F";
+                logger.warn(WARN + " failed to create assets directory, thus saving files in user directory");
+                folderPath = System.getProperty("user.dir");
+            }
+        } else {
+            logger.debug("directory already exists");
+            System.out.println("directory already exists");
+        }
+    }
 }
