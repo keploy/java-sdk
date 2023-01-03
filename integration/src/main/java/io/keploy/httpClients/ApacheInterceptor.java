@@ -39,6 +39,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Callable;
 
+import static io.keploy.utils.Utility.createFolder;
 import static org.apache.http.entity.ContentType.APPLICATION_JSON;
 
 public class ApacheInterceptor {
@@ -273,6 +274,8 @@ public class ApacheInterceptor {
     private static MultipartContent getFileInfo(CloseableHttpResponse response, String url) {
         String assetsDirectory = k.getCfg().getApp().getAssetPath();
 
+        //create asset folder if it doesn't exist
+        createFolder(assetsDirectory);
         String fileName = Utility.resolveFileName(assetsDirectory);
         String fileExt = "";
         byte[] fileBody = getFileDataFromStream(response);
@@ -290,6 +293,16 @@ public class ApacheInterceptor {
             }
         }
 
+        // from url
+        if (fileExt.isEmpty()) {
+            //NOTE: guessing content-type from url is only for Amazon s3.
+            String ext = Utility.getExtensionFromFile(url);
+            if (!ext.isEmpty()) {
+                fileExt = ext;
+                logger.debug("getting file extension from url");
+            }
+        }
+
         // from magic numbers
         if (fileExt.isEmpty()) {
             MagicBytes.Header matches = MagicBytes.matches(fileBody);
@@ -300,16 +313,6 @@ public class ApacheInterceptor {
                 } else {
                     logger.debug("getting file extension from magic numbers of the file");
                 }
-            }
-        }
-
-        // from url
-        if (fileExt.isEmpty()) {
-            //NOTE: guessing content-type from url is only for Amazon s3.
-            String ext = Utility.getExtensionFromFile(url);
-            if (!ext.isEmpty()) {
-                fileExt = ext;
-                logger.debug("getting file extension from url");
             }
         }
 
