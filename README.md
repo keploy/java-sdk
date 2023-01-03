@@ -43,12 +43,12 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.2.1)
+      <version>N.N.N</version> (eg: 1.2.2)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.1)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.2)
 
 ## Usage
 
@@ -71,15 +71,11 @@ or to *build.gradle*:
 
 - **Run along with agent to mock external calls of your API 🤩🔥**
     - Download the latest - Download the latest agent jar
-      from [here](https://search.maven.org/artifact/io.keploy/agent/1.2.1/jar)  (eg: 1.2.1)
-    - Prefix `-javaagent:` with absolute classpath of agent jar for
-      ex: `-javaagent:/Users/gouravkumar/Desktop/Rough-work/agent-1.2.1.jar`
+      from [here](https://search.maven.org/artifact/io.keploy/agent/1.2.2/jar)  (eg: 1.2.2)
+    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.2.jar`)
     - Using Intellij : Go to Edit Configuration-> add VM options -> paste _java agent_ edited above .
-    - Using Command Line : `export JAVA_OPTS="$JAVA_OPTS -javaagent:
-      /Users/gouravkumar/Desktop/Rough-work/agent-1.2.1.jar"`
-    - For Running via Tomcat Server :
-      -> `export CATALINA_OPTS="$CATALINA_OPTS -javaagent:
-      /Users/gouravkumar/Desktop/Keploy/Keploy-SDK's/java-sdk/agent/target/agent-1.2.1.jar "`
+    - Using Command Line : `export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.2.jar"`
+    - For Running via Tomcat Server : `export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.2.jar "`
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
     - `APP_PORT`           (default APP_PORT = 8080)
@@ -87,7 +83,8 @@ or to *build.gradle*:
     - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:6789/api)
     - `KEPLOY_MODE`        (default KEPLOY_MODE = off)
     - `KEPLOY_TEST_PATH`         (default **/src/test/e2e/keploy-tests** directory of your application)
-    - `KEPLOY_MOCK_PATH`         (default **/src/test/e2e/mocks directory** of your application)
+    - `KEPLOY_MOCK_PATH`         (default **/src/test/e2e/mocks** directory of your application)
+    - `KEPLOY_ASSET_PATH`        (default **/src/test/e2e/assets** directory of your application)
     - `DENOISE`            (default DENOISE = false)
       **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = true)

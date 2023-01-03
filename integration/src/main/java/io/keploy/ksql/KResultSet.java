@@ -30,7 +30,7 @@ public class KResultSet implements ResultSet {
 
     private Set<Service.SqlCol> colExists;
 
-
+    //extracted rows in test
     private Map<String, String> RowData = new HashMap<>();
 
     public List<Map<String, String>> preTable = new ArrayList<>();
@@ -564,11 +564,11 @@ public class KResultSet implements ResultSet {
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
             if (RowData.get(columnLabel) == null) {
                 wasNull = true;
                 return null;
             }
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
             try {
                 Date x = new Date(formatter.parse(RowData.get(columnLabel)).getTime());
                 return x;
@@ -585,10 +585,15 @@ public class KResultSet implements ResultSet {
     @Override
     public Time getTime(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
-//  if (mode == Mode.ModeType.MODE_TEST) {
-//   return
-//  }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
+            try {
+                return new Time(formatter.parse(RowData.get(columnLabel)).getTime());
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
         Time gt = wrappedResultSet.getTime(columnLabel);
         RowDict.put(columnLabel, String.valueOf(gt));
         addSqlColToList(columnLabel, gt.getClass().getSimpleName());
@@ -601,13 +606,12 @@ public class KResultSet implements ResultSet {
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss.SSS");
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
             try {
                 return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
             } catch (ParseException e) {
                 throw new RuntimeException(e);
             }
-
         }
         Timestamp gts = wrappedResultSet.getTimestamp(columnLabel);
         RowDict.put(columnLabel, String.valueOf(gts));
@@ -1479,6 +1483,37 @@ public class KResultSet implements ResultSet {
         PrecisionDict.clear();
         ScaleDict.clear();
         return sqlColList1;
+    }
+
+    String ParseDateTime(String formattedDate) {
+        // Try different date and time patterns until a pattern is found that can parse the given string
+        String[] patterns = {
+                "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+                "yyyy-MM-dd'T'HH:mm:ssXXX",
+                "yyyy-MM-dd HH:mm:ss.SSS",
+                "yyyy-MM-dd HH:mm:ss",
+                "dd/MM/yyyy HH:mm:ss.SSS",
+                "dd/MM/yyyy HH:mm:ss",
+                "dd.MM.yyyy HH:mm:ss.SSS",
+                "dd.MM.yyyy HH:mm:ss",
+                "dd-MM-yyyy HH:mm:ss.SSS",
+                "dd-MM-yyyy HH:mm:ss",
+                "yyyy:MM:dd HH:mm:ss.SSS",
+                "yyyy:MM:dd HH:mm:ss",
+                "HH:mm:ss",
+                "yyyy-MM-dd",
+                "dd/MM/yyyy"
+        };
+        for (String pattern : patterns) {
+            try {
+                SimpleDateFormat sdf = new SimpleDateFormat(pattern);
+                java.util.Date date = sdf.parse(formattedDate);
+                return pattern;
+            } catch (ParseException e) {
+                // Do nothing, try the next pattern
+            }
+        }
+        return "";
     }
 
 }
