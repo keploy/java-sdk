@@ -717,6 +717,13 @@ public class GrpcService {
     }
 
     public static String saveFile(String filePath, byte[] body) {
+
+        File file = new File(filePath);
+        String fileName = Utility.getFileNameFromPath(filePath);
+        if (file.exists()) {
+            logger.warn("file {} already exist at location {}", fileName, k.getCfg().getApp().getAssetPath());
+        }
+
         FileOutputStream fos;
         try {
             fos = new FileOutputStream(filePath);
@@ -731,14 +738,9 @@ public class GrpcService {
     }
 
     public static String determineFilePath(String fileName) {
-
-        String ext = Utility.getExtensionFromFile(fileName);
         String folderPath = k.getCfg().getApp().getAssetPath();
-
         createFolder(folderPath);
-
-        String filePath = Utility.resolveFileName(folderPath) + "." + ext;
-
+        String filePath = folderPath + "/" + fileName;
         return filePath;
     }
 

@@ -209,7 +209,6 @@ public class ApacheInterceptor {
                     binaryFilePath = fileInfo.getFileName();
                     // to improve performance
                     new Thread(() -> GrpcService.saveFile(fileInfo.getFileName(), fileInfo.getBody())).start();
-//                    GrpcService.saveFile(fileInfo.getFileName(), fileInfo.getBody());
                 } else {
                     responseBody = getResponseBody(response);
                 }
@@ -276,8 +275,7 @@ public class ApacheInterceptor {
 
         //create asset folder if it doesn't exist
         createFolder(assetsDirectory);
-        String fileName = Utility.resolveFileName(assetsDirectory);
-        String fileExt = "";
+        String file = "";
         byte[] fileBody = getFileDataFromStream(response);
 
         //TODO: handle naming of the file where you could find the fileName just use that name otherwise use asset-x.ext
@@ -286,50 +284,58 @@ public class ApacheInterceptor {
         if (response.getFirstHeader("Content-Disposition") != null) {
             String content_disposition = response.getFirstHeader("Content-Disposition").getValue();
             String fname = Utility.getFileNameFromHeader(content_disposition);
-            String ext = Utility.getExtensionFromFile(fname);
-            if (!ext.isEmpty()) {
-                fileExt = ext;
-                logger.debug("getting file extension from Content-Disposition");
+            if (!fname.isEmpty()) {
+                file = assetsDirectory + "/" + fname;
+                logger.debug("getting file name from Content-Disposition");
             }
+        } else {
+            logger.debug("content-disposition header not found");
         }
 
         // from url
-        if (fileExt.isEmpty()) {
+        if (file.isEmpty()) {
             //NOTE: guessing content-type from url is only for Amazon s3.
-            String ext = Utility.getExtensionFromFile(url);
+            String fileFromPath = Utility.getFileNameFromPath(url);
+            String ext = Utility.getFileExtensionFromPath(url);
             if (!ext.isEmpty()) {
-                fileExt = ext;
-                logger.debug("getting file extension from url");
+                file = assetsDirectory + "/" + fileFromPath;
+                logger.debug("getting file name from url");
+            } else {
+                logger.debug("couldn't find name of file from url");
             }
         }
 
         // from magic numbers
-        if (fileExt.isEmpty()) {
+        if (file.isEmpty()) {
             MagicBytes.Header matches = MagicBytes.matches(fileBody);
             if (matches != null) {
-                fileExt = MagicBytes.getContentType(matches);
+                String fileExt = MagicBytes.getContentType(matches);
                 if (fileExt.isEmpty()) {
-                    logger.debug("add support for {} in MagicBytes ", fileExt);
+                    logger.warn("add support for {} in MagicBytes ", matches.getName());
                 } else {
                     logger.debug("getting file extension from magic numbers of the file");
+                    String fName = Utility.resolveFileName(assetsDirectory);
+                    file = fName + "." + fileExt;
                 }
+            }else {
+                logger.debug("couldn't find extension of file its body");
             }
         }
 
         //could not get file name or ext from any above method
         //hence saving its data in someFileName.data in base64 format
-        if (fileExt.isEmpty()) {
-            fileExt = "data";
+        if (file.isEmpty()) {
+            String fileExt = "data";
+            String fName = Utility.resolveFileName(assetsDirectory);
+            file = fName + "." + fileExt;
             logger.debug("could not get file extension hence saving file with .data extension");
         }
-        logger.debug("returning fileName from getFileInfo():" + fileName + "." + fileExt);
-        String file = fileName + "." + fileExt;
+        logger.debug("returning fileName from getFileInfo():{}", file);
         return new MultipartContent(file, fileBody);
     }
 
     private static byte[] getFileData(String filePath) {
         File file = new File(filePath);
-        String fileName = file.getName();
 
         // Get the file path
         Path path = file.toPath();
