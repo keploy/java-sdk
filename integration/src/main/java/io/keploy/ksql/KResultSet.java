@@ -285,35 +285,42 @@ public class KResultSet implements ResultSet {
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        if (kctx == null) {
-            if (mode == recordMode) {
-                return wrappedResultSet.getBoolean(columnIndex);
-            }
+//        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return Boolean.parseBoolean(RowData.get(String.valueOf(columnIndex)));
         }
-        return wrappedResultSet.getBoolean(columnIndex);
+        Boolean gb = wrappedResultSet.getBoolean(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gb));
+        addSqlColToList(String.valueOf(columnIndex), gb.getClass().getSimpleName());
+        return gb;
     }
 
     @Override
     public byte getByte(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        if (kctx == null) {
-            if (mode == recordMode) {
-                return wrappedResultSet.getByte(columnIndex);
-            }
+//        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return Byte.parseByte(RowData.get(String.valueOf(columnIndex)));
         }
-        byte gb = wrappedResultSet.getByte(columnIndex);
+        Byte gb = wrappedResultSet.getByte(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gb));
+        addSqlColToList(String.valueOf(columnIndex), gb.getClass().getSimpleName());
         return gb;
     }
 
     @Override
     public short getShort(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-        if (kctx == null) {
-            if (mode == recordMode) {
-                return wrappedResultSet.getShort(columnIndex);
-            }
+//        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            return Short.parseShort(RowData.get(String.valueOf(columnIndex)));
         }
-        short gs = wrappedResultSet.getShort(columnIndex);
+        Short gs = wrappedResultSet.getShort(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gs));
+        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
         return gs;
     }
 
