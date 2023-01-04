@@ -23,9 +23,14 @@ public class KConnection implements Connection {
     static boolean firstTime = true;
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KConnection.class);
 
+    private static final String THUNDER = "\u26A1\uFE0F";
+
+    private static final String CROSS = new String(Character.toChars(0x274C));
+
+
     public KConnection(Connection connection) {
-        if (firstTime) {
-            logger.info("Keploy connection initialization ");
+        if (firstTime && connection!=null) {
+            logger.info(THUNDER + " Keploy wrapped "+ DriverName + " successfully !" );
             firstTime = false;
         }
         this.wrappedCon = connection;
@@ -33,7 +38,7 @@ public class KConnection implements Connection {
 
     public KConnection() throws SQLException {
         if (firstTime) {
-            logger.info("Keploy mock connection initialization during tests");
+            logger.info(THUNDER + " Keploy mock connection initialization during tests");
             firstTime = false;
         }
     }

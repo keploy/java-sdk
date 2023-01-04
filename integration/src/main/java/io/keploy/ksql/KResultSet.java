@@ -42,6 +42,8 @@ public class KResultSet implements ResultSet {
     private Map<String, String> RowDict = new HashMap<>();
 
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSet.class);
+
+    private static final String CROSS = new String(Character.toChars(0x274C));
     private Service.Table TableData;
     boolean select = false;
     boolean wasNull = true;
@@ -122,12 +124,11 @@ public class KResultSet implements ResultSet {
         Kcontext kctx = Context.getCtx();
         Map<String, String> s = kctx.getMock().get(0).getSpec().getMetadataMap();
         meta = convertMap(s);
-        Service.Table testTable;
+        Service.Table testTable = null;
         try {
-
             testTable = ProcessSQL.ProcessDep(null, null, 0);
         } catch (InvalidProtocolBufferException e) {
-            throw new RuntimeException(e);
+            logger.error(CROSS + " Unable to extract tables during test \n" + e);
         }
         TableData = testTable;
         GetPreAndScale();
@@ -161,11 +162,15 @@ public class KResultSet implements ResultSet {
 
 
     @Override
-    public boolean next() throws SQLException {
+    public boolean next() {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
-                return wrappedResultSet.next();
+                try {
+                    return wrappedResultSet.next();
+                } catch (SQLException e) {
+                    logger.error(CROSS + " Unable to move sql cursor during next" + e);
+                }
             }
             return false;
         }
@@ -178,7 +183,11 @@ public class KResultSet implements ResultSet {
                 index++;
                 break;
             case MODE_RECORD:
-                hasNext = wrappedResultSet.next();
+                try {
+                    hasNext = wrappedResultSet.next();
+                } catch (SQLException e) {
+                    logger.error(CROSS + " Unable to move sql cursor during next \n" + e);
+                }
                 addRows();
                 if (!hasNext) {
                     select = true;
@@ -250,7 +259,6 @@ public class KResultSet implements ResultSet {
             }
         }
         assert kctx != null;
-//        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return wasNull;
         }
@@ -392,17 +400,67 @@ public class KResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        return wrappedResultSet.getDate(columnIndex);
+        Kcontext kctx = Context.getCtx();
+//        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (RowData.get(String.valueOf(columnIndex)) == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            try {
+                Date x = new Date(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+                return x;
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        Date gd = wrappedResultSet.getDate(columnIndex);
+        if (gd == null) {
+
+        }
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gd));
+        addSqlColToList(String.valueOf(columnIndex), gd.getClass().getSimpleName());
+        return gd;
     }
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-        return wrappedResultSet.getTime(columnIndex);
+
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            try {
+                return new Time(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        Time gt = wrappedResultSet.getTime(columnIndex);
+
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gt));
+        addSqlColToList(String.valueOf(columnIndex), gt.getClass().getSimpleName());
+        return gt;
     }
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
-        return wrappedResultSet.getTimestamp(columnIndex);
+        Kcontext kctx = Context.getCtx();
+//        Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            try {
+                return new Timestamp(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        Timestamp gts = wrappedResultSet.getTimestamp(columnIndex);
+        RowDict.put(String.valueOf(columnIndex), String.valueOf(gts));
+        addSqlColToList(String.valueOf(columnIndex), gts.getClass().getSimpleName());
+        return gts;
     }
 
     @Override
@@ -569,9 +627,10 @@ public class KResultSet implements ResultSet {
     public Date getDate(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
 //        Mode.ModeType mode = kctx.getMode();
+
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null) {
+            if (Objects.equals(RowData.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
@@ -583,9 +642,14 @@ public class KResultSet implements ResultSet {
                 throw new RuntimeException(e);
             }
         }
+
         Date gd = wrappedResultSet.getDate(columnLabel);
-        RowDict.put(columnLabel, String.valueOf(gd));
-        addSqlColToList(columnLabel, gd.getClass().getSimpleName());
+        String res = String.valueOf(gd);
+        if (isNullValue(gd)) {
+            res = "Null";
+        }
+        RowDict.put(columnLabel, res);
+        addSqlColToList(columnLabel, "Date");
         return gd;
     }
 
@@ -594,6 +658,10 @@ public class KResultSet implements ResultSet {
         Kcontext kctx = Context.getCtx();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
+            if (Objects.equals(RowData.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
             SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
             try {
                 return new Time(formatter.parse(RowData.get(columnLabel)).getTime());
@@ -602,8 +670,12 @@ public class KResultSet implements ResultSet {
             }
         }
         Time gt = wrappedResultSet.getTime(columnLabel);
-        RowDict.put(columnLabel, String.valueOf(gt));
-        addSqlColToList(columnLabel, gt.getClass().getSimpleName());
+        String res = String.valueOf(gt);
+        if (isNullValue(gt)) {
+            res = "Null";
+        }
+        RowDict.put(columnLabel, res);
+        addSqlColToList(columnLabel, "Time");
         return gt;
     }
 
@@ -613,6 +685,10 @@ public class KResultSet implements ResultSet {
 //        Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
+            if (Objects.equals(RowData.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
             SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
             try {
                 return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
@@ -621,8 +697,12 @@ public class KResultSet implements ResultSet {
             }
         }
         Timestamp gts = wrappedResultSet.getTimestamp(columnLabel);
-        RowDict.put(columnLabel, String.valueOf(gts));
-        addSqlColToList(columnLabel, gts.getClass().getSimpleName());
+        String res = String.valueOf(gts);
+        if (isNullValue(gts)) {
+            res = "Null";
+        }
+        RowDict.put(columnLabel, res);
+        addSqlColToList(columnLabel, "Timestamp");
         return gts;
     }
 

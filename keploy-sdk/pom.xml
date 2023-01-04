@@ -13,30 +13,31 @@
     <name>keploy-sdk</name>
     <!--    <description>keploy-sdk</description>-->
     <description>Client Java SDK for Keploy</description>
+
     <url>https://github.com/keploy/java-sdk</url>
-    <!--    <licenses>-->
-    <!--        <license>-->
-    <!--            <name>The Apache License, Version 2.0</name>-->
-    <!--            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>-->
-    <!--        </license>-->
-    <!--    </licenses>-->
-    <!--    <developers>-->
-    <!--        <developer>-->
-    <!--            <id>sarthak160</id>-->
-    <!--            <name>Sarthak</name>-->
-    <!--            <email>sarthak@keploy.io</email>-->
-    <!--        </developer>-->
-    <!--        <developer>-->
-    <!--            <id>gouravkrosx</id>-->
-    <!--            <name>Gourav Kumar</name>-->
-    <!--            <email>gourav.kumar@keploy.io</email>-->
-    <!--        </developer>-->
-    <!--    </developers>-->
-    <!--    <scm>-->
-    <!--        <connection>scm:git@github.com:keploy/java-sdk.git</connection>-->
-    <!--        <developerConnection>scm:git@github.com:keploy/java-sdk.git</developerConnection>-->
-    <!--        <url>https://github.com/keploy/java-sdk.git</url>-->
-    <!--    </scm>-->
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <id>sarthak160</id>
+            <name>Sarthak</name>
+            <email>sarthak@keploy.io</email>
+        </developer>
+        <developer>
+            <id>gouravkrosx</id>
+            <name>Gourav Kumar</name>
+            <email>gourav.kumar@keploy.io</email>
+        </developer>
+    </developers>
+    <scm>
+        <connection>scm:git@github.com:keploy/java-sdk.git</connection>
+        <developerConnection>scm:git@github.com:keploy/java-sdk.git</developerConnection>
+        <url>https://github.com/keploy/java-sdk.git</url>
+    </scm>
 
     <properties>
         <java.version>1.8</java.version>
@@ -119,6 +120,18 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.2.4</version>
                 <configuration>
@@ -130,16 +143,30 @@
                         <goals>
                             <goal>shade</goal>
                         </goals>
-<!--                        <configuration>-->
-<!--                            <filters>-->
-<!--                                <filter>-->
-<!--                                    <artifact>*:*</artifact>-->
-<!--                                    <excludes>-->
-<!--                                        <exclude>net/bytebuddy/**</exclude>-->
-<!--                                    </excludes>-->
-<!--                                </filter>-->
-<!--                            </filters>-->
-<!--                        </configuration>-->
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>attach</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>attach-artifact</goal>
+                        </goals>
+                        <configuration>
+                            <artifacts>
+                                <artifact>
+                                    <file>
+                                        ../keploy-sdk/target/javadoc-bundle-options/javadoc-options-javadoc-resources.xml
+                                    </file>
+                                    <type>jar</type>
+                                    <classifier>javadoc</classifier>
+                                </artifact>
+                            </artifacts>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

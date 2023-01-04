@@ -14,28 +14,18 @@ import java.util.logging.Logger;
 public class KDriver implements Driver {
     public Driver wrappedDriver;
 
-
-
-    private String _url;
-    private String _username;
-    private String _password;
-
-    private String _databaseName;
     public final Kcontext kctx = Context.getCtx();
     static Mode.ModeType mode = null;
     public static String DriverName = "";
-    private Integer _version = 1;
-
-    private Connection _connection;
 
     public static String Dialect = "";
 
-    public Boolean _isConnected = false;
-
-    private String _lastInsertId = "-1";
     public static Mode.ModeType testMode = Mode.ModeType.MODE_TEST;
     public static Mode.ModeType recordMode = Mode.ModeType.MODE_RECORD;
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KDriver.class);
+
+    private static final String CROSS = new String(Character.toChars(0x274C));
+
     public KDriver(Driver driver) {
         if (Objects.equals(System.getenv("KEPLOY_MODE"), "record")) {
             mode = Mode.ModeType.MODE_RECORD;
@@ -75,7 +65,6 @@ public class KDriver implements Driver {
 
     private Driver getWrappedDriver() throws SQLException {
         String driver = DriverName;
-
         Driver d;
         switch (driver) {
             case "org.postgresql.Driver":
@@ -104,27 +93,35 @@ public class KDriver implements Driver {
 
 
     @Override
-    public Connection connect(String url, Properties info) throws SQLException {
+    public Connection connect(String url, Properties info) {
 
         if (mode == testMode) {
-            return new KConnection();
+            try {
+                return new KConnection();
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
         }
         Connection conn = null;
         try {
             conn = wrappedDriver.connect(url, info);
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            logger.error(CROSS+ " Keploy cannot establish connection with default DB \n"+  e);
         }
         return new KConnection(conn);
 
     }
 
     @Override
-    public boolean acceptsURL(String url) throws SQLException {
+    public boolean acceptsURL(String url) {
         if (mode == testMode) {
             return true;
         }
-        return wrappedDriver.acceptsURL(url);
+        try {
+            return wrappedDriver.acceptsURL(url);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
