@@ -12,7 +12,6 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.utils.CustomHttpResponses;
 import io.keploy.utils.HttpStatusReasons;
-import kotlin.Pair;
 import net.bytebuddy.implementation.bind.annotation.*;
 import okhttp3.*;
 import okio.Buffer;
@@ -96,8 +95,9 @@ public class GoogleMapsInterceptor {
                             return img;
                         }
 
-                        ResponseBody
-                                resBody = ResponseBody.create(body, mediatype);
+//                        ResponseBody
+//                                resBody = ResponseBody.create(body, mediatype);
+                        ResponseBody resBody = ResponseBody.create(mediatype, body);
 
                         final long protoMajor = httpResp.getProtoMajor();
                         final long protoMinor = httpResp.getProtoMinor();
@@ -292,22 +292,22 @@ public class GoogleMapsInterceptor {
     }
 
 
-    private static Map<String, List<String>> getHeadersMultimap(Headers headers) {
-
-        Map<String, List<String>> hmap = new HashMap<>();
-
-        for (Pair<? extends String, ? extends String> header : headers) {
-            String key = header.getFirst();
-            String value = header.getSecond();
-            hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
-        }
-
-        return hmap;
-    }
+//    private static Map<String, List<String>> getHeadersMultimap(Headers headers) {
+//
+//        Map<String, List<String>> hmap = new HashMap<>();
+//        for (Pair<? extends String, ? extends String> header : headers) {
+//            String key = header.getFirst();
+//            String value = header.getSecond();
+//            hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
+//        }
+//
+//        return hmap;
+//    }
 
     private static Map<String, Service.StrArr> getHeadersMap(Headers headers) {
 
-        Map<String, List<String>> hmap = getHeadersMultimap(headers);
+//        Map<String, List<String>> hmap = getHeadersMultimap(headers);
+        Map<String, List<String>> hmap = headers.toMultimap();
 
         Map<String, Service.StrArr> map = new HashMap<>();
 

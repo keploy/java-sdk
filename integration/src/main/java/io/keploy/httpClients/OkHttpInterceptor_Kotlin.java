@@ -9,13 +9,11 @@ import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
 import io.keploy.regression.Mode;
 import io.keploy.utils.HttpStatusReasons;
-import kotlin.Pair;
 import okhttp3.*;
 import okio.Buffer;
 import okio.BufferedSource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.util.*;
@@ -25,9 +23,8 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
 
     private static final String CROSS = new String(Character.toChars(0x274C));
 
-    @NotNull
     @Override
-    public Response intercept(@NotNull Chain chain) throws IOException {
+    public Response intercept(Chain chain) throws IOException {
 
         logger.debug("inside OkHttpInterceptor");
 
@@ -73,9 +70,12 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                         long statusCode = httpResp.getStatusCode();
                         Map<String, Service.StrArr> headerMap = httpResp.getHeaderMap();
                         String statusMsg = httpResp.getStatusMessage();
+                        MediaType mediaType = MediaType.parse("application/json; charset=utf-8");
 
+//                        ResponseBody
+//                                resBody = ResponseBody.create(body, mediaType);
                         ResponseBody
-                                resBody = ResponseBody.create(body, MediaType.parse("application/json; charset=utf-8"));
+                                resBody = ResponseBody.create(mediaType, body);
 
                         final long protoMajor = httpResp.getProtoMajor();
                         final long protoMinor = httpResp.getProtoMinor();
@@ -222,22 +222,22 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
     }
 
 
-    private Map<String, List<String>> getHeadersMultimap(Headers headers) {
-
-        Map<String, List<String>> hmap = new HashMap<>();
-
-        for (Pair<? extends String, ? extends String> header : headers) {
-            String key = header.getFirst();
-            String value = header.getSecond();
-            hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
-        }
-
-        return hmap;
-    }
+//    private Map<String, List<String>> getHeadersMultimap(Headers headers) {
+//
+//        Map<String, List<String>> hmap = new HashMap<>();
+//
+//        for (Pair<? extends String, ? extends String> header : headers) {
+//            String key = header.getFirst();
+//            String value = header.getSecond();
+//            hmap.computeIfAbsent(key, x -> new ArrayList<>()).add(value);
+//        }
+//
+//        return hmap;
+//    }
 
     private Map<String, Service.StrArr> getHeadersMap(Headers headers) {
 
-        Map<String, List<String>> hmap = getHeadersMultimap(headers);
+        Map<String, List<String>> hmap = headers.toMultimap();
 
         Map<String, Service.StrArr> map = new HashMap<>();
 

@@ -586,12 +586,12 @@ public class GrpcService {
 
         RequestBody requestBody;
         // TODO: did the below hack to support both versions of oktthp 3.x and 4.x.
-        try {
-            requestBody = RequestBody.create(body.getBytes(StandardCharsets.UTF_8), mediatype);
-        } catch (Exception e) {
-            logger.debug("okhttp 3.x is being used", e);
-            requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
-        }
+//        try {
+//            requestBody = RequestBody.create(body.getBytes(StandardCharsets.UTF_8), mediatype);
+//        } catch (Exception e) {
+//            logger.debug("okhttp 3.x is being used", e);
+        requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
+//        }
 
 
         switch (method) {
