@@ -1,5 +1,7 @@
 package io.keploy.ksql;
 
+import org.apache.logging.log4j.LogManager;
+
 import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
@@ -12,7 +14,12 @@ public class KCallableStatement implements CallableStatement {
 
     CallableStatement wrappedCallableStatement;
 
+    private static boolean firstTime = true;
+
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KDatabaseMetaData.class);
+
     public KCallableStatement(CallableStatement prepareCall) {
+        logger.debug("Inside KCallableStatement");
         wrappedCallableStatement = prepareCall;
     }
 
