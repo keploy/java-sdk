@@ -190,8 +190,13 @@ public class KAgent {
                 })
                 .type(named("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    logger.debug("Inside HibernateProperties Transformer");
+                    logger.debug("Inside HibernateProperties Transformer for setDdlAuto");
                     return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                })
+                .type(named("org.springframework.boot.autoconfigure.liquibase.LiquibaseProperties"))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
+                    return builder.method(named("setEnabled").and(takesArgument(0, Boolean.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 })
                 .type(named("org.springframework.boot.autoconfigure.orm.jpa.JpaProperties"))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {

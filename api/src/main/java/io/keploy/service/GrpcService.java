@@ -19,10 +19,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.servlet.http.HttpServletRequest;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -202,7 +200,8 @@ public class GrpcService {
 
     }
 
-    public static Service.HttpResp simulate(Service.TestCase testCase) {
+    @Deprecated
+    public static Service.HttpResp simulateOld(Service.TestCase testCase) {
         logger.debug("inside simulate");
 
         //add mocks to shared context
@@ -257,6 +256,135 @@ public class GrpcService {
         return resp.build();
     }
 
+    public static Service.HttpResp simulate(Service.TestCase testCase) {
+        logger.debug("inside simulate");
+
+        //add mocks to shared context
+        k.getMocks().put(testCase.getId(), new ArrayList<>(testCase.getMocksList()));
+        k.getMocktime().put(testCase.getId(), testCase.getCaptured());
+
+        //add dependency to shared context
+        k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
+
+        executeSimulateRequest(testCase);
+
+        Service.HttpResp.Builder resp = GetResp(testCase.getId());
+
+        k.getDeps().remove(testCase.getId());
+        k.getMocks().remove(testCase.getId());
+        k.getMocktime().remove(testCase.getId());
+
+        return resp.build();
+    }
+
+    private static void executeSimulateRequest(Service.TestCase testCase) {
+        String url = testCase.getHttpReq().getURL();
+        String host = k.getCfg().getApp().getHost();
+        String port = k.getCfg().getApp().getPort();
+        String method = testCase.getHttpReq().getMethod();
+        String body = testCase.getHttpReq().getBody();
+        String targetUrl = "http://" + host + ":" + port + url;
+        String testId = testCase.getId();
+        Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
+
+        logger.debug("simulate request's url: {}", targetUrl);
+        logger.debug("simulate request's method: {}", method);
+        logger.debug("simulate request's headers: {}", headerMap);
+
+        String contentType = headerMap.containsKey("content-type") ? headerMap.get("content-type").getValue(0) : "application/json; charset=utf-8";
+
+
+        try {
+            URL obj = new URL(targetUrl);
+            HttpURLConnection conn = (HttpURLConnection) obj.openConnection();
+//            conn.setReadTimeout(60000);
+//            conn.setConnectTimeout(60000);
+            conn.setRequestMethod(method);
+            conn.setInstanceFollowRedirects(false);
+
+            setCustomRequestHeaderMap(conn, headerMap);
+            conn.setRequestProperty("KEPLOY_TEST_ID", testId);
+
+            if (contentType.contains("multipart")) {
+                HttpPostMultipart multipart = new HttpPostMultipart("utf-8", conn);
+
+                List<Service.FormData> formList = testCase.getHttpReq().getFormList();
+                for (Service.FormData part : formList) {
+                    List<String> vals = new ArrayList<>(part.getValuesList());
+                    List<String> paths = new ArrayList<>(part.getPathsList());
+
+                    if (!paths.isEmpty()) {
+                        for (String path : paths) {
+                            File file = new File(path);
+                            multipart.addFilePart(part.getKey(), file);
+                        }
+                    } else if (!vals.isEmpty()) {
+                        for (String val : vals) {
+                            multipart.addFormField(part.getKey(), val);
+                        }
+                    }
+                }
+                //execute multipart request
+                multipart.finish();
+                conn.disconnect();
+                return;
+            }
+
+            if ((method.equals("GET") || method.equals("DELETE")) && !body.isEmpty()) {
+                logger.warn("keploy doesn't support {} request with body", method);
+            }
+
+
+            //POST, PUT, PATCH <- requests containing body
+            if (method.equals("POST") || method.equals("PUT") || method.equals("PATCH")) {
+                conn.setDoOutput(true);
+                OutputStream os = conn.getOutputStream();
+                os.write(body.getBytes());
+                os.flush();
+                os.close();
+                logger.debug("simulate request body set");
+            }
+
+            final int responseCode = conn.getResponseCode();
+            logger.debug("status code got from simulate request: {}", responseCode);
+
+            final Map<String, List<String>> responseHeaders = conn.getHeaderFields();
+            logger.debug("response headers got from simulate request: {}", responseHeaders);
+
+            if (isSuccessfulResponse(conn)) {
+                String resBody = getSimulateResponseBody(conn);
+                logger.debug("response body got from simulate request: {}", resBody);
+            }
+
+            conn.disconnect();
+        } catch (IOException e) {
+            logger.error(CROSS + " failed sending testcase request to app", e);
+        }
+    }
+
+    public static boolean isSuccessfulResponse(HttpURLConnection connection) {
+        try {
+            int responseCode = connection.getResponseCode();
+            return responseCode >= 200 && responseCode < 300;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    public static String getSimulateResponseBody(HttpURLConnection httpConn) throws IOException {
+        String responseBody;
+        BufferedReader in = new BufferedReader(new InputStreamReader(httpConn.getInputStream()));
+        String inputLine;
+        StringBuilder response = new StringBuilder();
+
+        while ((inputLine = in.readLine()) != null) {
+            response.append(inputLine);
+        }
+        in.close();
+
+        responseBody = response.toString();
+        return responseBody;
+    }
 
     public static Service.HttpResp.Builder GetResp(String id) {
 
@@ -555,6 +683,10 @@ public class GrpcService {
         }
 
 
+        if (mediatype == null) {
+            mediatype = MediaType.parse("application/json; charset=utf-8");
+        }
+
         if (mediatype.type().contains("multipart")) {
             MultipartBody.Builder requestBodyBuilder = new MultipartBody.Builder()
                     .setType(MultipartBody.FORM);
@@ -585,13 +717,7 @@ public class GrpcService {
         }
 
         RequestBody requestBody;
-        // TODO: did the below hack to support both versions of oktthp 3.x and 4.x.
-//        try {
-//            requestBody = RequestBody.create(body.getBytes(StandardCharsets.UTF_8), mediatype);
-//        } catch (Exception e) {
-//            logger.debug("okhttp 3.x is being used", e);
         requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
-//        }
 
 
         switch (method) {
@@ -607,6 +733,27 @@ public class GrpcService {
                 return reqBuilder.method(method, requestBody)
                         .url(targetUrl)
                         .addHeader("KEPLOY_TEST_ID", testId).build();
+        }
+    }
+
+    private static void setCustomRequestHeaderMap(HttpURLConnection conn, Map<String, Service.StrArr> srcMap) {
+
+        Map<String, List<String>> headerMap = new HashMap<>();
+
+        for (String key : srcMap.keySet()) {
+            Service.StrArr values = srcMap.get(key);
+            ProtocolStringList valueList = values.getValueList();
+            List<String> headerValues = new ArrayList<>(valueList);
+            headerMap.put(key, headerValues);
+        }
+
+        for (String key : headerMap.keySet()) {
+            if (isModifiable(key)) {
+                List<String> values = headerMap.get(key);
+                for (String value : values) {
+                    conn.addRequestProperty(key, value);
+                }
+            }
         }
     }
 
