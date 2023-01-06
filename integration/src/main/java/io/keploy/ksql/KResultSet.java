@@ -335,7 +335,12 @@ public class KResultSet implements ResultSet {
     @Override
     public int getInt(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getInt(columnIndex);
+            }
+            return 0;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Integer.parseInt(RowData.get(String.valueOf(columnIndex)));
@@ -349,6 +354,12 @@ public class KResultSet implements ResultSet {
     @Override
     public long getLong(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getInt(columnIndex);
+            }
+            return 0;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Long.parseLong(RowData.get(String.valueOf(columnIndex)));
@@ -401,10 +412,15 @@ public class KResultSet implements ResultSet {
     @Override
     public Date getDate(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getDate(columnIndex);
+            }
+            return null;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(String.valueOf(columnIndex)) == null) {
+            if (Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return null;
             }
@@ -413,48 +429,69 @@ public class KResultSet implements ResultSet {
                 Date x = new Date(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
                 return x;
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + "Failed to parse Date object from the stored mock due to \n" + e);
             }
         }
         Date gd = wrappedResultSet.getDate(columnIndex);
-        if (gd == null) {
-
+        String res = String.valueOf(gd);
+        if (isNullValue(gd)) {
+            res = "Null";
         }
-        RowDict.put(String.valueOf(columnIndex), String.valueOf(gd));
-        addSqlColToList(String.valueOf(columnIndex), gd.getClass().getSimpleName());
+        RowDict.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "Date");
         return gd;
     }
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getTime(columnIndex);
+            }
+            return null;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
             try {
                 return new Time(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + "Failed to parse Time object from the stored mock due to \n" + e);
             }
         }
         Time gt = wrappedResultSet.getTime(columnIndex);
 
-        RowDict.put(String.valueOf(columnIndex), String.valueOf(gt));
-        addSqlColToList(String.valueOf(columnIndex), gt.getClass().getSimpleName());
+        String res = String.valueOf(gt);
+        if (isNullValue(gt)) {
+            res = "Null";
+        }
+
+        RowDict.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "Time");
         return gt;
     }
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getTimestamp(columnIndex);
+            }
+            return null;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
+            if (Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+                wasNull = true;
+                return null;
+            }
             SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
             try {
                 return new Timestamp(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + "Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
         }
         Timestamp gts = wrappedResultSet.getTimestamp(columnIndex);
@@ -549,7 +586,12 @@ public class KResultSet implements ResultSet {
     @Override
     public int getInt(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getInt(columnLabel);
+            }
+            return 0;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             if (RowData.get(columnLabel) == null || Integer.parseInt(RowData.get(columnLabel)) == 0) {
@@ -569,7 +611,12 @@ public class KResultSet implements ResultSet {
     @Override
     public long getLong(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getInt(columnLabel);
+            }
+            return 0;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             return Long.parseLong(RowData.get(columnLabel));
@@ -626,7 +673,12 @@ public class KResultSet implements ResultSet {
     @Override
     public Date getDate(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getDate(columnLabel);
+            }
+            return null;
+        }
 
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
@@ -639,7 +691,7 @@ public class KResultSet implements ResultSet {
                 Date x = new Date(formatter.parse(RowData.get(columnLabel)).getTime());
                 return x;
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + " Failed to parse Date object from the stored mock due to \n" + e);
             }
         }
 
@@ -656,6 +708,12 @@ public class KResultSet implements ResultSet {
     @Override
     public Time getTime(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getTime(columnLabel);
+            }
+            return null;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             if (Objects.equals(RowData.get(columnLabel), "Null")) {
@@ -666,7 +724,7 @@ public class KResultSet implements ResultSet {
             try {
                 return new Time(formatter.parse(RowData.get(columnLabel)).getTime());
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + " Failed to parse Time object from the stored mock due to \n" + e);
             }
         }
         Time gt = wrappedResultSet.getTime(columnLabel);
@@ -682,7 +740,12 @@ public class KResultSet implements ResultSet {
     @Override
     public Timestamp getTimestamp(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getTimestamp(columnLabel);
+            }
+            return null;
+        }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             if (Objects.equals(RowData.get(columnLabel), "Null")) {
@@ -693,7 +756,7 @@ public class KResultSet implements ResultSet {
             try {
                 return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
             } catch (ParseException e) {
-                throw new RuntimeException(e);
+                logger.error(CROSS + " Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
         }
         Timestamp gts = wrappedResultSet.getTimestamp(columnLabel);
@@ -1578,6 +1641,7 @@ public class KResultSet implements ResultSet {
                 "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
                 "yyyy-MM-dd'T'HH:mm:ssXXX",
                 "yyyy-MM-dd HH:mm:ss.SSS",
+                "yyyy-MM-dd HH:mm:ss.S",
                 "yyyy-MM-dd HH:mm:ss",
                 "dd/MM/yyyy HH:mm:ss.SSS",
                 "dd/MM/yyyy HH:mm:ss",
@@ -1598,6 +1662,7 @@ public class KResultSet implements ResultSet {
                 return pattern;
             } catch (ParseException e) {
                 // Do nothing, try the next pattern
+                logger.debug("ParseDateTime method cannot parse the formatted string provided");
             }
         }
         return "";

@@ -269,7 +269,8 @@ public class KConnection implements Connection {
             return new KDatabaseMetaData();
         }
 
-        DatabaseMetaData rs = null;
+        DatabaseMetaData rs = new KDatabaseMetaData();
+        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
@@ -494,7 +495,7 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-
+        mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
         mode = kctx.getMode();
         switch (mode) {
@@ -503,6 +504,7 @@ public class KConnection implements Connection {
 //                rs = testconn.prepareStatement(sql, resultSetType, resultSetConcurrency);
                 break;
             case MODE_RECORD:
+                MyQuery = sql;
                 rs = wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
                 break;
             default:
@@ -571,15 +573,12 @@ public class KConnection implements Connection {
             }
             return;
         }
-
-
         switch (mode) {
             case MODE_TEST:
                 // don't run
                 break;
             case MODE_RECORD:
                 wrappedCon.setTypeMap(map);
-                ;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -708,13 +707,14 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-
+        mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
                 break;
             case MODE_RECORD:
+                MyQuery = sql;
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability));
                 break;
             default:
@@ -786,6 +786,7 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
+        mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
@@ -794,6 +795,7 @@ public class KConnection implements Connection {
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnIndexes));
+                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -811,7 +813,7 @@ public class KConnection implements Connection {
             }
         }
         assert kctx != null;
-
+        mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
@@ -819,6 +821,7 @@ public class KConnection implements Connection {
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnNames));
+                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");

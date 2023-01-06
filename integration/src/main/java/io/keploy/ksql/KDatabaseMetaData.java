@@ -4,10 +4,14 @@ import org.apache.logging.log4j.LogManager;
 
 import java.sql.*;
 
+import static io.keploy.ksql.KDriver.mode;
+import static io.keploy.ksql.KDriver.testMode;
+
+
 public class KDatabaseMetaData implements DatabaseMetaData {
 
     public DatabaseMetaData wrappedDatabaseMetaData = null;
-
+    private static boolean firstTime = true;
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KDatabaseMetaData.class);
 
     public KDatabaseMetaData(DatabaseMetaData dbm) {
@@ -15,6 +19,10 @@ public class KDatabaseMetaData implements DatabaseMetaData {
     }
 
     public KDatabaseMetaData() {
+        if (firstTime) {
+            logger.debug("Disabling retrieving metadata entries from database during test run !");
+            firstTime = false;
+        }
 
     }
 
@@ -30,12 +38,12 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getURL() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getUserName() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
@@ -65,22 +73,22 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getDatabaseProductName() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getDatabaseProductVersion() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getDriverName() throws SQLException {
-        return null;
+        return "io.keploy.ksql.KDriver";
     }
 
     @Override
     public String getDriverVersion() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
@@ -145,42 +153,42 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getIdentifierQuoteString() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getSQLKeywords() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getNumericFunctions() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getStringFunctions() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getSystemFunctions() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getTimeDateFunctions() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getSearchStringEscape() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getExtraNameCharacters() throws SQLException {
-        return "";
+        return "null";
     }
 
     @Override
@@ -320,17 +328,17 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getSchemaTerm() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getProcedureTerm() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
     public String getCatalogTerm() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
@@ -340,7 +348,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getCatalogSeparator() throws SQLException {
-        return null;
+        return "null";
     }
 
     @Override
@@ -610,87 +618,138 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getProcedures(catalog, schemaPattern, procedureNamePattern);
     }
 
     @Override
     public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getProcedureColumns(catalog, schemaPattern, procedureNamePattern, columnNamePattern);
     }
 
     @Override
     public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getTables(catalog, schemaPattern, tableNamePattern, types));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getTables(catalog, schemaPattern, tableNamePattern, types);
     }
 
     @Override
     public ResultSet getSchemas() throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getSchemas();
     }
 
     @Override
     public ResultSet getCatalogs() throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getCatalogs();
     }
 
     @Override
     public ResultSet getTableTypes() throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getTableTypes();
     }
 
     @Override
     public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getColumns(catalog, schemaPattern, tableNamePattern, columnNamePattern));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getColumns(catalog, schemaPattern, tableNamePattern, columnNamePattern);
     }
 
     @Override
     public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getColumnPrivileges(catalog, schema, table, columnNamePattern));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getColumnPrivileges(catalog, schema, table, columnNamePattern);
     }
 
     @Override
     public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getTablePrivileges(catalog, schemaPattern, tableNamePattern));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getTablePrivileges(catalog, schemaPattern, tableNamePattern);
     }
 
     @Override
     public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getBestRowIdentifier(catalog, schema, table, scope, nullable));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getBestRowIdentifier(catalog, schema, table, scope, nullable);
     }
 
     @Override
     public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getVersionColumns(catalog, schema, table));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getVersionColumns(catalog, schema, table);
     }
 
     @Override
     public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getPrimaryKeys(catalog, schema, table));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getPrimaryKeys(catalog, schema, table);
     }
 
     @Override
     public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getImportedKeys(catalog, schema, table));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getImportedKeys(catalog, schema, table);
     }
 
     @Override
     public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getExportedKeys(catalog, schema, table));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getExportedKeys(catalog, schema, table);
     }
 
     @Override
     public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getCrossReference(parentCatalog, parentSchema, parentTable, foreignCatalog, foreignSchema, foreignTable));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getCrossReference(parentCatalog, parentSchema, parentTable, foreignCatalog, foreignSchema, foreignTable);
     }
 
     @Override
     public ResultSet getTypeInfo() throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getTypeInfo());
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getTypeInfo();
     }
 
     @Override
     public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
-        return new KResultSet(wrappedDatabaseMetaData.getIndexInfo(catalog, schema, table, unique, approximate));
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getIndexInfo(catalog, schema, table, unique, approximate);
     }
 
     @Override
@@ -755,12 +814,18 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getUDTs(catalog, schemaPattern, typeNamePattern, types);
     }
 
     @Override
     public Connection getConnection() throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KConnection();
+        }
+        return wrappedDatabaseMetaData.getConnection();
     }
 
     @Override
@@ -785,17 +850,26 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException {
-        return new KResultSet();
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getSuperTypes(catalog, schemaPattern, typeNamePattern);
     }
 
     @Override
     public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException {
-        return new KResultSet();
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getSuperTables(catalog, schemaPattern, tableNamePattern);
     }
 
     @Override
     public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException {
-        return new KResultSet();
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getAttributes(catalog, schemaPattern, typeNamePattern, attributeNamePattern);
     }
 
     @Override
@@ -850,7 +924,10 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getSchemas(catalog, schemaPattern);
     }
 
     @Override
@@ -865,22 +942,34 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getClientInfoProperties() throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getClientInfoProperties();
     }
 
     @Override
     public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getFunctions(catalog, schemaPattern, functionNamePattern);
     }
 
     @Override
     public ResultSet getFunctionColumns(String catalog, String schemaPattern, String functionNamePattern, String columnNamePattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getFunctions(catalog, schemaPattern, functionNamePattern);
     }
 
     @Override
     public ResultSet getPseudoColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
-        return null;
+        if (mode == testMode) {
+            return new KResultSet();
+        }
+        return wrappedDatabaseMetaData.getPseudoColumns(catalog, schemaPattern, tableNamePattern, columnNamePattern);
     }
 
     @Override
