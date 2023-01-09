@@ -252,7 +252,6 @@ public class KeployMiddleware implements Filter {
 
         if (resContentType != null && isBinaryFile(resContentType)) {
             logger.debug("request contains binary file");
-//            responseBody = this.getStringValue(Base64.getEncoder().encode(resArr), "UTF-8");
             responseBody = "";
         }
 

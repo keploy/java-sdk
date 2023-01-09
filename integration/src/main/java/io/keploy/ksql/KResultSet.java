@@ -44,7 +44,7 @@ public class KResultSet implements ResultSet {
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KResultSet.class);
 
     private static final String CROSS = new String(Character.toChars(0x274C));
-    private Service.Table TableData;
+    private Service.Table TableData = null;
     boolean select = false;
     boolean wasNull = true;
 
@@ -131,6 +131,9 @@ public class KResultSet implements ResultSet {
             logger.error(CROSS + " Unable to extract tables during test \n" + e);
         }
         TableData = testTable;
+        if (TableData == null) {
+            return;
+        }
         GetPreAndScale();
     }
 
@@ -138,6 +141,9 @@ public class KResultSet implements ResultSet {
     private boolean extractRows() {
         if (index == 0)
             extractTable(index);
+        if (TableData == null) {
+            return false;
+        }
         List<String> rows = TableData.getRowsList();
         if (index == rows.size()) {
             return false;
@@ -511,8 +517,12 @@ public class KResultSet implements ResultSet {
             }
         }
         Timestamp gts = wrappedResultSet.getTimestamp(columnIndex);
-        RowDict.put(String.valueOf(columnIndex), String.valueOf(gts));
-        addSqlColToList(String.valueOf(columnIndex), gts.getClass().getSimpleName());
+        String res = String.valueOf(gts);
+        if (isNullValue(gts)) {
+            res = "Null";
+        }
+        RowDict.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "Timestamp");
         return gts;
     }
 
@@ -1641,6 +1651,9 @@ public class KResultSet implements ResultSet {
         assert TableData != null;
         List<Service.SqlCol> columns = TableData.getColsList();
         for (Service.SqlCol column : columns) {
+            if (column == null) {
+                continue;
+            }
             PrecisionDict.put(column.getName(), String.valueOf(column.getPrecision()));
             ScaleDict.put(column.getName(), String.valueOf(column.getScale()));
         }
