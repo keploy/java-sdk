@@ -1,6 +1,11 @@
 package io.keploy.ksql;
 
+import io.keploy.regression.context.Context;
+import io.keploy.regression.context.Kcontext;
+
 import java.sql.*;
+
+import static io.keploy.ksql.KDriver.*;
 
 public class KStatement implements Statement {
     public Statement wrappedStatement;
@@ -15,35 +20,159 @@ public class KStatement implements Statement {
 
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
-//        System.out.println("mocked execute Query !!");
-        ResultSet _rs = wrappedStatement.executeQuery(sql);
-        ResultSet krs = new KResultSet(_rs);
-        return krs;
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.executeQuery(sql);
+            }
+            ResultSet resultSet = new KResultSet();//Mockito.mock(ResultSet.class);
+            return new KResultSet(resultSet);
+        }
+//        Mode.ModeType mode = kctx.getMode();
+        ResultSet rs = new KResultSet();
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.executeQuery(sql);
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
+        return new KResultSet(rs);
     }
 
     @Override
     public int executeUpdate(String sql) throws SQLException {
-        return wrappedStatement.executeUpdate(sql);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.executeUpdate(sql);
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.executeUpdate(sql);
+                KResultSet.commited = rs;
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public void close() throws SQLException {
-        wrappedStatement.close();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+//    new KResultSet(0);
+                wrappedStatement.close();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
     public int getMaxFieldSize() throws SQLException {
-        return wrappedStatement.getMaxFieldSize();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getMaxFieldSize();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getMaxFieldSize();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public void setMaxFieldSize(int max) throws SQLException {
-        wrappedStatement.setMaxFieldSize(max);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setMaxFieldSize(max);
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+//    new KResultSet(0);
+                wrappedStatement.setMaxFieldSize(max);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
+
     }
 
     @Override
     public int getMaxRows() throws SQLException {
-        return wrappedStatement.getMaxRows();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getMaxRows();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getMaxRows();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
@@ -58,17 +187,79 @@ public class KStatement implements Statement {
 
     @Override
     public int getQueryTimeout() throws SQLException {
-        return wrappedStatement.getQueryTimeout();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getQueryTimeout();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getQueryTimeout();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public void setQueryTimeout(int seconds) throws SQLException {
-        wrappedStatement.setQueryTimeout(seconds);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setQueryTimeout(seconds);
+                return;
+            }
+            return;
+        }
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.setQueryTimeout(seconds);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
+
     }
 
     @Override
     public void cancel() throws SQLException {
-        wrappedStatement.cancel();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.cancel();
+                return;
+            }
+            return;
+        }
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.cancel();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
@@ -78,153 +269,744 @@ public class KStatement implements Statement {
 
     @Override
     public void clearWarnings() throws SQLException {
-        wrappedStatement.clearWarnings();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.clearWarnings();
+                return;
+            }
+            return;
+        }
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.clearWarnings();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
     public void setCursorName(String name) throws SQLException {
-        wrappedStatement.setCursorName(name);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setCursorName(name);
+                return;
+            }
+            return;
+        }
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.setCursorName(name);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
     public boolean execute(String sql) throws SQLException {
-        return wrappedStatement.execute(sql);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.execute(sql);
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.execute(sql);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public ResultSet getResultSet() throws SQLException {
-        return new KResultSet(wrappedStatement.getResultSet());
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getResultSet();
+            }
+            ResultSet resultSet = new KResultSet();//Mockito.mock(ResultSet.class);
+            return new KResultSet(resultSet);
+        }
+//        Mode.ModeType mode = kctx.getMode();
+        ResultSet rs = new KResultSet();
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getResultSet();
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
+        return new KResultSet(rs);
+
     }
 
     @Override
     public int getUpdateCount() throws SQLException {
-        return wrappedStatement.getUpdateCount();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getUpdateCount();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getUpdateCount();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public boolean getMoreResults() throws SQLException {
-        boolean gm = wrappedStatement.getMoreResults();
-        return gm;
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getMoreResults();
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getMoreResults();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public void setFetchDirection(int direction) throws SQLException {
-        wrappedStatement.setFetchDirection(direction);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setFetchDirection(direction);
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.setFetchDirection(direction);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
     public int getFetchDirection() throws SQLException {
-        return wrappedStatement.getFetchDirection();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getFetchDirection();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getFetchDirection();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public void setFetchSize(int rows) throws SQLException {
-        wrappedStatement.setFetchDirection(rows);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setFetchSize(rows);
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.setFetchSize(rows);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
     }
 
     @Override
     public int getFetchSize() throws SQLException {
-        return wrappedStatement.getFetchSize();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getFetchSize();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getFetchSize();
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public int getResultSetConcurrency() throws SQLException {
-        return wrappedStatement.getResultSetConcurrency();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getResultSetConcurrency();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getResultSetConcurrency();
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public int getResultSetType() throws SQLException {
-        return wrappedStatement.getResultSetType();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getResultSetType();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getResultSetType();
+                KResultSet.commited = rs;
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public void addBatch(String sql) throws SQLException {
-        wrappedStatement.addBatch(sql);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.addBatch(sql);
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.addBatch(sql);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
     }
 
     @Override
     public void clearBatch() throws SQLException {
-        wrappedStatement.clearBatch();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.clearBatch();
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.clearBatch();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
+        if (mode == testMode) {
+            return null;
+        }
         return wrappedStatement.executeBatch();
     }
 
     @Override
     public Connection getConnection() throws SQLException {
+        if (mode == testMode) {
+            return new KConnection();
+        }
         return new KConnection(wrappedStatement.getConnection());
     }
 
     @Override
     public boolean getMoreResults(int current) throws SQLException {
-        return wrappedStatement.getMoreResults(current);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getMoreResults(current);
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getMoreResults(current);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public ResultSet getGeneratedKeys() throws SQLException {
-        return new KResultSet(wrappedStatement.getGeneratedKeys());
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getGeneratedKeys();
+            }
+            return new KResultSet(false);
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        ResultSet rs = new KResultSet();
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getGeneratedKeys();
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return new KResultSet(rs);
+
     }
 
     @Override
     public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
-        return wrappedStatement.executeUpdate(sql, autoGeneratedKeys);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.executeUpdate(sql, autoGeneratedKeys);
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.executeUpdate(sql, autoGeneratedKeys);
+                KResultSet.commited = rs;
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
-        return wrappedStatement.executeUpdate(sql, columnIndexes);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.executeUpdate(sql, columnIndexes);
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.executeUpdate(sql, columnIndexes);
+                KResultSet.commited = rs;
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public int executeUpdate(String sql, String[] columnNames) throws SQLException {
-        return wrappedStatement.executeUpdate(sql, columnNames);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.executeUpdate(sql, columnNames);
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 1;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.executeUpdate(sql, columnNames);
+                KResultSet.commited = rs;
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
-        return wrappedStatement.execute(sql, autoGeneratedKeys);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.execute(sql, autoGeneratedKeys);
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.execute(sql, autoGeneratedKeys);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public boolean execute(String sql, int[] columnIndexes) throws SQLException {
-        return wrappedStatement.execute(sql, columnIndexes);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.execute(sql, columnIndexes);
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.execute(sql, columnIndexes);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public boolean execute(String sql, String[] columnNames) throws SQLException {
-        return wrappedStatement.execute(sql, columnNames);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.execute(sql, columnNames);
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.execute(sql, columnNames);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
     public int getResultSetHoldability() throws SQLException {
-        return wrappedStatement.getResultSetHoldability();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.getResultSetHoldability();
+            }
+            return 0;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        int rs = 0;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.getResultSetHoldability();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public boolean isClosed() throws SQLException {
-        return wrappedStatement.isClosed();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.isClosed();
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.isClosed();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public void setPoolable(boolean poolable) throws SQLException {
-        wrappedStatement.setPoolable(poolable);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.setPoolable(poolable);
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.setPoolable(poolable);
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+
     }
 
     @Override
     public boolean isPoolable() throws SQLException {
-        return wrappedStatement.isPoolable();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.isPoolable();
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.isPoolable();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
+
     }
 
     @Override
     public void closeOnCompletion() throws SQLException {
-        wrappedStatement.closeOnCompletion();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedStatement.closeOnCompletion();
+                return;
+            }
+            return;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                wrappedStatement.closeOnCompletion();
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
     }
 
     @Override
     public boolean isCloseOnCompletion() throws SQLException {
-        return wrappedStatement.isCloseOnCompletion();
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedStatement.isCloseOnCompletion();
+            }
+            return false;
+        }
+//        Mode.ModeType mode = kctx.getMode();
+
+        boolean rs = true;
+        switch (mode) {
+            case MODE_TEST:
+                // don't run
+                break;
+            case MODE_RECORD:
+                rs = wrappedStatement.isCloseOnCompletion();
+
+                break;
+            default:
+                System.out.println("integrations: Not in a valid sdk mode");
+        }
+        return rs;
     }
 
     @Override
