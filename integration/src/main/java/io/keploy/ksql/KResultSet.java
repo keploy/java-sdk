@@ -54,7 +54,7 @@ public class KResultSet implements ResultSet {
 
     public KResultSet(ResultSet rs) {
         if (Objects.equals(DriverName, "org.h2.Driver")) {
-            logger.info("starting test connection for H2 ");
+            logger.debug("starting test connection for H2 ");
             mode = testMode;
         }
         sqlColList = new ArrayList<>();
@@ -262,8 +262,7 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             return wasNull;
         }
-        boolean val = wrappedResultSet.wasNull();
-        return val;
+        return wrappedResultSet.wasNull();
     }
 
     @Override
@@ -599,7 +598,6 @@ public class KResultSet implements ResultSet {
                 return 0;
             }
             int x = Integer.parseInt(RowData.get(columnLabel));
-
             return x;
         }
         Integer gs = wrappedResultSet.getInt(columnLabel);
@@ -1636,6 +1634,10 @@ public class KResultSet implements ResultSet {
     }
 
     String ParseDateTime(String formattedDate) {
+        if (formattedDate == null || formattedDate.equals("")) {
+            logger.warn("Found empty formatted Date to Parse during test\n");
+            return "";
+        }
         // Try different date and time patterns until a pattern is found that can parse the given string
         String[] patterns = {
                 "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
@@ -1662,7 +1664,7 @@ public class KResultSet implements ResultSet {
                 return pattern;
             } catch (ParseException e) {
                 // Do nothing, try the next pattern
-                logger.debug("ParseDateTime method cannot parse the formatted string provided");
+                logger.debug(CROSS + " ParseDateTime method cannot parse the formatted string provided... trying next!\n for date " + formattedDate);
             }
         }
         return "";
