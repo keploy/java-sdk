@@ -423,7 +423,13 @@ public class KResultSet implements ResultSet {
                 wasNull = true;
                 return null;
             }
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
+
             try {
                 Date x = new Date(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
                 return x;
@@ -452,7 +458,13 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
+//            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
             try {
                 return new Time(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
@@ -486,7 +498,12 @@ public class KResultSet implements ResultSet {
                 wasNull = true;
                 return null;
             }
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
             try {
                 return new Timestamp(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
@@ -684,7 +701,12 @@ public class KResultSet implements ResultSet {
                 wasNull = true;
                 return null;
             }
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
             try {
                 Date x = new Date(formatter.parse(RowData.get(columnLabel)).getTime());
                 return x;
@@ -718,7 +740,13 @@ public class KResultSet implements ResultSet {
                 wasNull = true;
                 return null;
             }
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
+
             try {
                 return new Time(formatter.parse(RowData.get(columnLabel)).getTime());
             } catch (ParseException e) {
@@ -750,7 +778,13 @@ public class KResultSet implements ResultSet {
                 wasNull = true;
                 return null;
             }
-            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(columnLabel)));
+            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                wasNull = true;
+                return null;
+            }
+            SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
+
             try {
                 return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
             } catch (ParseException e) {
