@@ -14,7 +14,6 @@ import io.keploy.utils.AssertKTests;
 import io.keploy.utils.MultipartContent;
 import io.keploy.utils.Utility;
 import me.tongfei.progressbar.ProgressBar;
-import okhttp3.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -44,7 +43,7 @@ public class GrpcService {
     private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
     public static ManagedChannel channel;
-    public static OkHttpClient client;
+//    public static OkHttpClient client;
 
     private static final String SET_PLAIN_TEXT = "\033[0;0m";
 
@@ -60,12 +59,12 @@ public class GrpcService {
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
 
-        client = new OkHttpClient.Builder()
-                .connectTimeout(1, TimeUnit.MINUTES) // connect timeout
-                .writeTimeout(1, TimeUnit.MINUTES) // write timeout
-                .readTimeout(1, TimeUnit.MINUTES) // read timeout
-                .followRedirects(false)
-                .build();
+//        client = new OkHttpClient.Builder()
+//                .connectTimeout(1, TimeUnit.MINUTES) // connect timeout
+//                .writeTimeout(1, TimeUnit.MINUTES) // write timeout
+//                .readTimeout(1, TimeUnit.MINUTES) // read timeout
+//                .followRedirects(false)
+//                .build();
     }
 
 
@@ -200,61 +199,61 @@ public class GrpcService {
 
     }
 
-    @Deprecated
-    public static Service.HttpResp simulateOld(Service.TestCase testCase) {
-        logger.debug("inside simulate");
-
-        //add mocks to shared context
-        k.getMocks().put(testCase.getId(), new ArrayList<>(testCase.getMocksList()));
-        k.getMocktime().put(testCase.getId(), testCase.getCaptured());
-
-        //add dependency to shared context
-        k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
-
-        String simResBody;
-        long statusCode;
-        final Map<String, List<String>> responseHeaders = new HashMap<>();
-
-        Request request = getCustomRequest(testCase);
-        logger.debug("simulate request: {}", request);
-
-        try (Response response = client.newCall(request).execute()) {
-
-            try (ResponseBody responseBody = response.body()) {
-                if (!response.isSuccessful()) {
-                    logger.debug("Unexpected response from server for simulate request: {}", response);
-                }
-                assert responseBody != null;
-                simResBody = responseBody.string();
-            }
-
-            logger.debug("response body got from simulate request: {}", simResBody);
-
-            Map<String, List<String>> resHeadMap = response.headers().toMultimap();
-
-            for (String key : resHeadMap.keySet()) {
-                List<String> vals = resHeadMap.get(key);
-                List<String> values = new ArrayList<>(vals);
-                responseHeaders.put(key, values);
-            }
-            statusCode = response.code();
-            logger.debug("status code got from simulate request: {}", statusCode);
-
-            if (response.body() != null) {
-                Objects.requireNonNull(response.body()).close();
-            }
-        } catch (IOException e) {
-            logger.error(CROSS + " failed sending testcase request to app", e);
-        }
-
-        Service.HttpResp.Builder resp = GetResp(testCase.getId());
-
-        k.getDeps().remove(testCase.getId());
-        k.getMocks().remove(testCase.getId());
-        k.getMocktime().remove(testCase.getId());
-
-        return resp.build();
-    }
+//    @Deprecated
+//    public static Service.HttpResp simulateOld(Service.TestCase testCase) {
+//        logger.debug("inside simulate");
+//
+//        //add mocks to shared context
+//        k.getMocks().put(testCase.getId(), new ArrayList<>(testCase.getMocksList()));
+//        k.getMocktime().put(testCase.getId(), testCase.getCaptured());
+//
+//        //add dependency to shared context
+//        k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
+//
+//        String simResBody;
+//        long statusCode;
+//        final Map<String, List<String>> responseHeaders = new HashMap<>();
+//
+//        Request request = getCustomRequest(testCase);
+//        logger.debug("simulate request: {}", request);
+//
+//        try (Response response = client.newCall(request).execute()) {
+//
+//            try (ResponseBody responseBody = response.body()) {
+//                if (!response.isSuccessful()) {
+//                    logger.debug("Unexpected response from server for simulate request: {}", response);
+//                }
+//                assert responseBody != null;
+//                simResBody = responseBody.string();
+//            }
+//
+//            logger.debug("response body got from simulate request: {}", simResBody);
+//
+//            Map<String, List<String>> resHeadMap = response.headers().toMultimap();
+//
+//            for (String key : resHeadMap.keySet()) {
+//                List<String> vals = resHeadMap.get(key);
+//                List<String> values = new ArrayList<>(vals);
+//                responseHeaders.put(key, values);
+//            }
+//            statusCode = response.code();
+//            logger.debug("status code got from simulate request: {}", statusCode);
+//
+//            if (response.body() != null) {
+//                Objects.requireNonNull(response.body()).close();
+//            }
+//        } catch (IOException e) {
+//            logger.error(CROSS + " failed sending testcase request to app", e);
+//        }
+//
+//        Service.HttpResp.Builder resp = GetResp(testCase.getId());
+//
+//        k.getDeps().remove(testCase.getId());
+//        k.getMocks().remove(testCase.getId());
+//        k.getMocktime().remove(testCase.getId());
+//
+//        return resp.build();
+//    }
 
     public static Service.HttpResp simulate(Service.TestCase testCase) {
         logger.debug("inside simulate");
@@ -660,81 +659,81 @@ public class GrpcService {
         return res.getOrDefault("pass", false);
     }
 
-    private static Request getCustomRequest(Service.TestCase testCase) {
-
-        String url = testCase.getHttpReq().getURL();
-        String host = k.getCfg().getApp().getHost();
-        String port = k.getCfg().getApp().getPort();
-        String method = testCase.getHttpReq().getMethod();
-        String body = testCase.getHttpReq().getBody();
-        String targetUrl = "http://" + host + ":" + port + url;
-        String testId = testCase.getId();
-
-        logger.debug("simulate request's url: {}", targetUrl);
-        Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
-
-        Request.Builder reqBuilder = setCustomRequestHeaderMap(headerMap);
-
-        String contentType = headerMap.containsKey("content-type") ? headerMap.get("content-type").getValue(0) : "application/json; charset=utf-8";
-        MediaType mediatype = MediaType.parse(contentType);
-
-        if (method.equals("GET") && !body.isEmpty()) {
-            logger.warn("keploy doesn't support get request with body");
-        }
-
-
-        if (mediatype == null) {
-            mediatype = MediaType.parse("application/json; charset=utf-8");
-        }
-
-        if (mediatype.type().contains("multipart")) {
-            MultipartBody.Builder requestBodyBuilder = new MultipartBody.Builder()
-                    .setType(MultipartBody.FORM);
-
-            List<Service.FormData> formList = testCase.getHttpReq().getFormList();
-            for (Service.FormData part : formList) {
-                List<String> vals = new ArrayList<>(part.getValuesList());
-                List<String> paths = new ArrayList<>(part.getPathsList());
-
-                if (!paths.isEmpty()) {
-                    for (String path : paths) {
-                        File file = new File(path);
-                        requestBodyBuilder.addFormDataPart(part.getKey(), file.getName(), RequestBody.create(file, MediaType.parse("text/plain")));
-                    }
-                } else if (!vals.isEmpty()) {
-                    for (String val : vals) {
-                        requestBodyBuilder.addFormDataPart(part.getKey(), val);
-                    }
-                }
-            }
-            MultipartBody requestBody = requestBodyBuilder.build();
-            Request request = new Request.Builder()
-                    .url(targetUrl)
-                    .post(requestBody)
-                    .addHeader("KEPLOY_TEST_ID", testId)
-                    .build();
-            return request;
-        }
-
-        RequestBody requestBody;
-        requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
-
-
-        switch (method) {
-            case "GET":
-                return reqBuilder.get()
-                        .url(targetUrl)
-                        .addHeader("KEPLOY_TEST_ID", testId).build();
-            case "DELETE":
-                return reqBuilder.delete()
-                        .url(targetUrl)
-                        .addHeader("KEPLOY_TEST_ID", testId).build();
-            default:
-                return reqBuilder.method(method, requestBody)
-                        .url(targetUrl)
-                        .addHeader("KEPLOY_TEST_ID", testId).build();
-        }
-    }
+//    private static Request getCustomRequest(Service.TestCase testCase) {
+//
+//        String url = testCase.getHttpReq().getURL();
+//        String host = k.getCfg().getApp().getHost();
+//        String port = k.getCfg().getApp().getPort();
+//        String method = testCase.getHttpReq().getMethod();
+//        String body = testCase.getHttpReq().getBody();
+//        String targetUrl = "http://" + host + ":" + port + url;
+//        String testId = testCase.getId();
+//
+//        logger.debug("simulate request's url: {}", targetUrl);
+//        Map<String, Service.StrArr> headerMap = testCase.getHttpReq().getHeaderMap();
+//
+//        Request.Builder reqBuilder = setCustomRequestHeaderMap(headerMap);
+//
+//        String contentType = headerMap.containsKey("content-type") ? headerMap.get("content-type").getValue(0) : "application/json; charset=utf-8";
+//        MediaType mediatype = MediaType.parse(contentType);
+//
+//        if (method.equals("GET") && !body.isEmpty()) {
+//            logger.warn("keploy doesn't support get request with body");
+//        }
+//
+//
+//        if (mediatype == null) {
+//            mediatype = MediaType.parse("application/json; charset=utf-8");
+//        }
+//
+//        if (mediatype.type().contains("multipart")) {
+//            MultipartBody.Builder requestBodyBuilder = new MultipartBody.Builder()
+//                    .setType(MultipartBody.FORM);
+//
+//            List<Service.FormData> formList = testCase.getHttpReq().getFormList();
+//            for (Service.FormData part : formList) {
+//                List<String> vals = new ArrayList<>(part.getValuesList());
+//                List<String> paths = new ArrayList<>(part.getPathsList());
+//
+//                if (!paths.isEmpty()) {
+//                    for (String path : paths) {
+//                        File file = new File(path);
+//                        requestBodyBuilder.addFormDataPart(part.getKey(), file.getName(), RequestBody.create(file, MediaType.parse("text/plain")));
+//                    }
+//                } else if (!vals.isEmpty()) {
+//                    for (String val : vals) {
+//                        requestBodyBuilder.addFormDataPart(part.getKey(), val);
+//                    }
+//                }
+//            }
+//            MultipartBody requestBody = requestBodyBuilder.build();
+//            Request request = new Request.Builder()
+//                    .url(targetUrl)
+//                    .post(requestBody)
+//                    .addHeader("KEPLOY_TEST_ID", testId)
+//                    .build();
+//            return request;
+//        }
+//
+//        RequestBody requestBody;
+//        requestBody = RequestBody.create(mediatype, body.getBytes(StandardCharsets.UTF_8));
+//
+//
+//        switch (method) {
+//            case "GET":
+//                return reqBuilder.get()
+//                        .url(targetUrl)
+//                        .addHeader("KEPLOY_TEST_ID", testId).build();
+//            case "DELETE":
+//                return reqBuilder.delete()
+//                        .url(targetUrl)
+//                        .addHeader("KEPLOY_TEST_ID", testId).build();
+//            default:
+//                return reqBuilder.method(method, requestBody)
+//                        .url(targetUrl)
+//                        .addHeader("KEPLOY_TEST_ID", testId).build();
+//        }
+//    }
 
     private static void setCustomRequestHeaderMap(HttpURLConnection conn, Map<String, Service.StrArr> srcMap) {
 
@@ -757,27 +756,27 @@ public class GrpcService {
         }
     }
 
-    private static Request.Builder setCustomRequestHeaderMap(Map<String, Service.StrArr> srcMap) {
-        Request.Builder reqBuilder = new Request.Builder();
-        Map<String, List<String>> headerMap = new HashMap<>();
-
-        for (String key : srcMap.keySet()) {
-            Service.StrArr values = srcMap.get(key);
-            ProtocolStringList valueList = values.getValueList();
-            List<String> headerValues = new ArrayList<>(valueList);
-            headerMap.put(key, headerValues);
-        }
-
-        for (String key : headerMap.keySet()) {
-            if (isModifiable(key)) {
-                List<String> values = headerMap.get(key);
-                for (String value : values) {
-                    reqBuilder.addHeader(key, value);
-                }
-            }
-        }
-        return reqBuilder;
-    }
+//    private static Request.Builder setCustomRequestHeaderMap(Map<String, Service.StrArr> srcMap) {
+//        Request.Builder reqBuilder = new Request.Builder();
+//        Map<String, List<String>> headerMap = new HashMap<>();
+//
+//        for (String key : srcMap.keySet()) {
+//            Service.StrArr values = srcMap.get(key);
+//            ProtocolStringList valueList = values.getValueList();
+//            List<String> headerValues = new ArrayList<>(valueList);
+//            headerMap.put(key, headerValues);
+//        }
+//
+//        for (String key : headerMap.keySet()) {
+//            if (isModifiable(key)) {
+//                List<String> values = headerMap.get(key);
+//                for (String value : values) {
+//                    reqBuilder.addHeader(key, value);
+//                }
+//            }
+//        }
+//        return reqBuilder;
+//    }
 
     private static boolean isModifiable(String key) {
         switch (key) {

@@ -6,7 +6,6 @@ import net.bytebuddy.asm.Advice;
 import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
-import net.bytebuddy.implementation.FixedValue;
 import net.bytebuddy.implementation.MethodDelegation;
 import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.pool.TypePool;
@@ -176,6 +175,7 @@ public class KAgent {
                             .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
                             .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 })
+                // for sql mocking
                 .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside RegisterDriverAdvice1 Transformer");
@@ -203,7 +203,6 @@ public class KAgent {
                     logger.debug("Inside RegisterDialect Transformer");
                     return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
-//               //"org.springframework.boot.actuate.health.Health.Builder"
                 .type(named("org.springframework.boot.actuate.health.Health$Builder"))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside HealthEndpoint Transformer");

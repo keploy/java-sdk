@@ -3,7 +3,7 @@ package io.keploy.advice;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
-import io.keploy.utils.CustomHttpResponses;
+import io.keploy.googleMaps.CustomHttpResponses;
 import net.bytebuddy.asm.Advice;
 import okhttp3.Response;
 import okio.BufferedSource;
