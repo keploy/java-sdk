@@ -10,6 +10,9 @@ import io.keploy.regression.Mock;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import io.keploy.service.GrpcService;
+import io.keploy.service.mock.Config;
+import io.keploy.service.mock.MockLib;
 import io.keploy.utils.HttpStatusReasons;
 import net.bytebuddy.implementation.bind.annotation.*;
 import okhttp3.*;
@@ -215,6 +218,17 @@ public class GoogleMapsInterceptor {
                         .setName("")
                         .setSpec(specSchema)
                         .build();
+
+                // for mock library
+                new GrpcService(); // to initialize the grpcClient
+                if (GrpcService.blockingStub != null && kctx.getFileExport() && !Config.MockId.containsKey(kctx.getTestId())) {
+                    final boolean recorded = MockLib.PutMock(Config.MockPath, httpMock);
+                    String CAPTURE = "\uD83D\uDFE0";
+                    if (recorded) {
+                        logger.info(CAPTURE + " Captured the mocked outputs for Http dependency call with meta: {}", meta);
+                    }
+                    return response;
+                }
 
                 kctx.getMock().add(httpMock);
                 return responseObject;

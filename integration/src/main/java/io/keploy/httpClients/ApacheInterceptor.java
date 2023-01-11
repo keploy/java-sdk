@@ -5,11 +5,13 @@ import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mock;
+import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
-import io.keploy.regression.Mode;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.service.GrpcService;
+import io.keploy.service.mock.Config;
+import io.keploy.service.mock.MockLib;
 import io.keploy.utils.MagicBytes;
 import io.keploy.utils.MultipartContent;
 import io.keploy.utils.Utility;
@@ -256,6 +258,25 @@ public class ApacheInterceptor {
                         .setName("")
                         .setSpec(specSchema)
                         .build();
+
+//                if internal.GetGrpcClient() != nil && kctx.FileExport && internal.MockId.Unique(kctx.TestID) {
+//                recorded := internal.PutMock(context.Background(), internal.MockPath, httpMock)
+//                if recorded {
+//                    fmt.Println("🟠 Captured the mocked outputs for Http dependency call with meta: ", meta)
+//                }
+//                return resp, err
+//            }
+
+                // for mock library
+                new GrpcService(); // to initialize the grpcClient
+                if (GrpcService.blockingStub != null && kctx.getFileExport() && !Config.MockId.containsKey(kctx.getTestId())) {
+                    final boolean recorded = MockLib.PutMock(Config.MockPath, httpMock);
+                    String CAPTURE = "\uD83D\uDFE0";
+                    if (recorded) {
+                        logger.info(CAPTURE + " Captured the mocked outputs for Http dependency call with meta: {}", meta);
+                    }
+                    return response;
+                }
 
                 kctx.getMock().add(httpMock);
                 return response;

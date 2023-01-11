@@ -47,7 +47,6 @@ public class ProcessSQL {
                 Service.Mock.SpecSchema specSchema = null;
 
                 specSchema = Service.Mock.SpecSchema.newBuilder().putAllMetadata(meta).setInt(id).setTable(table).setType("TABLE").build();
-//                }
 
                 Service.Mock mock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
