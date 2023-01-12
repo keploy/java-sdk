@@ -12,6 +12,8 @@ import java.util.Properties;
 import java.util.concurrent.Executor;
 
 import static io.keploy.ksql.KDriver.*;
+import static io.keploy.ksql.KResultSet.msg1;
+import static io.keploy.ksql.KResultSet.msg2;
 
 
 public class KConnection implements Connection {
@@ -230,7 +232,13 @@ public class KConnection implements Connection {
 
     @Override
     public void close() throws SQLException {
-
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedCon.isClosed();
+            }
+            return;
+        }
         wrappedCon.close();
 
     }
@@ -635,11 +643,13 @@ public class KConnection implements Connection {
 
     @Override
     public Savepoint setSavepoint() throws SQLException {
+        logger.warn("{} Savepoint setSavepoint() throws SQLException {}", msg1, msg2);
         return wrappedCon.setSavepoint();
     }
 
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
+        logger.warn("{} Savepoint setSavepoint(String name) throws SQLException {}", msg1, msg2);
         return wrappedCon.setSavepoint(name);
     }
 
@@ -668,6 +678,7 @@ public class KConnection implements Connection {
 
     @Override
     public void releaseSavepoint(Savepoint savepoint) throws SQLException {
+        logger.warn("{} void releaseSavepoint(Savepoint savepoint) throws SQLException {}", msg1, msg2);
         wrappedCon.releaseSavepoint(savepoint);
     }
 
@@ -832,21 +843,25 @@ public class KConnection implements Connection {
 
     @Override
     public Clob createClob() throws SQLException {
+        logger.warn("{} Clob createClob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createClob();
     }
 
     @Override
     public Blob createBlob() throws SQLException {
+        logger.warn("{} Blob createBlob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createBlob();
     }
 
     @Override
     public NClob createNClob() throws SQLException {
+        logger.warn("{} NClob createNClob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createNClob();
     }
 
     @Override
     public SQLXML createSQLXML() throws SQLException {
+        logger.warn("{} SQLXML createSQLXML() throws SQLException {}", msg1, msg2);
         return wrappedCon.createSQLXML();
     }
 
@@ -877,66 +892,85 @@ public class KConnection implements Connection {
 
     @Override
     public void setClientInfo(String name, String value) throws SQLClientInfoException {
+        logger.warn("{} void setClientInfo(String name, String value) throws SQLException {}", msg1, msg2);
         wrappedCon.setClientInfo(name, value);
     }
 
     @Override
     public void setClientInfo(Properties properties) throws SQLClientInfoException {
+        logger.warn("{} void setClientInfo(Properties properties) throws SQLException {}", msg1, msg2);
         wrappedCon.setClientInfo(properties);
     }
 
     @Override
     public String getClientInfo(String name) throws SQLException {
+        logger.warn("{} String getClientInfo(String name) throws SQLException {}", msg1, msg2);
         return wrappedCon.getClientInfo(name);
     }
 
     @Override
     public Properties getClientInfo() throws SQLException {
+        logger.warn("{} Properties getClientInfo() throws SQLException {}", msg1, msg2);
         return wrappedCon.getClientInfo();
     }
 
     @Override
     public Array createArrayOf(String typeName, Object[] elements) throws SQLException {
+        logger.warn("{} Array createArrayOf(String typeName, Object[] elements) throws SQLException {}", msg1, msg2);
         return wrappedCon.createArrayOf(typeName, elements);
     }
 
     @Override
     public Struct createStruct(String typeName, Object[] attributes) throws SQLException {
+        logger.warn("{} Struct createStruct(String typeName, Object[] attributes) throws SQLException {}", msg1, msg2);
         return wrappedCon.createStruct(typeName, attributes);
     }
 
     @Override
     public void setSchema(String schema) throws SQLException {
+        logger.warn("{} void setSchema(String schema) throws SQLException {}", msg1, msg2);
         wrappedCon.setSchema(schema);
     }
 
     @Override
     public String getSchema() throws SQLException {
+        if (mode == testMode) {
+            return "KEPLOY_SCHEMA";
+        }
         return wrappedCon.getSchema();
     }
 
     @Override
     public void abort(Executor executor) throws SQLException {
+        logger.warn("{} void abort(Executor executor) throws SQLException {}", msg1, msg2);
         wrappedCon.abort(executor);
     }
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
+        if (mode == testMode) {
+            return;
+        }
         wrappedCon.setNetworkTimeout(executor, milliseconds);
     }
 
     @Override
     public int getNetworkTimeout() throws SQLException {
+        if (mode == testMode) {
+            return 0;
+        }
         return wrappedCon.getNetworkTimeout();
     }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
+        logger.warn("{} <T> T unwrap(Class<T> iface) throws SQLException {}", msg1, msg2);
         return wrappedCon.unwrap(iface);
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
         return wrappedCon.isWrapperFor(iface);
     }
 }

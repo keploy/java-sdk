@@ -2,15 +2,19 @@ package io.keploy.ksql;
 
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import org.apache.logging.log4j.LogManager;
 
 import java.sql.*;
 
 import static io.keploy.ksql.KDriver.*;
+import static io.keploy.ksql.KResultSet.msg1;
+import static io.keploy.ksql.KResultSet.msg2;
 
 public class KStatement implements Statement {
     public Statement wrappedStatement;
-
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KStatement.class);
     public KStatement(Statement st) {
+        logger.debug("Inside KStatement !");
         wrappedStatement = st;
     }
 
@@ -177,11 +181,13 @@ public class KStatement implements Statement {
 
     @Override
     public void setMaxRows(int max) throws SQLException {
+        logger.warn("{} void setMaxRows(int max) throws SQLException {}", msg1, msg2);
         wrappedStatement.setMaxRows(max);
     }
 
     @Override
     public void setEscapeProcessing(boolean enable) throws SQLException {
+        logger.warn("{} void setEscapeProcessing(boolean enable) throws SQLException {}", msg1, msg2);
         wrappedStatement.setEscapeProcessing(enable);
     }
 
@@ -992,7 +998,6 @@ public class KStatement implements Statement {
             }
             return false;
         }
-//        Mode.ModeType mode = kctx.getMode();
 
         boolean rs = true;
         switch (mode) {
@@ -1001,7 +1006,6 @@ public class KStatement implements Statement {
                 break;
             case MODE_RECORD:
                 rs = wrappedStatement.isCloseOnCompletion();
-
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -1011,11 +1015,14 @@ public class KStatement implements Statement {
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
+        logger.warn("{} <T> T unwrap(Class<T> iface) throws SQLException {}", msg1, msg2);
         return wrappedStatement.unwrap(iface);
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
+
         return wrappedStatement.isWrapperFor(iface);
     }
 }
