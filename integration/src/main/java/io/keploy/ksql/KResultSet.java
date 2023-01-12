@@ -1422,9 +1422,7 @@ public class KResultSet implements ResultSet {
     @Override
     public Statement getStatement() throws SQLException {
         Kcontext kctx = Context.getCtx();
-        // Mode.ModeType mode = kctx.getMode();
-        logger.warn("{} Statement getStatement() throws SQLException {}", msg1, msg2);
-        if (kctx == null) {
+        if (mode == testMode) {
             return new KStatement();
         }
         return new KStatement(wrappedResultSet.getStatement());
