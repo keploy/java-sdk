@@ -30,8 +30,8 @@ public class KResultSet implements ResultSet {
 
     private Set<Service.SqlCol> colExists;
 
-    //extracted rows in test
-    private Map<String, String> RowData = new HashMap<>();
+    // extracted rows in test
+    private Map<String, String> TestRow = new HashMap<>();
 
     public List<Map<String, String>> preTable = new ArrayList<>();
 
@@ -77,7 +77,6 @@ public class KResultSet implements ResultSet {
 
     }
 
-
     public KResultSet() {
         if (Objects.equals(DriverName, "org.h2.Driver")) {
             logger.info("starting test connection for H2 ");
@@ -111,7 +110,7 @@ public class KResultSet implements ResultSet {
     }
 
     private void addRows() {
-//        RowRecord not null
+        // RowRecord not null
         if (RowRecord.size() != 0) {
             preTable.add(RowRecord);
         }
@@ -164,17 +163,16 @@ public class KResultSet implements ResultSet {
             }
         }
         String[] split = row.substring(1, row.length() - 1).split("\\|");
-        RowData.clear();
+        TestRow.clear();
         for (int i = 0; i < split.length; i++) {
             Service.SqlCol col = TableData.getCols(i);
             if (!Objects.equals(split[i], "NA")) {
-                RowData.put(col.getName(), split[i]);
+                TestRow.put(col.getName(), split[i]);
             }
         }
-        logger.debug("ROW-DATA:" + RowData);
+        logger.debug("ROW-DATA:" + TestRow);
         return true;
     }
-
 
     @Override
     public boolean next() {
@@ -189,7 +187,7 @@ public class KResultSet implements ResultSet {
             }
             return false;
         }
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
 
         boolean hasNext = false;
         switch (mode) {
@@ -246,7 +244,8 @@ public class KResultSet implements ResultSet {
             return;
         }
 
-        //This portion will be executed only at the time of record when context is not null
+        // This portion will be executed only at the time of record when context is not
+        // null
         if (!select) {
             addRows();
             Service.Table.Builder tableBuilder = Service.Table.newBuilder();
@@ -292,11 +291,11 @@ public class KResultSet implements ResultSet {
     @Override
     public String getString(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            String gs = RowData.get(String.valueOf(columnIndex));
-            if (RowData.get(String.valueOf(columnIndex)) == null || Objects.equals(gs, "Null")) {
+            String gs = TestRow.get(String.valueOf(columnIndex));
+            if (TestRow.get(String.valueOf(columnIndex)) == null || Objects.equals(gs, "Null")) {
                 wasNull = true;
                 return null;
             }
@@ -316,14 +315,15 @@ public class KResultSet implements ResultSet {
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(String.valueOf(columnIndex)) == null || Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+            if (TestRow.get(String.valueOf(columnIndex)) == null
+                    || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return false;
             }
-            return Boolean.parseBoolean(RowData.get(String.valueOf(columnIndex)));
+            return Boolean.parseBoolean(TestRow.get(String.valueOf(columnIndex)));
         }
         Boolean gb = wrappedResultSet.getBoolean(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gb));
@@ -334,14 +334,15 @@ public class KResultSet implements ResultSet {
     @Override
     public byte getByte(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(String.valueOf(columnIndex)) == null || Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+            if (TestRow.get(String.valueOf(columnIndex)) == null
+                    || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Byte.parseByte(RowData.get(String.valueOf(columnIndex)));
+            return Byte.parseByte(TestRow.get(String.valueOf(columnIndex)));
         }
         Byte gb = wrappedResultSet.getByte(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gb));
@@ -353,14 +354,14 @@ public class KResultSet implements ResultSet {
     public short getShort(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         String columnLabel = String.valueOf(columnIndex);
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Short.parseShort(RowData.get(columnLabel));
+            return Short.parseShort(TestRow.get(columnLabel));
         }
         Short gs = wrappedResultSet.getShort(columnIndex);
         RowRecord.put(columnLabel, String.valueOf(gs));
@@ -379,12 +380,12 @@ public class KResultSet implements ResultSet {
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Integer.parseInt(RowData.get(String.valueOf(columnIndex)));
+            return Integer.parseInt(TestRow.get(String.valueOf(columnIndex)));
         }
         Integer gs = wrappedResultSet.getInt(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
@@ -403,12 +404,12 @@ public class KResultSet implements ResultSet {
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Long.parseLong(RowData.get(String.valueOf(columnIndex)));
+            return Long.parseLong(TestRow.get(String.valueOf(columnIndex)));
         }
         Long gs = wrappedResultSet.getLong(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
@@ -420,9 +421,9 @@ public class KResultSet implements ResultSet {
     public float getFloat(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         String columnLabel = String.valueOf(columnIndex);
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
@@ -439,14 +440,14 @@ public class KResultSet implements ResultSet {
     public double getDouble(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         String columnLabel = String.valueOf(columnIndex);
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Double.parseDouble(RowData.get(String.valueOf(columnIndex)));
+            return Double.parseDouble(TestRow.get(String.valueOf(columnIndex)));
         }
         Double gs = wrappedResultSet.getDouble(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
@@ -479,11 +480,11 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return null;
             }
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnIndex)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
@@ -491,7 +492,7 @@ public class KResultSet implements ResultSet {
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
 
             try {
-                Date x = new Date(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+                Date x = new Date(formatter.parse(TestRow.get(String.valueOf(columnIndex))).getTime());
                 return x;
             } catch (ParseException e) {
                 logger.error(CROSS + "Failed to parse Date object from the stored mock due to \n" + e);
@@ -519,15 +520,16 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
-            if (RowData.get(columnLabel) == null || Objects.equals(parseDateTime, "") || parseDateTime == null) {
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnIndex)));
+            if (TestRow.get(columnLabel) == null || Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
             }
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
-//            SimpleDateFormat formatter = new SimpleDateFormat(ParseDateTime(RowData.get(String.valueOf(columnIndex))));
+            // SimpleDateFormat formatter = new
+            // SimpleDateFormat(ParseDateTime(TestRow.get(String.valueOf(columnIndex))));
             try {
-                return new Time(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+                return new Time(formatter.parse(TestRow.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + "Failed to parse Time object from the stored mock due to \n" + e);
             }
@@ -556,18 +558,18 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return null;
             }
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnIndex)));
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnIndex)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
             }
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
             try {
-                return new Timestamp(formatter.parse(RowData.get(String.valueOf(columnIndex))).getTime());
+                return new Timestamp(formatter.parse(TestRow.get(String.valueOf(columnIndex))).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + "Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
@@ -604,14 +606,14 @@ public class KResultSet implements ResultSet {
     @Override
     public String getString(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
-            return RowData.get(columnLabel);
+            return TestRow.get(columnLabel);
         }
         String res = null;
         String gs = wrappedResultSet.getString(columnLabel);
@@ -627,14 +629,14 @@ public class KResultSet implements ResultSet {
     @Override
     public boolean getBoolean(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return false;
             }
             wasNull = false;
-            return Boolean.parseBoolean(RowData.get(columnLabel));
+            return Boolean.parseBoolean(TestRow.get(columnLabel));
         }
         Boolean gb = wrappedResultSet.getBoolean(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gb));
@@ -646,14 +648,14 @@ public class KResultSet implements ResultSet {
     @Override
     public byte getByte(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Byte.parseByte(RowData.get(columnLabel));
+            return Byte.parseByte(TestRow.get(columnLabel));
         }
         Byte gb = wrappedResultSet.getByte(columnLabel);
 
@@ -665,14 +667,14 @@ public class KResultSet implements ResultSet {
     @Override
     public short getShort(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Short.parseShort(RowData.get(columnLabel));
+            return Short.parseShort(TestRow.get(columnLabel));
         }
         Short gs = wrappedResultSet.getShort(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gs));
@@ -691,11 +693,11 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Integer.parseInt(RowData.get(columnLabel)) == 0) {
+            if (TestRow.get(columnLabel) == null || Integer.parseInt(TestRow.get(columnLabel)) == 0) {
                 wasNull = true;
                 return 0;
             }
-            int x = Integer.parseInt(RowData.get(columnLabel));
+            int x = Integer.parseInt(TestRow.get(columnLabel));
             return x;
         }
         Integer gs = wrappedResultSet.getInt(columnLabel);
@@ -714,12 +716,13 @@ public class KResultSet implements ResultSet {
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Long.parseLong(RowData.get(columnLabel)) == 0 || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Long.parseLong(TestRow.get(columnLabel)) == 0
+                    || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Long.parseLong(RowData.get(columnLabel));
+            return Long.parseLong(TestRow.get(columnLabel));
         }
         Long gl = wrappedResultSet.getLong(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gl));
@@ -730,14 +733,14 @@ public class KResultSet implements ResultSet {
     @Override
     public float getFloat(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Float.parseFloat(RowData.get(columnLabel));
+            return Float.parseFloat(TestRow.get(columnLabel));
         }
         Float gf = wrappedResultSet.getFloat(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gf));
@@ -748,14 +751,14 @@ public class KResultSet implements ResultSet {
     @Override
     public double getDouble(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Double.parseDouble(RowData.get(columnLabel));
+            return Double.parseDouble(TestRow.get(columnLabel));
         }
         Double gd = wrappedResultSet.getDouble(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gd));
@@ -790,18 +793,18 @@ public class KResultSet implements ResultSet {
 
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
             }
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
             try {
-                Date x = new Date(formatter.parse(RowData.get(columnLabel)).getTime());
+                Date x = new Date(formatter.parse(TestRow.get(columnLabel)).getTime());
                 return x;
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse Date object from the stored mock due to \n" + e);
@@ -829,11 +832,11 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
 
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
@@ -842,7 +845,7 @@ public class KResultSet implements ResultSet {
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
 
             try {
-                return new Time(formatter.parse(RowData.get(columnLabel)).getTime());
+                return new Time(formatter.parse(TestRow.get(columnLabel)).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse Time object from the stored mock due to \n" + e);
             }
@@ -868,11 +871,11 @@ public class KResultSet implements ResultSet {
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
-            String parseDateTime = ParseDateTime(RowData.get(String.valueOf(columnLabel)));
+            String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
                 return null;
@@ -880,7 +883,7 @@ public class KResultSet implements ResultSet {
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
 
             try {
-                return new Timestamp(formatter.parse(RowData.get(columnLabel)).getTime());
+                return new Timestamp(formatter.parse(TestRow.get(columnLabel)).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
@@ -935,7 +938,7 @@ public class KResultSet implements ResultSet {
     @Override
     public ResultSetMetaData getMetaData() throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             return new KResultSetMetaData();
         }
@@ -976,14 +979,15 @@ public class KResultSet implements ResultSet {
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(String.valueOf(columnIndex)) == null || Objects.equals(RowData.get(String.valueOf(columnIndex)), "Null")) {
+            if (TestRow.get(String.valueOf(columnIndex)) == null
+                    || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
                 wasNull = true;
                 return null;
             }
             wasNull = false;
-            return new BigDecimal(Double.parseDouble(RowData.get(String.valueOf(columnIndex))));
+            return new BigDecimal(Double.parseDouble(TestRow.get(String.valueOf(columnIndex))));
         }
         BigDecimal gs = wrappedResultSet.getBigDecimal(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
@@ -994,14 +998,14 @@ public class KResultSet implements ResultSet {
     @Override
     public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
         Kcontext kctx = Context.getCtx();
-//        Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (RowData.get(columnLabel) == null || Objects.equals(RowData.get(columnLabel), "Null")) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return null;
             }
             wasNull = false;
-            return new BigDecimal(Double.parseDouble(RowData.get(columnLabel)));
+            return new BigDecimal(Double.parseDouble(TestRow.get(columnLabel)));
         }
         BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gl));
@@ -1222,25 +1226,29 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {
-        logger.warn("{} void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateAsciiStream(columnIndex, x, length);
     }
 
     @Override
     public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {
-        logger.warn("{} void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBinaryStream(columnIndex, x, length);
     }
 
     @Override
     public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {
-        logger.warn("{} void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateCharacterStream(columnIndex, x, length);
     }
 
     @Override
     public void updateObject(int columnIndex, Object x, int scaleOrLength) throws SQLException {
-        logger.warn("{} void updateObject(int columnIndex, Object x, int scaleOrLength) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateObject(int columnIndex, Object x, int scaleOrLength) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateObject(columnIndex, x, scaleOrLength);
     }
 
@@ -1336,25 +1344,30 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateAsciiStream(String columnLabel, InputStream x, int length) throws SQLException {
-        logger.warn("{} void updateAsciiStream(String columnLabel, InputStream x, int length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateAsciiStream(String columnLabel, InputStream x, int length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateAsciiStream(columnLabel, x, length);
     }
 
     @Override
     public void updateBinaryStream(String columnLabel, InputStream x, int length) throws SQLException {
-        logger.warn("{} void updateBinaryStream(String columnLabel, InputStream x, int length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateBinaryStream(String columnLabel, InputStream x, int length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBinaryStream(columnLabel, x, length);
     }
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader, int length) throws SQLException {
-        logger.warn("{} void updateCharacterStream(String columnLabel, Reader reader, int length) throws SQLException {}", msg1, msg2);
+        logger.warn(
+                "{} void updateCharacterStream(String columnLabel, Reader reader, int length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateCharacterStream(columnLabel, reader, length);
     }
 
     @Override
     public void updateObject(String columnLabel, Object x, int scaleOrLength) throws SQLException {
-        logger.warn("{} void updateObject(String columnLabel, Object x, int scaleOrLength) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateObject(String columnLabel, Object x, int scaleOrLength) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateObject(columnLabel, x, scaleOrLength);
     }
 
@@ -1409,7 +1422,7 @@ public class KResultSet implements ResultSet {
     @Override
     public Statement getStatement() throws SQLException {
         Kcontext kctx = Context.getCtx();
-//  Mode.ModeType mode = kctx.getMode();
+        // Mode.ModeType mode = kctx.getMode();
         logger.warn("{} Statement getStatement() throws SQLException {}", msg1, msg2);
         if (kctx == null) {
             return new KStatement();
@@ -1419,7 +1432,8 @@ public class KResultSet implements ResultSet {
 
     @Override
     public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
-        logger.warn("{} Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {}", msg1, msg2);
+        logger.warn("{} Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {}", msg1,
+                msg2);
         return wrappedResultSet.getObject(columnIndex, map);
     }
 
@@ -1449,7 +1463,8 @@ public class KResultSet implements ResultSet {
 
     @Override
     public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
-        logger.warn("{} Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {}", msg1, msg2);
+        logger.warn("{} Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {}", msg1,
+                msg2);
         return wrappedResultSet.getObject(columnLabel, map);
     }
 
@@ -1695,85 +1710,102 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException {
-        logger.warn("{} void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateNCharacterStream(columnIndex, x, length);
     }
 
     @Override
     public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn(
+                "{} void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateNCharacterStream(columnLabel, reader, length);
     }
 
     @Override
     public void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {
-        logger.warn("{} void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateAsciiStream(columnIndex, x, length);
     }
 
     @Override
     public void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {
-        logger.warn("{} void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBinaryStream(columnIndex, x, length);
     }
 
     @Override
     public void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {
-        logger.warn("{} void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateCharacterStream(columnIndex, x, length);
     }
 
     @Override
     public void updateAsciiStream(String columnLabel, InputStream x, long length) throws SQLException {
-        logger.warn("{} void updateAsciiStream(String columnLabel, InputStream x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateAsciiStream(String columnLabel, InputStream x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateAsciiStream(columnLabel, x, length);
     }
 
     @Override
     public void updateBinaryStream(String columnLabel, InputStream x, long length) throws SQLException {
-        logger.warn("{} void updateBinaryStream(String columnLabel, InputStream x, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateBinaryStream(String columnLabel, InputStream x, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBinaryStream(columnLabel, x, length);
     }
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn(
+                "{} void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateCharacterStream(columnLabel, reader, length);
     }
 
     @Override
     public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
-        logger.warn("{}  void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{}  void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBlob(columnIndex, inputStream, length);
     }
 
     @Override
     public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
-        logger.warn("{} void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {}", msg1, msg2);
+        logger.warn(
+                "{} void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {}",
+                msg1, msg2);
         wrappedResultSet.updateBlob(columnLabel, inputStream, length);
     }
 
     @Override
     public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateClob(int columnIndex, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateClob(int columnIndex, Reader reader, long length) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateClob(columnIndex, reader, length);
     }
 
     @Override
     public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateClob(String columnLabel, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateClob(String columnLabel, Reader reader, long length) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateClob(columnLabel, reader, length);
     }
 
     @Override
     public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateNClob(columnIndex, reader, length);
     }
 
     @Override
     public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
-        logger.warn("{} void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateNClob(columnLabel, reader, length);
     }
 
@@ -1785,7 +1817,8 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
-        logger.warn("{} void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateNCharacterStream(columnLabel, reader);
     }
 
@@ -1821,7 +1854,8 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
-        logger.warn("{}  void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {}", msg1, msg2);
+        logger.warn("{}  void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateCharacterStream(columnLabel, reader);
     }
 
@@ -1833,7 +1867,8 @@ public class KResultSet implements ResultSet {
 
     @Override
     public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
-        logger.warn("{} void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {}", msg1, msg2);
+        logger.warn("{} void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {}", msg1,
+                msg2);
         wrappedResultSet.updateBlob(columnLabel, inputStream);
     }
 
@@ -1893,7 +1928,7 @@ public class KResultSet implements ResultSet {
         return obj == null;
     }
 
-    //During Test Mode
+    // During Test Mode
     public void GetPreAndScale() {
         PrecisionDict = new HashMap<>();
         ScaleDict = new HashMap<>();
@@ -1914,7 +1949,7 @@ public class KResultSet implements ResultSet {
         }
     }
 
-    //During Record Mode
+    // During Record Mode
     private List<Service.SqlCol> SetPreAndScale() {
         List<Service.SqlCol> sqlColList1 = new ArrayList<>();
         if (sqlColList == null) {
@@ -1935,7 +1970,8 @@ public class KResultSet implements ResultSet {
             if (ScaleDict.size() > 0) {
                 scale = Long.parseLong(ScaleDict.get(colname));
             }
-            Service.SqlCol sqlCol = Service.SqlCol.newBuilder().setName(colname).setType(type).setPrecision(precision).setScale(scale).build();
+            Service.SqlCol sqlCol = Service.SqlCol.newBuilder().setName(colname).setType(type).setPrecision(precision)
+                    .setScale(scale).build();
             sqlColList1.add(sqlCol);
         }
         PrecisionDict.clear();
@@ -1948,7 +1984,8 @@ public class KResultSet implements ResultSet {
             logger.debug("Found empty formatted Date to Parse during test\n");
             return "";
         }
-        // Try different date and time patterns until a pattern is found that can parse the given string
+        // Try different date and time patterns until a pattern is found that can parse
+        // the given string
         String[] patterns = {
                 "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
                 "yyyy-MM-dd'T'HH:mm:ssXXX",
@@ -1974,7 +2011,9 @@ public class KResultSet implements ResultSet {
                 return pattern;
             } catch (ParseException e) {
                 // Do nothing, try the next pattern
-                logger.debug(" ParseDateTime method cannot parse the formatted string provided... trying next!\n for date " + formattedDate);
+                logger.debug(
+                        " ParseDateTime method cannot parse the formatted string provided... trying next!\n for date "
+                                + formattedDate);
             }
         }
         return "";
