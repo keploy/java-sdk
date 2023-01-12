@@ -8,8 +8,7 @@ import java.sql.SQLException;
 import java.util.HashMap;
 
 import static io.keploy.ksql.KDriver.mode;
-import static io.keploy.ksql.KResultSet.msg1;
-import static io.keploy.ksql.KResultSet.msg2;
+import static io.keploy.ksql.KResultSet.*;
 
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
@@ -29,9 +28,11 @@ public class KResultSetMetaData implements ResultSetMetaData {
     @Override
     public int getColumnCount() throws SQLException {
         if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnCount in mock metaData {} :" + KResultSet.meta.get("getColumnCount"), meta);
             return Integer.parseInt(KResultSet.meta.get("getColumnCount"));
         }
         int gc = wrappedResultSetMetaData.getColumnCount();
+        logger.debug("getColumnCount value in KResultSetMetaData {}", gc);
         KResultSet.meta.put("getColumnCount", Integer.toString(gc));
         return gc;
     }
