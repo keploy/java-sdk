@@ -10,6 +10,8 @@ import java.sql.*;
 import java.util.Calendar;
 import java.util.Map;
 
+import static io.keploy.ksql.KDriver.mode;
+import static io.keploy.ksql.KDriver.testMode;
 import static io.keploy.ksql.KResultSet.msg1;
 import static io.keploy.ksql.KResultSet.msg2;
 
@@ -652,655 +654,660 @@ public class KCallableStatement implements CallableStatement {
 
     @Override
     public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCharacterStream(parameterName, reader, length);
     }
 
     @Override
     public void setAsciiStream(String parameterName, InputStream x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setAsciiStream(String parameterName, InputStream x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setAsciiStream(parameterName, x);
     }
 
     @Override
     public void setBinaryStream(String parameterName, InputStream x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBinaryStream(String parameterName, InputStream x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBinaryStream(parameterName, x);
     }
 
     @Override
     public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCharacterStream(String parameterName, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCharacterStream(parameterName, reader);
     }
 
     @Override
     public void setNCharacterStream(String parameterName, Reader value) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNCharacterStream(String parameterName, Reader value) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNCharacterStream(parameterName, value);
     }
 
     @Override
     public void setClob(String parameterName, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setClob(String parameterName, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setClob(parameterName, reader);
     }
 
     @Override
     public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBlob(String parameterName, InputStream inputStream) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBlob(parameterName, inputStream);
     }
 
     @Override
     public void setNClob(String parameterName, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNClob(String parameterName, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNClob(parameterName, reader);
     }
 
     @Override
     public <T> T getObject(int parameterIndex, Class<T> type) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} <T> T getObject(int parameterIndex, Class<T> type) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getObject(parameterIndex, type);
     }
 
     @Override
     public <T> T getObject(String parameterName, Class<T> type) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} <T> T getObject(String parameterName, Class<T> type) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getObject(parameterName, type);
     }
 
     @Override
     public ResultSet executeQuery() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return new KResultSet();
+        }
         return new KResultSet(wrappedCallableStatement.executeQuery());
     }
 
     @Override
     public int executeUpdate() throws SQLException {
+        if (mode == testMode) {
+            return 1;
+        }
         return wrappedCallableStatement.executeUpdate();
     }
 
     @Override
     public void setNull(int parameterIndex, int sqlType) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNull(int parameterIndex, int sqlType) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNull(parameterIndex, sqlType);
     }
 
     @Override
     public void setBoolean(int parameterIndex, boolean x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBoolean(int parameterIndex, boolean x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBoolean(parameterIndex, x);
     }
 
     @Override
     public void setByte(int parameterIndex, byte x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setByte(int parameterIndex, byte x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setByte(parameterIndex, x);
     }
 
     @Override
     public void setShort(int parameterIndex, short x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setShort(int parameterIndex, short x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setShort(parameterIndex, x);
     }
 
     @Override
     public void setInt(int parameterIndex, int x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setInt(int parameterIndex, int x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setInt(parameterIndex, x);
     }
 
     @Override
     public void setLong(int parameterIndex, long x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setLong(int parameterIndex, long x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setLong(parameterIndex, x);
     }
 
     @Override
     public void setFloat(int parameterIndex, float x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setFloat(int parameterIndex, float x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setFloat(parameterIndex, x);
     }
 
     @Override
     public void setDouble(int parameterIndex, double x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setDouble(int parameterIndex, double x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setDouble(parameterIndex, x);
     }
 
     @Override
     public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBigDecimal(parameterIndex, x);
     }
 
     @Override
     public void setString(int parameterIndex, String x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setString(int parameterIndex, String x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setString(parameterIndex, x);
     }
 
     @Override
     public void setBytes(int parameterIndex, byte[] x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBytes(int parameterIndex, byte[] x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBytes(parameterIndex, x);
     }
 
     @Override
     public void setDate(int parameterIndex, Date x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setDate(int parameterIndex, Date x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setDate(parameterIndex, x);
     }
 
     @Override
     public void setTime(int parameterIndex, Time x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setTime(int parameterIndex, Time x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setTime(parameterIndex, x);
     }
 
     @Override
     public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setTimestamp(int parameterIndex, Timestamp x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setTimestamp(parameterIndex, x);
     }
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setAsciiStream(parameterIndex, x, length);
     }
 
     @Override
     @Deprecated
     public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setUnicodeStream(parameterIndex, x, length);
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBinaryStream(parameterIndex, x, length);
     }
 
     @Override
     public void clearParameters() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void clearParameters() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.clearParameters();
     }
 
     @Override
     public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setObject(parameterIndex, x, targetSqlType);
     }
 
     @Override
     public void setObject(int parameterIndex, Object x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setObject(int parameterIndex, Object x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setObject(parameterIndex, x);
     }
 
     @Override
     public boolean execute() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean execute() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.execute();
     }
 
     @Override
     public void addBatch() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void addBatch() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.addBatch();
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCharacterStream(parameterIndex, reader, length);
     }
 
     @Override
     public void setRef(int parameterIndex, Ref x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setRef(int parameterIndex, Ref x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setRef(parameterIndex, x);
     }
 
     @Override
     public void setBlob(int parameterIndex, Blob x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBlob(int parameterIndex, Blob x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBlob(parameterIndex, x);
     }
 
     @Override
     public void setClob(int parameterIndex, Clob x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setClob(int parameterIndex, Clob x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setClob(parameterIndex, x);
     }
 
     @Override
     public void setArray(int parameterIndex, Array x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setArray(int parameterIndex, Array x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setArray(parameterIndex, x);
     }
 
     @Override
     public ResultSetMetaData getMetaData() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} ResultSetMetaData getMetaData() throws SQLException {}", msg1, msg2);
         return new KResultSetMetaData(wrappedCallableStatement.getMetaData());
     }
 
     @Override
     public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setDate(parameterIndex, x, cal);
     }
 
     @Override
     public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setTime(parameterIndex, x, cal);
     }
 
     @Override
     public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setTimestamp(parameterIndex, x, cal);
     }
 
     @Override
     public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNull(parameterIndex, sqlType, typeName);
     }
 
     @Override
     public void setURL(int parameterIndex, URL x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setURL(int parameterIndex, URL x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setURL(parameterIndex, x);
     }
 
     @Override
     public ParameterMetaData getParameterMetaData() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} ParameterMetaData getParameterMetaData() throws SQLException {}", msg1, msg2);
         return new KParameterMetaData(wrappedCallableStatement.getParameterMetaData());
     }
 
     @Override
     public void setRowId(int parameterIndex, RowId x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setRowId(int parameterIndex, RowId x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setRowId(parameterIndex, x);
     }
 
     @Override
     public void setNString(int parameterIndex, String value) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNString(int parameterIndex, String value) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNString(parameterIndex, value);
     }
 
     @Override
     public void setNCharacterStream(int parameterIndex, Reader value, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNCharacterStream(int parameterIndex, Reader value, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNCharacterStream(parameterIndex, value, length);
     }
 
     @Override
     public void setNClob(int parameterIndex, NClob value) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNClob(int parameterIndex, NClob value) throws SQLException {}", msg1, msg2);
 
     }
 
     @Override
     public void setClob(int parameterIndex, Reader reader, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setClob(int parameterIndex, Reader reader, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setClob(parameterIndex, reader, length);
     }
 
     @Override
     public void setBlob(int parameterIndex, InputStream inputStream, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBlob(int parameterIndex, InputStream inputStream, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBlob(parameterIndex, inputStream, length);
     }
 
     @Override
     public void setNClob(int parameterIndex, Reader reader, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNClob(int parameterIndex, Reader reader, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNClob(parameterIndex, reader, length);
     }
 
     @Override
     public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setSQLXML(parameterIndex, xmlObject);
     }
 
     @Override
     public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setObject(parameterIndex, x, targetSqlType, scaleOrLength);
     }
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setAsciiStream(int parameterIndex, InputStream x, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setAsciiStream(parameterIndex, x, length);
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBinaryStream(int parameterIndex, InputStream x, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBinaryStream(parameterIndex, x, length);
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader, long length) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCharacterStream(int parameterIndex, Reader reader, long length) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCharacterStream(parameterIndex, reader, length);
     }
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setAsciiStream(int parameterIndex, InputStream x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setAsciiStream(parameterIndex, x);
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBinaryStream(int parameterIndex, InputStream x) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBinaryStream(parameterIndex, x);
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCharacterStream(parameterIndex, reader);
     }
 
     @Override
     public void setNCharacterStream(int parameterIndex, Reader value) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNCharacterStream(int parameterIndex, Reader value) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNCharacterStream(parameterIndex, value);
     }
 
     @Override
     public void setClob(int parameterIndex, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setClob(int parameterIndex, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setClob(parameterIndex, reader);
     }
 
     @Override
     public void setBlob(int parameterIndex, InputStream inputStream) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setBlob(int parameterIndex, InputStream inputStream) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setBlob(parameterIndex, inputStream);
     }
 
     @Override
     public void setNClob(int parameterIndex, Reader reader) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setNClob(int parameterIndex, Reader reader) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setNClob(parameterIndex, reader);
     }
 
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} ResultSet executeQuery(String sql) throws SQLException {}", msg1, msg2);
         return new KResultSet(wrappedCallableStatement.executeQuery(sql));
     }
 
     @Override
     public int executeUpdate(String sql) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int executeUpdate(String sql) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.executeUpdate(sql);
     }
 
     @Override
     public void close() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void close() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.close();
     }
 
     @Override
     public int getMaxFieldSize() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getMaxFieldSize() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getMaxFieldSize();
     }
 
     @Override
     public void setMaxFieldSize(int max) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setMaxFieldSize(int max) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setMaxFieldSize(max);
     }
 
     @Override
     public int getMaxRows() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getMaxRows() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getMaxRows();
     }
 
     @Override
     public void setMaxRows(int max) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setMaxRows(int max) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setMaxRows(max);
     }
 
     @Override
     public void setEscapeProcessing(boolean enable) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setEscapeProcessing(boolean enable) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setEscapeProcessing(enable);
     }
 
     @Override
     public int getQueryTimeout() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getQueryTimeout() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getQueryTimeout();
     }
 
     @Override
     public void setQueryTimeout(int seconds) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setQueryTimeout(int seconds) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setQueryTimeout(seconds);
     }
 
     @Override
     public void cancel() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void cancel() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.cancel();
     }
 
     @Override
     public SQLWarning getWarnings() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} SQLWarning getWarnings() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getWarnings();
     }
 
     @Override
     public void clearWarnings() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void clearWarnings() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.clearWarnings();
     }
 
     @Override
     public void setCursorName(String name) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setCursorName(String name) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setCursorName(name);
     }
 
     @Override
     public boolean execute(String sql) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean execute(String sql) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.execute(sql);
     }
 
     @Override
     public ResultSet getResultSet() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} ResultSet getResultSet() throws SQLException {}", msg1, msg2);
         return new KResultSet(wrappedCallableStatement.getResultSet());
     }
 
     @Override
     public int getUpdateCount() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getUpdateCount() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getUpdateCount();
     }
 
     @Override
     public boolean getMoreResults() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean getMoreResults() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getMoreResults();
     }
 
     @Override
     public void setFetchDirection(int direction) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setFetchDirection(int direction) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setFetchDirection(direction);
     }
 
     @Override
     public int getFetchDirection() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getFetchDirection() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getFetchDirection();
     }
 
     @Override
     public void setFetchSize(int rows) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setFetchSize(int rows) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setFetchDirection(rows);
     }
 
     @Override
     public int getFetchSize() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getFetchSize() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getFetchSize();
     }
 
     @Override
     public int getResultSetConcurrency() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getResultSetConcurrency() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getResultSetConcurrency();
     }
 
     @Override
     public int getResultSetType() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getResultSetType() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getResultSetType();
     }
 
     @Override
     public void addBatch(String sql) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void addBatch(String sql) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.addBatch(sql);
     }
 
     @Override
     public void clearBatch() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void clearBatch() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.clearBatch();
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int[] executeBatch() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.executeBatch();
     }
 
     @Override
     public Connection getConnection() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} Connection getConnection() throws SQLException {}", msg1, msg2);
         return new KConnection(wrappedCallableStatement.getConnection());
     }
 
     @Override
     public boolean getMoreResults(int current) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean getMoreResults(int current) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getMoreResults(current);
     }
 
     @Override
     public ResultSet getGeneratedKeys() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} ResultSet getGeneratedKeys() throws SQLException {}", msg1, msg2);
         return new KResultSet(wrappedCallableStatement.getGeneratedKeys());
     }
 
     @Override
     public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.executeUpdate();
     }
 
     @Override
     public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int executeUpdate(String sql, int[] columnIndexes) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.executeUpdate();
     }
 
     @Override
     public int executeUpdate(String sql, String[] columnNames) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int executeUpdate(String sql, String[] columnNames) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.executeUpdate(sql, columnNames);
     }
 
     @Override
     public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean execute(String sql, int autoGeneratedKeys) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.execute(sql, autoGeneratedKeys);
     }
 
     @Override
     public boolean execute(String sql, int[] columnIndexes) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean execute(String sql, int[] columnIndexes) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.execute(sql, columnIndexes);
     }
 
     @Override
     public boolean execute(String sql, String[] columnNames) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean execute(String sql, String[] columnNames) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.execute(sql, columnNames);
     }
 
     @Override
     public int getResultSetHoldability() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getResultSetHoldability() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.getResultSetHoldability();
     }
 
     @Override
     public boolean isClosed() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isClosed() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.isClosed();
     }
 
     @Override
     public void setPoolable(boolean poolable) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void setPoolable(boolean poolable) throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.setPoolable(poolable);
     }
 
     @Override
     public boolean isPoolable() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isPoolable() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.isPoolable();
     }
 
     @Override
     public void closeOnCompletion() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} void closeOnCompletion() throws SQLException {}", msg1, msg2);
         wrappedCallableStatement.closeOnCompletion();
     }
 
     @Override
     public boolean isCloseOnCompletion() throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isCloseOnCompletion() throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.isCloseOnCompletion();
     }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} <T> T unwrap(Class<T> iface) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.unwrap(iface);
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
-        logger.warn("{} int getNetworkTimeout() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
         return wrappedCallableStatement.isWrapperFor(iface);
     }
 }
