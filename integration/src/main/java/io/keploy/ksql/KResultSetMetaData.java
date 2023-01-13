@@ -28,8 +28,12 @@ public class KResultSetMetaData implements ResultSetMetaData {
     @Override
     public int getColumnCount() throws SQLException {
         if (mode == Mode.ModeType.MODE_TEST) {
-            logger.debug("Stored value of getColumnCount in mock metaData {} :" + KResultSet.meta.get("getColumnCount"), meta);
-            return Integer.parseInt(KResultSet.meta.get("getColumnCount"));
+            logger.debug("Stored value of getColumnCount is {} in mock metaData : {} ", meta.get("getColumnCount"), meta);
+            int gs = 1;
+            if (KResultSet.meta.get("getColumnCount") != null) {
+                gs = Integer.parseInt(KResultSet.meta.get("getColumnCount"));
+            }
+            return gs;
         }
         int gc = wrappedResultSetMetaData.getColumnCount();
         logger.debug("getColumnCount value in KResultSetMetaData {}", gc);
@@ -39,62 +43,62 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isAutoIncrement(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isAutoIncrement(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isAutoIncrement(column);
     }
 
     @Override
     public boolean isCaseSensitive(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isCaseSensitive(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isCaseSensitive(column);
     }
 
     @Override
     public boolean isSearchable(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isSearchable(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isSearchable(column);
     }
 
     @Override
     public boolean isCurrency(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isCurrency(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isCurrency(column);
     }
 
     @Override
     public int isNullable(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int isNullable(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isNullable(column);
     }
 
     @Override
     public boolean isSigned(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isSigned(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isSigned(column);
     }
 
     @Override
     public int getColumnDisplaySize(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getColumnDisplaySize(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getColumnDisplaySize(column);
     }
 
     @Override
     public String getColumnLabel(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getColumnLabel(column);
     }
 
     @Override
     public String getColumnName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getColumnName(int column) throws SQLException {}", msg1, msg2);
         String getColumnName = wrappedResultSetMetaData.getColumnName(column);
         return getColumnName;
     }
 
     @Override
     public String getSchemaName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getSchemaName(int column) throws SQLException {}", msg1, msg2);
         String getSchemaName = wrappedResultSetMetaData.getSchemaName(column);
         return getSchemaName;
     }
@@ -126,61 +130,61 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getTableName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getTableName(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getTableName(column);
     }
 
     @Override
     public String getCatalogName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getCatalogName(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getCatalogName(column);
     }
 
     @Override
     public int getColumnType(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} int getColumnType(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getColumnType(column);
     }
 
     @Override
     public String getColumnTypeName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getColumnTypeName(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getColumnTypeName(column);
     }
 
     @Override
     public boolean isReadOnly(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isReadOnly(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isReadOnly(column);
     }
 
     @Override
     public boolean isWritable(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isWritable(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isWritable(column);
     }
 
     @Override
     public boolean isDefinitelyWritable(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isDefinitelyWritable(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isDefinitelyWritable(column);
     }
 
     @Override
     public String getColumnClassName(int column) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} String getColumnClassName(int column) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.getColumnClassName(column);
     }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} <T> T unwrap(Class<T> iface) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.unwrap(iface);
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
-        logger.warn("{} int getRow() throws SQLException {}", msg1, msg2);
+        logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
         return wrappedResultSetMetaData.isWrapperFor(iface);
     }
 }

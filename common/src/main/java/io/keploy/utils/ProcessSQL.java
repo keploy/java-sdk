@@ -10,6 +10,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -87,6 +88,10 @@ public class ProcessSQL {
             col.add(v.getName());
         }
         return col;
+    }
+
+    public static HashMap<String, String> convertMap(Map<String, String> s) {
+        return new HashMap<>(s);
     }
 
 }

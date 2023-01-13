@@ -12,8 +12,8 @@ import java.util.Properties;
 import java.util.concurrent.Executor;
 
 import static io.keploy.ksql.KDriver.*;
-import static io.keploy.ksql.KResultSet.msg1;
-import static io.keploy.ksql.KResultSet.msg2;
+import static io.keploy.ksql.KResultSet.*;
+import static io.keploy.utils.ProcessSQL.convertMap;
 
 
 public class KConnection implements Connection {
@@ -83,15 +83,23 @@ public class KConnection implements Connection {
             return new KPreparedStatement(resultSet);
         }
         mode = kctx.getMode();
+        MyQuery = sql;
         logger.debug("KPrepared statement after setting context with query" + sql);
         PreparedStatement ps = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
-//                ps = Mockito.mock(PreparedStatement.class);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 ps = wrappedCon.prepareStatement(sql);
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -115,6 +123,15 @@ public class KConnection implements Connection {
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = wrappedCon.prepareCall(sql);
@@ -501,18 +518,27 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+
         mode = kctx.getMode();
+        MyQuery = sql;
         PreparedStatement rs = new KPreparedStatement();
-        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
-//                rs = testconn.prepareStatement(sql, resultSetType, resultSetConcurrency);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
-                MyQuery = sql;
+
                 rs = wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
                 break;
             default:
@@ -710,22 +736,30 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
-//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql);
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+        MyQuery = sql;
         mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
-                MyQuery = sql;
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability));
                 break;
             default:
@@ -767,20 +801,26 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, autoGeneratedKeys);
             }
-            PreparedStatement resultSet = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
-            return new KPreparedStatement(resultSet);
+            return new KPreparedStatement();
         }
-        PreparedStatement rs = new KPreparedStatement();
+        PreparedStatement rs = null;
         logger.debug("KPrepared statement after setting context with query" + sql + "with autoGeneratedKeys : " + autoGeneratedKeys);
         mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
-                rs = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = wrappedCon.prepareStatement(sql, autoGeneratedKeys);
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -795,18 +835,28 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, columnIndexes);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+        MyQuery = sql;
+
         mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    } else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 // don't run
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnIndexes));
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -822,17 +872,26 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, columnNames);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
         mode = kctx.getMode();
+        MyQuery = sql;
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnNames));
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");

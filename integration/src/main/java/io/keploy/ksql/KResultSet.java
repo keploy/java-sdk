@@ -120,27 +120,30 @@ public class KResultSet implements ResultSet {
 
     // Used in test mode for extracting table from mocks
     void extractTable(int cnt) {
-        if (cnt != 0) {
-            return;
+        if (cnt == 0) {
+            Kcontext kctx = Context.getCtx();
+            if (kctx.getMock().size() <= 0) {
+                logger.info(CROSS + " Cannot extract tables during test because mocks they are unavailable ! \n");
+            } else {
+                List<Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0 && mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                    meta = ProcessSQL.convertMap(mock.get(0).getSpec().getMetadataMap());
+                }
+
+                Service.Table testTable = null;
+
+                try {
+                    testTable = ProcessSQL.ProcessDep(null, null, 0);
+                } catch (InvalidProtocolBufferException var6) {
+                    logger.info(CROSS + " Unable to extract tables during test \n" + var6);
+                }
+
+                this.TableData = testTable;
+                if (this.TableData != null) {
+                    this.GetPreAndScale();
+                }
+            }
         }
-        Kcontext kctx = Context.getCtx();
-        if (kctx.getMock().size() <= 0) {
-            logger.info(CROSS + " Cannot extract tables during test because mocks they are unavailable ! \n");
-            return;
-        }
-        Map<String, String> s = kctx.getMock().get(0).getSpec().getMetadataMap();
-        meta = convertMap(s);
-        Service.Table testTable = null;
-        try {
-            testTable = ProcessSQL.ProcessDep(null, null, 0);
-        } catch (InvalidProtocolBufferException e) {
-            logger.info(CROSS + " Unable to extract tables during test \n" + e);
-        }
-        TableData = testTable;
-        if (TableData == null) {
-            return;
-        }
-        GetPreAndScale();
     }
 
     // Used in test mode for extracting single row in the form of string from mocks
@@ -1916,10 +1919,6 @@ public class KResultSet implements ResultSet {
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
         logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
         return wrappedResultSet.isWrapperFor(iface);
-    }
-
-    HashMap<String, String> convertMap(Map<String, String> s) {
-        return new HashMap<>(s);
     }
 
     boolean isNullValue(Object obj) {
