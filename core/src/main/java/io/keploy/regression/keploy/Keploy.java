@@ -36,6 +36,7 @@ public class Keploy {
                 envMode = System.getenv("KEPLOY_MODE");
             }
 
+            envMode = envMode.trim();
 
             switch (envMode) {
                 case "record":

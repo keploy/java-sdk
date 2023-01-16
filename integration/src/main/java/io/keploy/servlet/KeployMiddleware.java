@@ -47,16 +47,19 @@ public class KeployMiddleware implements Filter {
         Config cfg = new Config();
         AppConfig appConfig = new AppConfig();
         if (System.getenv("APP_NAME") != null) {
-            appConfig.setName(System.getenv("APP_NAME"));
+            String app_name = System.getenv("APP_NAME").trim();
+            appConfig.setName(app_name);
         }
         if (System.getenv("APP_PORT") != null) {
-            appConfig.setPort(System.getenv("APP_PORT"));
+            String app_port = System.getenv("APP_PORT").trim();
+            appConfig.setPort(app_port);
         }
 
         //Path for exported tests
         String kpath = System.getenv("KEPLOY_TEST_PATH");
         Path path = Paths.get("");
         if (kpath != null && kpath.length() > 0 && !Paths.get(kpath).isAbsolute()) {
+            kpath = kpath.trim();
             Path effectivePath = path.resolve(kpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setTestPath(absolutePath);
@@ -74,6 +77,7 @@ public class KeployMiddleware implements Filter {
         String mpath = System.getenv("KEPLOY_MOCK_PATH");
 
         if (mpath != null && mpath.length() > 0 && !Paths.get(mpath).isAbsolute()) {
+            mpath = mpath.trim();
             Path effectivePath = path.resolve(mpath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setMockPath(absolutePath);
@@ -92,6 +96,7 @@ public class KeployMiddleware implements Filter {
         String apath = System.getenv("KEPLOY_ASSET_PATH");
 
         if (apath != null && apath.length() > 0 && !Paths.get(apath).isAbsolute()) {
+            apath = apath.trim();
             Path effectivePath = path.resolve(apath).toAbsolutePath();
             String absolutePath = effectivePath.normalize().toString();
             appConfig.setAssetPath(absolutePath);
@@ -108,11 +113,13 @@ public class KeployMiddleware implements Filter {
         ServerConfig serverConfig = new ServerConfig();
 
         if (System.getenv("DENOISE") != null) {
-            serverConfig.setDenoise(Boolean.parseBoolean(System.getenv("DENOISE")));
+            String denoise = System.getenv("DENOISE").trim();
+            serverConfig.setDenoise(Boolean.parseBoolean(denoise));
         }
 
         if (System.getenv("KEPLOY_URL") != null) {
-            serverConfig.setURL(System.getenv("KEPLOY_URL"));
+            String keploy_url = System.getenv("KEPLOY_URL").trim();
+            serverConfig.setURL(keploy_url);
         }
 
         cfg.setApp(appConfig);
@@ -157,7 +164,7 @@ public class KeployMiddleware implements Filter {
         }
 
         String runTestBeforeRecord = System.getenv("RUN_TEST_BEFORE_RECORD");
-        boolean runTests = true;
+        boolean runTests = false;
         if (runTestBeforeRecord != null) {
             runTests = Boolean.parseBoolean(runTestBeforeRecord);
         }

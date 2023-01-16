@@ -1,7 +1,6 @@
 package io.keploy.httpClients;
 
 import com.google.protobuf.ByteString;
-import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mock;
@@ -49,7 +48,7 @@ public class ApacheInterceptor {
 
     private static final String CROSS = new String(Character.toChars(0x274C));
 
-    private static Keploy k = KeployInstance.getInstance().getKeploy();
+    private static final Keploy k = KeployInstance.getInstance().getKeploy();
 
 
     public static CloseableHttpResponse doProceed(@Origin Method method, @SuperCall Callable<CloseableHttpResponse> callable, @AllArguments Object[] args) {
@@ -141,8 +140,10 @@ public class ApacheInterceptor {
                         if (isBinaryFile(contentType)) {
                             byte[] fileData = getFileData(filePath);
                             response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, fileData, contentTypeEntity);
+                            setResponseHeaders(response, headerMap);
                         } else {
                             response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, respbody);
+                            setResponseHeaders(response, headerMap);
                         }
                         mocks.remove(0);
                     }
@@ -179,9 +180,6 @@ public class ApacheInterceptor {
                     if (!isBinaryFile(contentType)) {
                         reqBody = getRequestBody(request);
                     }
-//                        if (!contentType.contains("application/octet-stream")) {
-//                            reqBody = getRequestBody(request);
-//                        }
                     meta.put("Body", reqBody);
                 } catch (IOException e) {
                     logger.error(CROSS + " unable to read request body", e);
@@ -359,6 +357,7 @@ public class ApacheInterceptor {
         try {
             InputStream is = response.getEntity().getContent();
             resBody = EntityUtils.toByteArray(response.getEntity());
+            is.close();
         } catch (IOException e) {
             logger.error(" unable to read file body from response", e);
             return resBody;
@@ -444,13 +443,13 @@ public class ApacheInterceptor {
 
         for (String key : srcMap.keySet()) {
             Service.StrArr values = srcMap.get(key);
-            ProtocolStringList valueList = values.getValueList();
-            List<String> headerValues = new ArrayList<>(valueList);
+            List<String> headerValues = new ArrayList<>(values.getValueList());
             headerMap.put(key, headerValues);
         }
 
         for (String key : headerMap.keySet()) {
             List<String> values = headerMap.get(key);
+            if (key.contains("ETag")) continue;
             for (String value : values) {
                 httpResponse.addHeader(key, value);
             }
@@ -483,13 +482,11 @@ public class ApacheInterceptor {
         String METHOD = request.getMethod();
 
         InputStream reqStream;
-        BufferedHttpEntity bufferedHttpEntity;
+//        BufferedHttpEntity bufferedHttpEntity;
         String actualBody = "";
         switch (METHOD) {
             case "POST":
                 HttpPost httpPost = (HttpPost) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPost.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
                 HttpEntity postEntity = httpPost.getEntity();
                 if (postEntity != null) {
                     reqStream = postEntity.getContent();
@@ -501,8 +498,6 @@ public class ApacheInterceptor {
                 break;
             case "PUT":
                 HttpPut httpPut = (HttpPut) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPut.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
                 HttpEntity putEntity = httpPut.getEntity();
                 if (putEntity != null) {
                     reqStream = putEntity.getContent();
@@ -514,11 +509,6 @@ public class ApacheInterceptor {
                 break;
             case "PATCH":
                 HttpPatch httpPatch = (HttpPatch) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPatch.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
-                reqStream = httpPatch.getEntity().getContent();
-                actualBody = getActualRequestBody(reqStream);
-                httpPatch.setEntity(new StringEntity(actualBody));
                 HttpEntity patchEntity = httpPatch.getEntity();
                 if (patchEntity != null) {
                     reqStream = patchEntity.getContent();

@@ -178,6 +178,7 @@ public class GrpcService {
         Service.TestCase testCase = testCaseBuilder.build();
 
         Service.HttpResp resp2 = simulate(testCase);
+//        Service.HttpResp resp2 = simulateOld(testCase);
 
         logger.debug("response got from simulate request: {}", resp2);
 
@@ -698,7 +699,7 @@ public class GrpcService {
 //                if (!paths.isEmpty()) {
 //                    for (String path : paths) {
 //                        File file = new File(path);
-//                        requestBodyBuilder.addFormDataPart(part.getKey(), file.getName(), RequestBody.create(file, MediaType.parse("text/plain")));
+//                        requestBodyBuilder.addFormDataPart(part.getKey(), file.getName(), RequestBody.create(MediaType.parse("text/plain"), file));
 //                    }
 //                } else if (!vals.isEmpty()) {
 //                    for (String val : vals) {

@@ -87,8 +87,8 @@ or to *build.gradle*:
     - `KEPLOY_ASSET_PATH`        (default **/src/test/e2e/assets** directory of your application)
     - `DENOISE`            (default DENOISE = false)
       **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
-    - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = true)
-      **Note:** Default is true, to maintain the same database state.
+    - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = false)
+      **Note:** It is used to maintain the same database state.
 
 
 - **Generate testcases**
