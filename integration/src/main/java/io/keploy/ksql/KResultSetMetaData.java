@@ -62,26 +62,51 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isCurrency(int column) throws SQLException {
-        logger.warn("{} boolean isCurrency(int column) throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return false;
+        }
         return wrappedResultSetMetaData.isCurrency(column);
     }
 
     @Override
     public int isNullable(int column) throws SQLException {
-        logger.warn("{} int isNullable(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.isNullable(column);
+
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of isNullable is {} in mock metaData : {} ", meta.get("isNullable"), meta);
+            int gs = 1;
+            if (KResultSet.meta.get("isNullable") != null) {
+                gs = Integer.parseInt(KResultSet.meta.get("isNullable"));
+            }
+            return gs;
+        }
+        int gc = wrappedResultSetMetaData.isNullable(column);
+        logger.debug("isNullable value in KResultSetMetaData {}", gc);
+        KResultSet.meta.put("isNullable", Integer.toString(gc));
+        return gc;
     }
 
     @Override
     public boolean isSigned(int column) throws SQLException {
-        logger.warn("{} boolean isSigned(int column) throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return true;
+        }
         return wrappedResultSetMetaData.isSigned(column);
     }
 
     @Override
     public int getColumnDisplaySize(int column) throws SQLException {
-        logger.warn("{} int getColumnDisplaySize(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getColumnDisplaySize(column);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnDisplaySize is {} in mock metaData : {} ", meta.get("getColumnDisplaySize"), meta);
+            int gs = 1;
+            if (KResultSet.meta.get("getColumnDisplaySize") != null) {
+                gs = Integer.parseInt(KResultSet.meta.get("getColumnDisplaySize"));
+            }
+            return gs;
+        }
+        int gc = wrappedResultSetMetaData.getColumnDisplaySize(column);
+        logger.debug("getColumnDisplaySize value in KResultSetMetaData {}", gc);
+        KResultSet.meta.put("getColumnDisplaySize", Integer.toString(gc));
+        return gc;
     }
 
     @Override
