@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.util.HashMap;
 
 import static io.keploy.ksql.KDriver.mode;
+import static io.keploy.ksql.KDriver.testMode;
 import static io.keploy.ksql.KResultSet.*;
 
 public class KResultSetMetaData implements ResultSetMetaData {
@@ -200,8 +201,18 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getColumnType(int column) throws SQLException {
-        logger.warn("{} int getColumnType(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getColumnType(column);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnType is {} in mock metaData : {} ", meta.get("getColumnType"), meta);
+            int gs = 1;
+            if (KResultSet.meta.get("getColumnType") != null) {
+                gs = Integer.parseInt(KResultSet.meta.get("getColumnType"));
+            }
+            return gs;
+        }
+        int gc = wrappedResultSetMetaData.getColumnType(column);
+        logger.debug("getColumnType value in KResultSetMetaData {}", gc);
+        KResultSet.meta.put("getColumnType", Integer.toString(gc));
+        return gc;
     }
 
     @Override
@@ -224,26 +235,43 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isReadOnly(int column) throws SQLException {
-        logger.warn("{} boolean isReadOnly(int column) throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return true;
+        }
         return wrappedResultSetMetaData.isReadOnly(column);
     }
 
     @Override
     public boolean isWritable(int column) throws SQLException {
-        logger.warn("{} boolean isWritable(int column) throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return false;
+        }
         return wrappedResultSetMetaData.isWritable(column);
     }
 
     @Override
     public boolean isDefinitelyWritable(int column) throws SQLException {
-        logger.warn("{} boolean isDefinitelyWritable(int column) throws SQLException {}", msg1, msg2);
+        if (mode == testMode) {
+            return false;
+        }
         return wrappedResultSetMetaData.isDefinitelyWritable(column);
     }
 
     @Override
     public String getColumnClassName(int column) throws SQLException {
-        logger.warn("{} String getColumnClassName(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getColumnClassName(column);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnClassName is {} in mock metaData : {} ", meta.get("getColumnClassName"), meta);
+            String gcl = "KEPLOY_getColumnClassName";
+            if (KResultSet.meta.get("getColumnClassName") != null) {
+                gcl = meta.get("getColumnClassName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getColumnClassName(column);
+        logger.debug("getColumnClassName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getColumnClassName", gcl);
+
+        return gcl;
     }
 
     @Override
