@@ -13,22 +13,29 @@ import org.apache.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
+import java.net.ConnectException;
+import java.net.Socket;
 import java.sql.DatabaseMetaData;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
-
+import static io.keploy.servlet.KeployMiddleware.process;
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
 public class KAgent {
 
+
     private static final Logger logger = LogManager.getLogger(KAgent.class);
 
     public static void premain(String arg, Instrumentation instrumentation) {
+
+        StartKeploy();
 
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
@@ -214,6 +221,54 @@ public class KAgent {
                     return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
                 .installOn(instrumentation);
+    }
+
+    private static void StartKeploy() {
+        if (!IsPortBusy()) {
+            System.out.println("inside init !!");
+            new Thread(() -> {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder("/usr/local/bin/keploy", "keploy");
+                    process = pb.start();
+
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        System.out.println(line);
+                    }
+
+                    int exitCode = process.waitFor();
+                    System.out.println("\nExited with error code : " + exitCode);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }).start();
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public static boolean IsPortBusy() {
+        String host = "localhost";
+        int port = 6789;
+
+        try {
+            Socket socket = new Socket(host, port);
+            System.out.println("Port " + port + " is busy.");
+            socket.close();
+            return true;
+        } catch (ConnectException e) {
+            System.out.println("Port " + port + " is not in use.");
+            return false;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
     private static boolean isJUnitTest() {

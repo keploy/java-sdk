@@ -1,0 +1,188 @@
+name: 701f5e54-c6d9-4e9f-a062-a82c2460af48
+status: FAILED
+success: 3
+failure: 1
+total: 4
+tests:
+    - name: 701f5e54-c6d9-4e9f-a062-a82c2460af48
+      status: PASSED
+      started: 1673717441
+      completed: 1673717441
+      test_case_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/keploy-tests
+      mock_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/mocks
+      test_case_id: test-1
+      req:
+        method: POST
+        proto_major: 1
+        proto_minor: 1
+        url: /api/employees
+        header:
+            accept: '*/*'
+            content-length: "102"
+            content-type: application/json
+            host: localhost:8080
+            user-agent: curl/7.78.0
+        body: |-
+            {
+                "firstName": "Shubham",
+                "lastName": "Jain",
+                "email": "rj@yahoo.com",
+                "timestamp":1
+            }
+      mocks:
+        - test-1-0
+      resp:
+        status_code: 200
+        header: {}
+        body: '{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        status_message: OK
+        proto_major: 1
+        proto_minor: 1
+      noise:
+        - body.timestamp
+      result:
+        status_code:
+            normal: true
+            expected: 200
+            actual: 200
+        headers_result: []
+        body_result:
+            normal: true
+            type: JSON
+            expected: '{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531700}'
+            actual: '{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        dep_result: []
+    - name: 701f5e54-c6d9-4e9f-a062-a82c2460af48
+      status: PASSED
+      started: 1673717441
+      completed: 1673717441
+      test_case_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/keploy-tests
+      mock_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/mocks
+      test_case_id: test-2
+      req:
+        method: POST
+        proto_major: 1
+        proto_minor: 1
+        url: /api/employees
+        header:
+            accept: '*/*'
+            content-length: "100"
+            content-type: application/json
+            host: localhost:8080
+            user-agent: curl/7.78.0
+        body: |-
+            {
+                "firstName": "Ritik",
+                "lastName": "Jain",
+                "email": "rj@yahoo.com",
+                "timestamp":1
+            }
+      mocks:
+        - test-2-0
+      resp:
+        status_code: 200
+        header: {}
+        body: '{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        status_message: OK
+        proto_major: 1
+        proto_minor: 1
+      noise:
+        - body.timestamp
+      result:
+        status_code:
+            normal: true
+            expected: 200
+            actual: 200
+        headers_result: []
+        body_result:
+            normal: true
+            type: JSON
+            expected: '{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531914}'
+            actual: '{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        dep_result: []
+    - name: 701f5e54-c6d9-4e9f-a062-a82c2460af48
+      status: PASSED
+      started: 1673717441
+      completed: 1673717441
+      test_case_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/keploy-tests
+      mock_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/mocks
+      test_case_id: test-3
+      req:
+        method: POST
+        proto_major: 1
+        proto_minor: 1
+        url: /api/employees
+        header:
+            accept: '*/*'
+            content-length: "100"
+            content-type: application/json
+            host: localhost:8080
+            user-agent: curl/7.78.0
+        body: |-
+            {
+                "firstName": "Ritik",
+                "lastName": "Jain",
+                "email": "rj@yahoo.com",
+                "timestamp":1
+            }
+      mocks:
+        - test-3-0
+      resp:
+        status_code: 200
+        header: {}
+        body: '{"id":3,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        status_message: OK
+        proto_major: 1
+        proto_minor: 1
+      noise:
+        - body.timestamp
+      result:
+        status_code:
+            normal: true
+            expected: 200
+            actual: 200
+        headers_result: []
+        body_result:
+            normal: true
+            type: JSON
+            expected: '{"id":3,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673532452}'
+            actual: '{"id":3,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673717441}'
+        dep_result: []
+    - name: 701f5e54-c6d9-4e9f-a062-a82c2460af48
+      status: FAILED
+      started: 1673717442
+      completed: 1673717442
+      test_case_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/keploy-tests
+      mock_path: /Users/sarthak_1/Documents/Keploy/final/samples-java/src/test/e2e/mocks
+      test_case_id: test-4
+      req:
+        method: GET
+        proto_major: 1
+        proto_minor: 1
+        url: /api/employees
+        header:
+            accept: '*/*'
+            host: localhost:8080
+            user-agent: curl/7.78.0
+        body: ""
+      mocks:
+        - test-4-0
+      resp:
+        status_code: 200
+        header: {}
+        body: '[{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531700},{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531914},{"id":3,"firstName":"Sarthak","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673532452}]'
+        status_message: OK
+        proto_major: 1
+        proto_minor: 1
+      result:
+        status_code:
+            normal: true
+            expected: 200
+            actual: 200
+        headers_result: []
+        body_result:
+            normal: false
+            type: JSON
+            expected: '[{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531700},{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531914},{"id":3,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673532452}]'
+            actual: '[{"id":1,"firstName":"Shubham","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531700},{"id":2,"firstName":"Ritik","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673531914},{"id":3,"firstName":"Sarthak","lastName":"Jain","email":"rj@yahoo.com","timestamp":1673532452}]'
+        dep_result: []

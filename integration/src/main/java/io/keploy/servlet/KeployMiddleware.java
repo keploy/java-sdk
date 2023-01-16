@@ -3,13 +3,13 @@ package io.keploy.servlet;
 import io.grpc.netty.shaded.io.netty.util.internal.InternalThreadLocalMap;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
+import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.AppConfig;
 import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
-import io.keploy.regression.Mode;
 import io.keploy.service.GrpcService;
 import io.keploy.utils.*;
 import lombok.SneakyThrows;
@@ -35,7 +35,7 @@ public class KeployMiddleware implements Filter {
 
     private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);
     private static final String CROSS = new String(Character.toChars(0x274C));
-
+    public static Process process = null;
     @Override
     public void init(FilterConfig filterConfig) {
         //just like wait groups, used in testfile
@@ -145,7 +145,9 @@ public class KeployMiddleware implements Filter {
                 } catch (InterruptedException e) {
                     logger.error(CROSS + " failed to shut grpc connection properly... ", e);
                 }
-
+                if (process != null) {
+                    process.destroy();
+                }
                 try {
                     Thread.sleep(10000);
                     System.exit(0);
