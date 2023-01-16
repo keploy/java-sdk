@@ -1,7 +1,5 @@
 package io.keploy.agent;
 
-import io.keploy.classLoader.CustomClassLoader;
-import io.keploy.classLoader.KClassLoader;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
