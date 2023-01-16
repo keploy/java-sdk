@@ -85,22 +85,56 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getColumnLabel(int column) throws SQLException {
-        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getColumnLabel(column);
+//        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnLabel is {} in mock metaData : {} ", meta.get("getColumnLabel"), meta);
+            String gcl = "KEPLOY_LABEL";
+            if (KResultSet.meta.get("getColumnLabel") != null) {
+                gcl = meta.get("getColumnLabel");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getColumnLabel(column);
+        logger.debug("getColumnLabel value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getColumnLabel", gcl);
+
+        return gcl;
     }
 
     @Override
     public String getColumnName(int column) throws SQLException {
-        logger.warn("{} String getColumnName(int column) throws SQLException {}", msg1, msg2);
-        String getColumnName = wrappedResultSetMetaData.getColumnName(column);
-        return getColumnName;
+        //        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnName is {} in mock metaData : {} ", meta.get("getColumnName"), meta);
+            String gcl = "KEPLOY_getColumnName";
+            if (KResultSet.meta.get("getColumnName") != null) {
+                gcl = meta.get("getColumnName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getColumnName(column);
+        logger.debug("getColumnName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getColumnName", gcl);
+
+        return gcl;
     }
 
     @Override
     public String getSchemaName(int column) throws SQLException {
-        logger.warn("{} String getSchemaName(int column) throws SQLException {}", msg1, msg2);
-        String getSchemaName = wrappedResultSetMetaData.getSchemaName(column);
-        return getSchemaName;
+        //        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getSchemaName is {} in mock metaData : {} ", meta.get("getSchemaName"), meta);
+            String gcl = "KEPLOY_getSchemaName";
+            if (KResultSet.meta.get("getSchemaName") != null) {
+                gcl = meta.get("getSchemaName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getSchemaName(column);
+        logger.debug("getSchemaName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getSchemaName", gcl);
+
+        return gcl;
     }
 
     @Override
@@ -130,14 +164,38 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getTableName(int column) throws SQLException {
-        logger.warn("{} String getTableName(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getTableName(column);
+        //        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getTableName is {} in mock metaData : {} ", meta.get("getTableName"), meta);
+            String gcl = "KEPLOY_getTableName";
+            if (KResultSet.meta.get("getTableName") != null) {
+                gcl = meta.get("getTableName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getTableName(column);
+        logger.debug("getTableName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getTableName", gcl);
+
+        return gcl;
     }
 
     @Override
     public String getCatalogName(int column) throws SQLException {
-        logger.warn("{} String getCatalogName(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getCatalogName(column);
+        //        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getCatalogName is {} in mock metaData : {} ", meta.get("getCatalogName"), meta);
+            String gcl = "KEPLOY_getCatalogName";
+            if (KResultSet.meta.get("getCatalogName") != null) {
+                gcl = meta.get("getCatalogName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getCatalogName(column);
+        logger.debug("getCatalogName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getCatalogName", gcl);
+
+        return gcl;
     }
 
     @Override
@@ -148,8 +206,20 @@ public class KResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getColumnTypeName(int column) throws SQLException {
-        logger.warn("{} String getColumnTypeName(int column) throws SQLException {}", msg1, msg2);
-        return wrappedResultSetMetaData.getColumnTypeName(column);
+        //        logger.warn("{} String getColumnLabel(int column) throws SQLException {}", msg1, msg2);
+        if (mode == Mode.ModeType.MODE_TEST) {
+            logger.debug("Stored value of getColumnTypeName is {} in mock metaData : {} ", meta.get("getColumnTypeName"), meta);
+            String gcl = "KEPLOY_getColumnTypeName";
+            if (KResultSet.meta.get("getColumnTypeName") != null) {
+                gcl = meta.get("getColumnTypeName");
+            }
+            return gcl;
+        }
+        String gcl = wrappedResultSetMetaData.getColumnTypeName(column);
+        logger.debug("getColumnTypeName value in KResultSetMetaData {}", gcl);
+        KResultSet.meta.put("getColumnTypeName", gcl);
+
+        return gcl;
     }
 
     @Override
