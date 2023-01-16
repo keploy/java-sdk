@@ -142,6 +142,9 @@ public class KResultSetMetaData implements ResultSetMetaData {
     public int getPrecision(int column) throws SQLException {
         String columnLabel = getColumnLabel(column);
         if (mode == Mode.ModeType.MODE_TEST) {
+            if (PrecisionDict.get(columnLabel) == null) {
+                return 0;
+            }
             int i = Integer.parseInt(PrecisionDict.get(columnLabel));
             logger.debug(i + "is the precision for " + PrecisionDict.get(columnLabel));
         }
@@ -154,13 +157,16 @@ public class KResultSetMetaData implements ResultSetMetaData {
     public int getScale(int column) throws SQLException {
         String columnLabel = getColumnLabel(column);
         if (mode == Mode.ModeType.MODE_TEST) {
+            if (ScaleDict.get(columnLabel) == null) {
+                return 0;
+            }
             int i = Integer.parseInt(ScaleDict.get(columnLabel));
             logger.debug(i + "is the scale for " + ScaleDict.get(columnLabel));
             return i;
         }
-        Integer getPrecision = wrappedResultSetMetaData.getScale(column);
-        ScaleDict.put(columnLabel, String.valueOf(getPrecision));
-        return getPrecision;
+        Integer getScale = wrappedResultSetMetaData.getScale(column);
+        ScaleDict.put(columnLabel, String.valueOf(getScale));
+        return getScale;
     }
 
     @Override
