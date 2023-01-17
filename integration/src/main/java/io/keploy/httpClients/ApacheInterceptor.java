@@ -318,7 +318,7 @@ public class ApacheInterceptor {
                     String fName = Utility.resolveFileName(assetsDirectory);
                     file = fName + "." + fileExt;
                 }
-            }else {
+            } else {
                 logger.debug("couldn't find extension of file its body");
             }
         }
@@ -452,11 +452,26 @@ public class ApacheInterceptor {
 
         for (String key : headerMap.keySet()) {
             List<String> values = headerMap.get(key);
-            if (key.contains("ETag")) continue;
+            // since checksum can be changed with little to no changes in the mock, therefore removing it while testing.
+            if (isCheckSumHeader(key)) continue;
             for (String value : values) {
                 httpResponse.addHeader(key, value);
             }
         }
+    }
+
+    private static boolean isCheckSumHeader(String checksum) {
+        //TODO: add more checksums
+
+        if (checksum.contains("ETag")) {
+            return true;
+        } else if (checksum.contains("crc32")) {
+            return true;
+        } else if (checksum.contains("sha256")) {
+            return true;
+        }
+
+        return false;
     }
 
     @SneakyThrows
@@ -611,7 +626,11 @@ public class ApacheInterceptor {
         //for binary file
         public ApacheCustomHttpResponse(ProtocolVersion ver, int statusCode, String statusMsg, byte[] body, ContentType contentType) {
             this(ver, statusCode, statusMsg);
-            setEntity(new ByteArrayEntity(body, contentType));
+            if (contentType.equals(ContentType.APPLICATION_OCTET_STREAM)) {
+                setEntity(new ByteArrayEntity(body));
+            } else {
+                setEntity(new ByteArrayEntity(body, contentType));
+            }
         }
 
         @Override
