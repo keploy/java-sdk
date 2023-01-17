@@ -461,8 +461,25 @@ public class KResultSet implements ResultSet {
     @Override
     @Deprecated
     public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
-        logger.warn("{} BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getBigDecimal(columnIndex, scale);
+        Kcontext kctx = Context.getCtx();
+        // Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            if (TestRow.get(String.valueOf(columnIndex)) == null || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            wasNull = false;
+            return new BigDecimal(Double.parseDouble(TestRow.get(String.valueOf(columnIndex))));
+        }
+        BigDecimal gl = wrappedResultSet.getBigDecimal(String.valueOf(columnIndex));
+
+        String res = String.valueOf(gl);
+        if (isNullValue(gl)) {
+            res = "Null";
+        }
+        RowRecord.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "BigDecimal");
+        return gl;
     }
 
     @Override
@@ -772,9 +789,24 @@ public class KResultSet implements ResultSet {
     @Override
     @Deprecated
     public BigDecimal getBigDecimal(String columnLabel, int scale) throws SQLException {
-        BigDecimal gbd = wrappedResultSet.getBigDecimal(columnLabel, scale);
-        addSqlColToList(columnLabel, gbd.getClass().getSimpleName());
-        return gbd;
+        Kcontext kctx = Context.getCtx();
+        // Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            wasNull = false;
+            return new BigDecimal(Double.parseDouble(TestRow.get(columnLabel)));
+        }
+        BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
+        String res = String.valueOf(gl);
+        if (isNullValue(gl)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "BigDecimal");
+        return gl;
     }
 
     @Override
@@ -993,8 +1025,12 @@ public class KResultSet implements ResultSet {
             return new BigDecimal(Double.parseDouble(TestRow.get(String.valueOf(columnIndex))));
         }
         BigDecimal gs = wrappedResultSet.getBigDecimal(columnIndex);
-        RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
-        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        String res = String.valueOf(gs);
+        if (isNullValue(gs)) {
+            res = "Null";
+        }
+        RowRecord.put(String.valueOf(columnIndex), res);
+        addSqlColToList(String.valueOf(columnIndex), "BigDecimal");
         return gs;
     }
 
@@ -1011,8 +1047,12 @@ public class KResultSet implements ResultSet {
             return new BigDecimal(Double.parseDouble(TestRow.get(columnLabel)));
         }
         BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
-        RowRecord.put(columnLabel, String.valueOf(gl));
-        addSqlColToList(columnLabel, gl.getClass().getSimpleName());
+        String res = String.valueOf(gl);
+        if (isNullValue(gl)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "BigDecimal");
         return gl;
     }
 
