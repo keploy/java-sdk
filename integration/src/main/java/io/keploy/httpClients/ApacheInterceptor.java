@@ -175,8 +175,11 @@ public class ApacheInterceptor {
 
                 String reqBody = "";
                 try {
-                    String contentType = request.getFirstHeader("Content-Type").getValue();
-
+                    Header c_t = request.getFirstHeader("Content-Type");
+                    String contentType = "";
+                    if (c_t != null) {
+                        contentType = c_t.getValue();
+                    }
                     if (!isBinaryFile(contentType)) {
                         reqBody = getRequestBody(request);
                     }
