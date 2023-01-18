@@ -8,8 +8,10 @@ import io.keploy.regression.context.Kcontext;
 import io.keploy.utils.ProcessSQL;
 import org.apache.logging.log4j.LogManager;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.Reader;
+import java.io.StringReader;
 import java.math.BigDecimal;
 import java.net.URL;
 import java.sql.Date;
@@ -52,6 +54,8 @@ public class KResultSet implements ResultSet {
     boolean wasNull = true;
 
     private int index = 0;
+
+    private String currentLabel = "";
 
     public static int commited = 0;
 
@@ -123,7 +127,7 @@ public class KResultSet implements ResultSet {
         if (cnt == 0) {
             Kcontext kctx = Context.getCtx();
             if (kctx.getMock().size() <= 0) {
-                logger.info(CROSS + " Cannot extract tables during test because mocks they are unavailable ! \n");
+                logger.info(CROSS + " Cannot extract tables during test because mocks are unavailable ! \n");
             } else {
                 List<Service.Mock> mock = kctx.getMock();
                 if (mock.size() > 0 && mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
@@ -287,6 +291,12 @@ public class KResultSet implements ResultSet {
             return wasNull;
         }
         wasNull = wrappedResultSet.wasNull();
+        if (wasNull) {
+            if (RowRecord.containsKey(currentLabel) && !RowRecord.get(currentLabel).equals("Null")) {
+                RowRecord.put(currentLabel, "Null");
+                currentLabel = "";
+            }
+        }
         logger.debug("WasNull value is " + wasNull);
         return wasNull;
     }
@@ -295,22 +305,24 @@ public class KResultSet implements ResultSet {
     public String getString(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         // Mode.ModeType mode = kctx.getMode();
+        String columnlabel = String.valueOf(columnIndex);
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
-            String gs = TestRow.get(String.valueOf(columnIndex));
-            if (TestRow.get(String.valueOf(columnIndex)) == null || Objects.equals(gs, "Null")) {
+            String gs = TestRow.get(columnlabel);
+            if (TestRow.get(columnlabel) == null || Objects.equals(gs, "Null")) {
                 wasNull = true;
                 return null;
             }
             return gs;
         }
         String res = null;
+        currentLabel = columnlabel;
         String gs = wrappedResultSet.getString(columnIndex);
         res = gs;
         if (isNullValue(gs)) {
             res = "Null";
         }
-        RowRecord.put(String.valueOf(columnIndex), res);
+        RowRecord.put(columnlabel, res);
         addSqlColToList(String.valueOf(columnIndex), "String");
         return gs;
     }
@@ -366,6 +378,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return Short.parseShort(TestRow.get(columnLabel));
         }
+        currentLabel = columnLabel;
         Short gs = wrappedResultSet.getShort(columnIndex);
         RowRecord.put(columnLabel, String.valueOf(gs));
         addSqlColToList(columnLabel, gs.getClass().getSimpleName());
@@ -390,6 +403,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return Integer.parseInt(TestRow.get(String.valueOf(columnIndex)));
         }
+        currentLabel = columnLabel;
         Integer gs = wrappedResultSet.getInt(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
         addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
@@ -402,21 +416,24 @@ public class KResultSet implements ResultSet {
         String columnLabel = String.valueOf(columnIndex);
         if (kctx == null) {
             if (mode == recordMode) {
-                return wrappedResultSet.getInt(columnIndex);
+                return wrappedResultSet.getLong(columnIndex);
             }
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                logger.debug("getLong wasNull for column " + columnLabel);
                 wasNull = true;
                 return 0;
             }
             wasNull = false;
-            return Long.parseLong(TestRow.get(String.valueOf(columnIndex)));
+            logger.debug("getLong value is " + TestRow.get(columnLabel));
+            return Long.parseLong(TestRow.get(columnLabel));
         }
+        currentLabel = columnLabel;
         Long gs = wrappedResultSet.getLong(columnIndex);
-        RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
-        addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
+        RowRecord.put(columnLabel, String.valueOf(gs));
+        addSqlColToList(columnLabel, gs.getClass().getSimpleName());
         return gs;
     }
 
@@ -443,7 +460,6 @@ public class KResultSet implements ResultSet {
     public double getDouble(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         String columnLabel = String.valueOf(columnIndex);
-        // Mode.ModeType mode = kctx.getMode();
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
@@ -452,6 +468,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return Double.parseDouble(TestRow.get(String.valueOf(columnIndex)));
         }
+        currentLabel = columnLabel;
         Double gs = wrappedResultSet.getDouble(columnIndex);
         RowRecord.put(String.valueOf(columnIndex), String.valueOf(gs));
         addSqlColToList(String.valueOf(columnIndex), gs.getClass().getSimpleName());
@@ -471,6 +488,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return new BigDecimal(Double.parseDouble(TestRow.get(String.valueOf(columnIndex))));
         }
+
         BigDecimal gl = wrappedResultSet.getBigDecimal(String.valueOf(columnIndex));
 
         String res = String.valueOf(gl);
@@ -484,8 +502,21 @@ public class KResultSet implements ResultSet {
 
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
-        logger.warn("{} byte[] getBytes(int columnIndex) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getBytes(columnIndex);
+        Kcontext kctx = Context.getCtx();
+        String columnLabel = String.valueOf(columnIndex);
+        // Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            wasNull = false;
+            return TestRow.get(columnLabel).getBytes();
+        }
+        byte[] gs = wrappedResultSet.getBytes(columnIndex);
+        RowRecord.put(columnLabel, String.valueOf(gs));
+        addSqlColToList(columnLabel, gs.getClass().getSimpleName());
+        return gs;
     }
 
     @Override
@@ -518,6 +549,7 @@ public class KResultSet implements ResultSet {
                 logger.error(CROSS + "Failed to parse Date object from the stored mock due to \n" + e);
             }
         }
+        currentLabel = columnLabel;
         Date gd = wrappedResultSet.getDate(columnIndex);
         String res = String.valueOf(gd);
         if (isNullValue(gd)) {
@@ -554,6 +586,7 @@ public class KResultSet implements ResultSet {
                 logger.error(CROSS + "Failed to parse Time object from the stored mock due to \n" + e);
             }
         }
+        currentLabel = columnLabel;
         Time gt = wrappedResultSet.getTime(columnIndex);
 
         String res = String.valueOf(gt);
@@ -594,6 +627,7 @@ public class KResultSet implements ResultSet {
                 logger.error(CROSS + "Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
         }
+        currentLabel = columnLabel;
         Timestamp gts = wrappedResultSet.getTimestamp(columnIndex);
         String res = String.valueOf(gts);
         if (isNullValue(gts)) {
@@ -635,7 +669,8 @@ public class KResultSet implements ResultSet {
             }
             return TestRow.get(columnLabel);
         }
-        String res = null;
+        String res;
+        currentLabel = columnLabel;
         String gs = wrappedResultSet.getString(columnLabel);
         res = gs;
         if (isNullValue(gs)) {
@@ -712,14 +747,16 @@ public class KResultSet implements ResultSet {
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
-            wasNull = false;
-            if (TestRow.get(columnLabel) == null || Integer.parseInt(TestRow.get(columnLabel)) == 0) {
+            if (TestRow.get(columnLabel) == null
+                    || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
                 return 0;
             }
+            wasNull = false;
             int x = Integer.parseInt(TestRow.get(columnLabel));
             return x;
         }
+        currentLabel = columnLabel;
         Integer gs = wrappedResultSet.getInt(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gs));
         addSqlColToList(columnLabel, gs.getClass().getSimpleName());
@@ -731,20 +768,24 @@ public class KResultSet implements ResultSet {
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
-                return wrappedResultSet.getInt(columnLabel);
+                return wrappedResultSet.getLong(columnLabel);
             }
             return 0;
         }
         if (mode == Mode.ModeType.MODE_TEST) {
-            if (TestRow.get(columnLabel) == null || Long.parseLong(TestRow.get(columnLabel)) == 0
+            if (TestRow.get(columnLabel) == null
                     || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
+                logger.debug("getLong wasNull for {}", columnLabel);
                 return 0;
             }
             wasNull = false;
-            return Long.parseLong(TestRow.get(columnLabel));
+            long x = Long.parseLong(TestRow.get(columnLabel));
+            logger.debug("getLong value is {} for column {}", x, columnLabel);
+            return x;
         }
-        Long gl = wrappedResultSet.getLong(columnLabel);
+        currentLabel = columnLabel;
+        Long gl = wrappedResultSet.getLong(columnLabel); // this will never be null
         RowRecord.put(columnLabel, String.valueOf(gl));
         addSqlColToList(columnLabel, gl.getClass().getSimpleName());
         return gl;
@@ -757,11 +798,14 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
+                logger.debug("getFloat wasNull for {}", columnLabel);
                 return 0;
             }
             wasNull = false;
+            logger.debug("getFloat value is {} for column {}", TestRow.get(columnLabel), columnLabel);
             return Float.parseFloat(TestRow.get(columnLabel));
         }
+        currentLabel = columnLabel;
         Float gf = wrappedResultSet.getFloat(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gf));
         addSqlColToList(columnLabel, gf.getClass().getSimpleName());
@@ -775,11 +819,14 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
+                logger.debug("getDouble wasNull for {}", columnLabel);
                 return 0;
             }
             wasNull = false;
+            logger.debug("getDouble value is {} for column {}", TestRow.get(columnLabel), columnLabel);
             return Double.parseDouble(TestRow.get(columnLabel));
         }
+        currentLabel = columnLabel;
         Double gd = wrappedResultSet.getDouble(columnLabel);
         RowRecord.put(columnLabel, String.valueOf(gd));
         addSqlColToList(columnLabel, gd.getClass().getSimpleName());
@@ -794,11 +841,14 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
+                logger.debug("getBigDecimal wasNull for {}", columnLabel);
                 return null;
             }
             wasNull = false;
+            logger.debug("getBigDecimal value is {} for column {}", TestRow.get(columnLabel), columnLabel);
             return new BigDecimal(Double.parseDouble(TestRow.get(columnLabel)));
         }
+        currentLabel = columnLabel;
         BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
         String res = String.valueOf(gl);
         if (isNullValue(gl)) {
@@ -811,8 +861,26 @@ public class KResultSet implements ResultSet {
 
     @Override
     public byte[] getBytes(String columnLabel) throws SQLException {
+        Kcontext kctx = Context.getCtx();
+        // Mode.ModeType mode = kctx.getMode();
+        if (mode == Mode.ModeType.MODE_TEST) {
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                logger.debug("getBytes wasNull for {}", columnLabel);
+                return null;
+            }
+            wasNull = false;
+            logger.debug("getBytes value is {} for column {}", TestRow.get(columnLabel), columnLabel);
+            return TestRow.get(columnLabel).getBytes();
+        }
+        currentLabel = columnLabel;
         byte[] gb = wrappedResultSet.getBytes(columnLabel);
-        addSqlColToList(columnLabel, gb.getClass().getSimpleName());
+        if (isNullValue(gb)) {
+            RowRecord.put(columnLabel, "Null");
+        } else {
+            RowRecord.put(columnLabel, new String(gb));
+        }
+        addSqlColToList(columnLabel, "byte[]");
         return gb;
     }
 
@@ -830,22 +898,25 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
                 wasNull = true;
+                logger.debug("getDate wasNull for {}", columnLabel);
                 return null;
             }
             String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
+                logger.debug("getDate wasNull for {}", columnLabel);
                 return null;
             }
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
             try {
                 Date x = new Date(formatter.parse(TestRow.get(columnLabel)).getTime());
+                logger.debug("getDate value is {} for column {}", x, columnLabel);
                 return x;
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse Date object from the stored mock due to \n" + e);
             }
         }
-
+        currentLabel = columnLabel;
         Date gd = wrappedResultSet.getDate(columnLabel);
         String res = String.valueOf(gd);
         if (isNullValue(gd)) {
@@ -868,11 +939,13 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
 
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                logger.debug("getTime wasNull for {}", columnLabel);
                 wasNull = true;
                 return null;
             }
             String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
+                logger.debug("getTime wasNull for {}", columnLabel);
                 wasNull = true;
                 return null;
             }
@@ -880,11 +953,13 @@ public class KResultSet implements ResultSet {
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
 
             try {
+                logger.debug("getTime value is {} for column {}", formatter.parse(TestRow.get(columnLabel)), columnLabel);
                 return new Time(formatter.parse(TestRow.get(columnLabel)).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse Time object from the stored mock due to \n" + e);
             }
         }
+        currentLabel = columnLabel;
         Time gt = wrappedResultSet.getTime(columnLabel);
         String res = String.valueOf(gt);
         if (isNullValue(gt)) {
@@ -907,22 +982,26 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             wasNull = false;
             if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                logger.debug("getTimestamp wasNull for {}", columnLabel);
                 wasNull = true;
                 return null;
             }
             String parseDateTime = ParseDateTime(TestRow.get(String.valueOf(columnLabel)));
             if (Objects.equals(parseDateTime, "") || parseDateTime == null) {
                 wasNull = true;
+                logger.debug("getTimestamp wasNull for {}", columnLabel);
                 return null;
             }
             SimpleDateFormat formatter = new SimpleDateFormat(parseDateTime);
 
             try {
+                logger.debug("getTimestamp value is {} for column {}", formatter.parse(TestRow.get(columnLabel)), columnLabel);
                 return new Timestamp(formatter.parse(TestRow.get(columnLabel)).getTime());
             } catch (ParseException e) {
                 logger.error(CROSS + " Failed to parse TimeStamp object from the stored mock due to \n" + e);
             }
         }
+        currentLabel = columnLabel;
         Timestamp gts = wrappedResultSet.getTimestamp(columnLabel);
         String res = String.valueOf(gts);
         if (isNullValue(gts)) {
@@ -935,15 +1014,59 @@ public class KResultSet implements ResultSet {
 
     @Override
     public InputStream getAsciiStream(String columnLabel) throws SQLException {
-        logger.warn("{} InputStream getAsciiStream(String columnLabel) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getAsciiStream(columnLabel);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getAsciiStream(columnLabel);
+            }
+            return null;
+        }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            return new ByteArrayInputStream(TestRow.get(columnLabel).getBytes());
+        }
+        currentLabel = columnLabel;
+        InputStream gas = wrappedResultSet.getAsciiStream(columnLabel);
+        String res = String.valueOf(gas);
+        if (isNullValue(gas)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "InputStream");
+        return gas;
     }
 
     @Override
     @Deprecated
     public InputStream getUnicodeStream(String columnLabel) throws SQLException {
-        logger.warn("{} InputStream getUnicodeStream(String columnLabel) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getUnicodeStream(columnLabel);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getUnicodeStream(columnLabel);
+            }
+            return null;
+        }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            return new ByteArrayInputStream(TestRow.get(columnLabel).getBytes());
+        }
+        currentLabel = columnLabel;
+        InputStream gus = wrappedResultSet.getUnicodeStream(columnLabel);
+        String res = String.valueOf(gus);
+        if (isNullValue(gus)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "InputStream");
+        return gus;
     }
 
     @Override
@@ -977,6 +1100,8 @@ public class KResultSet implements ResultSet {
         if (mode == Mode.ModeType.MODE_TEST) {
             return new KResultSetMetaData();
         }
+
+        logger.debug("getMetaData for Query {}", KConnection.MyQuery);
         ResultSetMetaData getMetaData = wrappedResultSet.getMetaData();
         return new KResultSetMetaData(getMetaData);
     }
@@ -989,20 +1114,86 @@ public class KResultSet implements ResultSet {
 
     @Override
     public Object getObject(String columnLabel) throws SQLException {
-        logger.warn("{}  Object getObject(String columnLabel) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getObject(columnLabel);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getObject(columnLabel);
+            }
+            return null;
+        }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            return TestRow.get(columnLabel);
+        }
+        currentLabel = columnLabel;
+        Object go = wrappedResultSet.getObject(columnLabel);
+        String res = String.valueOf(go);
+        if (isNullValue(go)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "Object");
+        return go;
     }
 
     @Override
     public int findColumn(String columnLabel) throws SQLException {
-        logger.warn("{} int findColumn(String columnLabel) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.findColumn(columnLabel);
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.findColumn(columnLabel);
+            }
+            return 0;
+        }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return 0;
+            }
+            return Integer.parseInt(TestRow.get(columnLabel));
+        }
+        int fc = wrappedResultSet.findColumn(columnLabel);
+        String res = String.valueOf(fc);
+        if (isNullValue(fc)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "int");
+        return fc;
     }
 
     @Override
     public Reader getCharacterStream(int columnIndex) throws SQLException {
-        logger.warn("{} Reader getCharacterStream(int columnIndex) throws SQLException {}", msg1, msg2);
-        return wrappedResultSet.getCharacterStream(columnIndex);
+        Kcontext kctx = Context.getCtx();
+        String columnLabel = String.valueOf(columnIndex);
+        if (kctx == null) {
+            if (mode == recordMode) {
+                return wrappedResultSet.getCharacterStream(columnIndex);
+            }
+            return null;
+        }
+        if (mode == Mode.ModeType.MODE_TEST) {
+            wasNull = false;
+            if (TestRow.get(columnLabel) == null || Objects.equals(TestRow.get(columnLabel), "Null")) {
+                wasNull = true;
+                return null;
+            }
+            return new StringReader(TestRow.get(columnLabel));
+        }
+        currentLabel = columnLabel;
+        Reader gcs = wrappedResultSet.getCharacterStream(columnIndex);
+        String res = String.valueOf(gcs);
+        if (isNullValue(gcs)) {
+            res = "Null";
+        }
+        RowRecord.put(columnLabel, res);
+        addSqlColToList(columnLabel, "Reader");
+        return gcs;
     }
 
     @Override
@@ -1015,6 +1206,7 @@ public class KResultSet implements ResultSet {
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         Kcontext kctx = Context.getCtx();
         // Mode.ModeType mode = kctx.getMode();
+        String columnLabel = String.valueOf(columnIndex);
         if (mode == Mode.ModeType.MODE_TEST) {
             if (TestRow.get(String.valueOf(columnIndex)) == null
                     || Objects.equals(TestRow.get(String.valueOf(columnIndex)), "Null")) {
@@ -1024,6 +1216,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return new BigDecimal(Double.parseDouble(TestRow.get(String.valueOf(columnIndex))));
         }
+        currentLabel = columnLabel;
         BigDecimal gs = wrappedResultSet.getBigDecimal(columnIndex);
         String res = String.valueOf(gs);
         if (isNullValue(gs)) {
@@ -1046,6 +1239,7 @@ public class KResultSet implements ResultSet {
             wasNull = false;
             return new BigDecimal(Double.parseDouble(TestRow.get(columnLabel)));
         }
+        currentLabel = columnLabel;
         BigDecimal gl = wrappedResultSet.getBigDecimal(columnLabel);
         String res = String.valueOf(gl);
         if (isNullValue(gl)) {
