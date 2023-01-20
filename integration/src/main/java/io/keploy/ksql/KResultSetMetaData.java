@@ -172,6 +172,7 @@ public class KResultSetMetaData implements ResultSetMetaData {
             }
             int i = Integer.parseInt(PrecisionDict.get(columnLabel));
             logger.debug(i + "is the precision for " + PrecisionDict.get(columnLabel));
+            return i;
         }
         Integer getPrecision = wrappedResultSetMetaData.getPrecision(column);
         PrecisionDict.put(columnLabel, String.valueOf(getPrecision));
