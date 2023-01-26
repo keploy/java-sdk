@@ -9277,16 +9277,26 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         java.lang.String key);
 
     /**
-     * <code>string Body = 7;</code>
+     * <code>string Body = 7 [deprecated = true];</code>
+     * @deprecated services.HttpReq.Body is deprecated.
+     *     See service.proto;l=65
      * @return The body.
      */
-    java.lang.String getBody();
+    @java.lang.Deprecated java.lang.String getBody();
     /**
-     * <code>string Body = 7;</code>
+     * <code>string Body = 7 [deprecated = true];</code>
+     * @deprecated services.HttpReq.Body is deprecated.
+     *     See service.proto;l=65
      * @return The bytes for body.
      */
-    com.google.protobuf.ByteString
+    @java.lang.Deprecated com.google.protobuf.ByteString
         getBodyBytes();
+
+    /**
+     * <code>bytes BodyData = 10;</code>
+     * @return The bodyData.
+     */
+    com.google.protobuf.ByteString getBodyData();
 
     /**
      * <code>string Binary = 8;</code>
@@ -9340,6 +9350,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       method_ = "";
       uRL_ = "";
       body_ = "";
+      bodyData_ = com.google.protobuf.ByteString.EMPTY;
       binary_ = "";
       form_ = java.util.Collections.emptyList();
     }
@@ -9645,11 +9656,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     @SuppressWarnings("serial")
     private volatile java.lang.Object body_ = "";
     /**
-     * <code>string Body = 7;</code>
+     * <code>string Body = 7 [deprecated = true];</code>
+     * @deprecated services.HttpReq.Body is deprecated.
+     *     See service.proto;l=65
      * @return The body.
      */
     @java.lang.Override
-    public java.lang.String getBody() {
+    @java.lang.Deprecated public java.lang.String getBody() {
       java.lang.Object ref = body_;
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
@@ -9662,11 +9675,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
     }
     /**
-     * <code>string Body = 7;</code>
+     * <code>string Body = 7 [deprecated = true];</code>
+     * @deprecated services.HttpReq.Body is deprecated.
+     *     See service.proto;l=65
      * @return The bytes for body.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
+    @java.lang.Deprecated public com.google.protobuf.ByteString
         getBodyBytes() {
       java.lang.Object ref = body_;
       if (ref instanceof java.lang.String) {
@@ -9678,6 +9693,17 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       } else {
         return (com.google.protobuf.ByteString) ref;
       }
+    }
+
+    public static final int BODYDATA_FIELD_NUMBER = 10;
+    private com.google.protobuf.ByteString bodyData_ = com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>bytes BodyData = 10;</code>
+     * @return The bodyData.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getBodyData() {
+      return bodyData_;
     }
 
     public static final int BINARY_FIELD_NUMBER = 8;
@@ -9807,6 +9833,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       for (int i = 0; i < form_.size(); i++) {
         output.writeMessage(9, form_.get(i));
       }
+      if (!bodyData_.isEmpty()) {
+        output.writeBytes(10, bodyData_);
+      }
       getUnknownFields().writeTo(output);
     }
 
@@ -9860,6 +9889,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(9, form_.get(i));
       }
+      if (!bodyData_.isEmpty()) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBytesSize(10, bodyData_);
+      }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
       return size;
@@ -9889,6 +9922,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           other.internalGetHeader())) return false;
       if (!getBody()
           .equals(other.getBody())) return false;
+      if (!getBodyData()
+          .equals(other.getBodyData())) return false;
       if (!getBinary()
           .equals(other.getBinary())) return false;
       if (!getFormList()
@@ -9924,6 +9959,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       hash = (37 * hash) + BODY_FIELD_NUMBER;
       hash = (53 * hash) + getBody().hashCode();
+      hash = (37 * hash) + BODYDATA_FIELD_NUMBER;
+      hash = (53 * hash) + getBodyData().hashCode();
       hash = (37 * hash) + BINARY_FIELD_NUMBER;
       hash = (53 * hash) + getBinary().hashCode();
       if (getFormCount() > 0) {
@@ -10092,6 +10129,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         internalGetMutableURLParams().clear();
         internalGetMutableHeader().clear();
         body_ = "";
+        bodyData_ = com.google.protobuf.ByteString.EMPTY;
         binary_ = "";
         if (formBuilder_ == null) {
           form_ = java.util.Collections.emptyList();
@@ -10099,7 +10137,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           form_ = null;
           formBuilder_.clear();
         }
-        bitField0_ = (bitField0_ & ~0x00000100);
+        bitField0_ = (bitField0_ & ~0x00000200);
         return this;
       }
 
@@ -10134,9 +10172,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
 
       private void buildPartialRepeatedFields(io.keploy.grpc.stubs.Service.HttpReq result) {
         if (formBuilder_ == null) {
-          if (((bitField0_ & 0x00000100) != 0)) {
+          if (((bitField0_ & 0x00000200) != 0)) {
             form_ = java.util.Collections.unmodifiableList(form_);
-            bitField0_ = (bitField0_ & ~0x00000100);
+            bitField0_ = (bitField0_ & ~0x00000200);
           }
           result.form_ = form_;
         } else {
@@ -10170,6 +10208,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           result.body_ = body_;
         }
         if (((from_bitField0_ & 0x00000080) != 0)) {
+          result.bodyData_ = bodyData_;
+        }
+        if (((from_bitField0_ & 0x00000100) != 0)) {
           result.binary_ = binary_;
         }
       }
@@ -10245,16 +10286,19 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           bitField0_ |= 0x00000040;
           onChanged();
         }
+        if (other.getBodyData() != com.google.protobuf.ByteString.EMPTY) {
+          setBodyData(other.getBodyData());
+        }
         if (!other.getBinary().isEmpty()) {
           binary_ = other.binary_;
-          bitField0_ |= 0x00000080;
+          bitField0_ |= 0x00000100;
           onChanged();
         }
         if (formBuilder_ == null) {
           if (!other.form_.isEmpty()) {
             if (form_.isEmpty()) {
               form_ = other.form_;
-              bitField0_ = (bitField0_ & ~0x00000100);
+              bitField0_ = (bitField0_ & ~0x00000200);
             } else {
               ensureFormIsMutable();
               form_.addAll(other.form_);
@@ -10267,7 +10311,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
               formBuilder_.dispose();
               formBuilder_ = null;
               form_ = other.form_;
-              bitField0_ = (bitField0_ & ~0x00000100);
+              bitField0_ = (bitField0_ & ~0x00000200);
               formBuilder_ = 
                 com.google.protobuf.GeneratedMessageV3.alwaysUseFieldBuilders ?
                    getFormFieldBuilder() : null;
@@ -10347,7 +10391,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
               } // case 58
               case 66: {
                 binary_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000080;
+                bitField0_ |= 0x00000100;
                 break;
               } // case 66
               case 74: {
@@ -10363,6 +10407,11 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
                 }
                 break;
               } // case 74
+              case 82: {
+                bodyData_ = input.readBytes();
+                bitField0_ |= 0x00000080;
+                break;
+              } // case 82
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -10844,10 +10893,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
 
       private java.lang.Object body_ = "";
       /**
-       * <code>string Body = 7;</code>
+       * <code>string Body = 7 [deprecated = true];</code>
+       * @deprecated services.HttpReq.Body is deprecated.
+       *     See service.proto;l=65
        * @return The body.
        */
-      public java.lang.String getBody() {
+      @java.lang.Deprecated public java.lang.String getBody() {
         java.lang.Object ref = body_;
         if (!(ref instanceof java.lang.String)) {
           com.google.protobuf.ByteString bs =
@@ -10860,10 +10911,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
       }
       /**
-       * <code>string Body = 7;</code>
+       * <code>string Body = 7 [deprecated = true];</code>
+       * @deprecated services.HttpReq.Body is deprecated.
+       *     See service.proto;l=65
        * @return The bytes for body.
        */
-      public com.google.protobuf.ByteString
+      @java.lang.Deprecated public com.google.protobuf.ByteString
           getBodyBytes() {
         java.lang.Object ref = body_;
         if (ref instanceof String) {
@@ -10877,11 +10930,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
       }
       /**
-       * <code>string Body = 7;</code>
+       * <code>string Body = 7 [deprecated = true];</code>
+       * @deprecated services.HttpReq.Body is deprecated.
+       *     See service.proto;l=65
        * @param value The body to set.
        * @return This builder for chaining.
        */
-      public Builder setBody(
+      @java.lang.Deprecated public Builder setBody(
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         body_ = value;
@@ -10890,26 +10945,62 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         return this;
       }
       /**
-       * <code>string Body = 7;</code>
+       * <code>string Body = 7 [deprecated = true];</code>
+       * @deprecated services.HttpReq.Body is deprecated.
+       *     See service.proto;l=65
        * @return This builder for chaining.
        */
-      public Builder clearBody() {
+      @java.lang.Deprecated public Builder clearBody() {
         body_ = getDefaultInstance().getBody();
         bitField0_ = (bitField0_ & ~0x00000040);
         onChanged();
         return this;
       }
       /**
-       * <code>string Body = 7;</code>
+       * <code>string Body = 7 [deprecated = true];</code>
+       * @deprecated services.HttpReq.Body is deprecated.
+       *     See service.proto;l=65
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
-      public Builder setBodyBytes(
+      @java.lang.Deprecated public Builder setBodyBytes(
           com.google.protobuf.ByteString value) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         body_ = value;
         bitField0_ |= 0x00000040;
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.ByteString bodyData_ = com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>bytes BodyData = 10;</code>
+       * @return The bodyData.
+       */
+      @java.lang.Override
+      public com.google.protobuf.ByteString getBodyData() {
+        return bodyData_;
+      }
+      /**
+       * <code>bytes BodyData = 10;</code>
+       * @param value The bodyData to set.
+       * @return This builder for chaining.
+       */
+      public Builder setBodyData(com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        bodyData_ = value;
+        bitField0_ |= 0x00000080;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>bytes BodyData = 10;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearBodyData() {
+        bitField0_ = (bitField0_ & ~0x00000080);
+        bodyData_ = getDefaultInstance().getBodyData();
         onChanged();
         return this;
       }
@@ -10957,7 +11048,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         binary_ = value;
-        bitField0_ |= 0x00000080;
+        bitField0_ |= 0x00000100;
         onChanged();
         return this;
       }
@@ -10967,7 +11058,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
        */
       public Builder clearBinary() {
         binary_ = getDefaultInstance().getBinary();
-        bitField0_ = (bitField0_ & ~0x00000080);
+        bitField0_ = (bitField0_ & ~0x00000100);
         onChanged();
         return this;
       }
@@ -10981,7 +11072,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         binary_ = value;
-        bitField0_ |= 0x00000080;
+        bitField0_ |= 0x00000100;
         onChanged();
         return this;
       }
@@ -10989,9 +11080,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       private java.util.List<io.keploy.grpc.stubs.Service.FormData> form_ =
         java.util.Collections.emptyList();
       private void ensureFormIsMutable() {
-        if (!((bitField0_ & 0x00000100) != 0)) {
+        if (!((bitField0_ & 0x00000200) != 0)) {
           form_ = new java.util.ArrayList<io.keploy.grpc.stubs.Service.FormData>(form_);
-          bitField0_ |= 0x00000100;
+          bitField0_ |= 0x00000200;
          }
       }
 
@@ -11141,7 +11232,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       public Builder clearForm() {
         if (formBuilder_ == null) {
           form_ = java.util.Collections.emptyList();
-          bitField0_ = (bitField0_ & ~0x00000100);
+          bitField0_ = (bitField0_ & ~0x00000200);
           onChanged();
         } else {
           formBuilder_.clear();
@@ -11218,7 +11309,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           formBuilder_ = new com.google.protobuf.RepeatedFieldBuilderV3<
               io.keploy.grpc.stubs.Service.FormData, io.keploy.grpc.stubs.Service.FormData.Builder, io.keploy.grpc.stubs.Service.FormDataOrBuilder>(
                   form_,
-                  ((bitField0_ & 0x00000100) != 0),
+                  ((bitField0_ & 0x00000200) != 0),
                   getParentForChildren(),
                   isClean());
           form_ = null;
@@ -12966,16 +13057,26 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         java.lang.String key);
 
     /**
-     * <code>string Body = 3;</code>
+     * <code>string Body = 3 [deprecated = true];</code>
+     * @deprecated services.HttpResp.Body is deprecated.
+     *     See service.proto;l=85
      * @return The body.
      */
-    java.lang.String getBody();
+    @java.lang.Deprecated java.lang.String getBody();
     /**
-     * <code>string Body = 3;</code>
+     * <code>string Body = 3 [deprecated = true];</code>
+     * @deprecated services.HttpResp.Body is deprecated.
+     *     See service.proto;l=85
      * @return The bytes for body.
      */
-    com.google.protobuf.ByteString
+    @java.lang.Deprecated com.google.protobuf.ByteString
         getBodyBytes();
+
+    /**
+     * <code>bytes BodyData = 8;</code>
+     * @return The bodyData.
+     */
+    com.google.protobuf.ByteString getBodyData();
 
     /**
      * <code>string StatusMessage = 4;</code>
@@ -13027,6 +13128,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     }
     private HttpResp() {
       body_ = "";
+      bodyData_ = com.google.protobuf.ByteString.EMPTY;
       statusMessage_ = "";
       binary_ = "";
     }
@@ -13162,11 +13264,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     @SuppressWarnings("serial")
     private volatile java.lang.Object body_ = "";
     /**
-     * <code>string Body = 3;</code>
+     * <code>string Body = 3 [deprecated = true];</code>
+     * @deprecated services.HttpResp.Body is deprecated.
+     *     See service.proto;l=85
      * @return The body.
      */
     @java.lang.Override
-    public java.lang.String getBody() {
+    @java.lang.Deprecated public java.lang.String getBody() {
       java.lang.Object ref = body_;
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
@@ -13179,11 +13283,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
     }
     /**
-     * <code>string Body = 3;</code>
+     * <code>string Body = 3 [deprecated = true];</code>
+     * @deprecated services.HttpResp.Body is deprecated.
+     *     See service.proto;l=85
      * @return The bytes for body.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
+    @java.lang.Deprecated public com.google.protobuf.ByteString
         getBodyBytes() {
       java.lang.Object ref = body_;
       if (ref instanceof java.lang.String) {
@@ -13195,6 +13301,17 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       } else {
         return (com.google.protobuf.ByteString) ref;
       }
+    }
+
+    public static final int BODYDATA_FIELD_NUMBER = 8;
+    private com.google.protobuf.ByteString bodyData_ = com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>bytes BodyData = 8;</code>
+     * @return The bodyData.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getBodyData() {
+      return bodyData_;
     }
 
     public static final int STATUSMESSAGE_FIELD_NUMBER = 4;
@@ -13335,6 +13452,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(binary_)) {
         com.google.protobuf.GeneratedMessageV3.writeString(output, 7, binary_);
       }
+      if (!bodyData_.isEmpty()) {
+        output.writeBytes(8, bodyData_);
+      }
       getUnknownFields().writeTo(output);
     }
 
@@ -13375,6 +13495,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(binary_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(7, binary_);
       }
+      if (!bodyData_.isEmpty()) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBytesSize(8, bodyData_);
+      }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
       return size;
@@ -13396,6 +13520,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           other.internalGetHeader())) return false;
       if (!getBody()
           .equals(other.getBody())) return false;
+      if (!getBodyData()
+          .equals(other.getBodyData())) return false;
       if (!getStatusMessage()
           .equals(other.getStatusMessage())) return false;
       if (getProtoMajor()
@@ -13424,6 +13550,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       hash = (37 * hash) + BODY_FIELD_NUMBER;
       hash = (53 * hash) + getBody().hashCode();
+      hash = (37 * hash) + BODYDATA_FIELD_NUMBER;
+      hash = (53 * hash) + getBodyData().hashCode();
       hash = (37 * hash) + STATUSMESSAGE_FIELD_NUMBER;
       hash = (53 * hash) + getStatusMessage().hashCode();
       hash = (37 * hash) + PROTOMAJOR_FIELD_NUMBER;
@@ -13588,6 +13716,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         statusCode_ = 0L;
         internalGetMutableHeader().clear();
         body_ = "";
+        bodyData_ = com.google.protobuf.ByteString.EMPTY;
         statusMessage_ = "";
         protoMajor_ = 0L;
         protoMinor_ = 0L;
@@ -13636,15 +13765,18 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           result.body_ = body_;
         }
         if (((from_bitField0_ & 0x00000008) != 0)) {
-          result.statusMessage_ = statusMessage_;
+          result.bodyData_ = bodyData_;
         }
         if (((from_bitField0_ & 0x00000010) != 0)) {
-          result.protoMajor_ = protoMajor_;
+          result.statusMessage_ = statusMessage_;
         }
         if (((from_bitField0_ & 0x00000020) != 0)) {
-          result.protoMinor_ = protoMinor_;
+          result.protoMajor_ = protoMajor_;
         }
         if (((from_bitField0_ & 0x00000040) != 0)) {
+          result.protoMinor_ = protoMinor_;
+        }
+        if (((from_bitField0_ & 0x00000080) != 0)) {
           result.binary_ = binary_;
         }
       }
@@ -13704,9 +13836,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           bitField0_ |= 0x00000004;
           onChanged();
         }
+        if (other.getBodyData() != com.google.protobuf.ByteString.EMPTY) {
+          setBodyData(other.getBodyData());
+        }
         if (!other.getStatusMessage().isEmpty()) {
           statusMessage_ = other.statusMessage_;
-          bitField0_ |= 0x00000008;
+          bitField0_ |= 0x00000010;
           onChanged();
         }
         if (other.getProtoMajor() != 0L) {
@@ -13717,7 +13852,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
         if (!other.getBinary().isEmpty()) {
           binary_ = other.binary_;
-          bitField0_ |= 0x00000040;
+          bitField0_ |= 0x00000080;
           onChanged();
         }
         this.mergeUnknownFields(other.getUnknownFields());
@@ -13767,24 +13902,29 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
               } // case 26
               case 34: {
                 statusMessage_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000008;
+                bitField0_ |= 0x00000010;
                 break;
               } // case 34
               case 40: {
                 protoMajor_ = input.readInt64();
-                bitField0_ |= 0x00000010;
+                bitField0_ |= 0x00000020;
                 break;
               } // case 40
               case 48: {
                 protoMinor_ = input.readInt64();
-                bitField0_ |= 0x00000020;
+                bitField0_ |= 0x00000040;
                 break;
               } // case 48
               case 58: {
                 binary_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000040;
+                bitField0_ |= 0x00000080;
                 break;
               } // case 58
+              case 66: {
+                bodyData_ = input.readBytes();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 66
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -13963,10 +14103,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
 
       private java.lang.Object body_ = "";
       /**
-       * <code>string Body = 3;</code>
+       * <code>string Body = 3 [deprecated = true];</code>
+       * @deprecated services.HttpResp.Body is deprecated.
+       *     See service.proto;l=85
        * @return The body.
        */
-      public java.lang.String getBody() {
+      @java.lang.Deprecated public java.lang.String getBody() {
         java.lang.Object ref = body_;
         if (!(ref instanceof java.lang.String)) {
           com.google.protobuf.ByteString bs =
@@ -13979,10 +14121,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
       }
       /**
-       * <code>string Body = 3;</code>
+       * <code>string Body = 3 [deprecated = true];</code>
+       * @deprecated services.HttpResp.Body is deprecated.
+       *     See service.proto;l=85
        * @return The bytes for body.
        */
-      public com.google.protobuf.ByteString
+      @java.lang.Deprecated public com.google.protobuf.ByteString
           getBodyBytes() {
         java.lang.Object ref = body_;
         if (ref instanceof String) {
@@ -13996,11 +14140,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
       }
       /**
-       * <code>string Body = 3;</code>
+       * <code>string Body = 3 [deprecated = true];</code>
+       * @deprecated services.HttpResp.Body is deprecated.
+       *     See service.proto;l=85
        * @param value The body to set.
        * @return This builder for chaining.
        */
-      public Builder setBody(
+      @java.lang.Deprecated public Builder setBody(
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         body_ = value;
@@ -14009,26 +14155,62 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         return this;
       }
       /**
-       * <code>string Body = 3;</code>
+       * <code>string Body = 3 [deprecated = true];</code>
+       * @deprecated services.HttpResp.Body is deprecated.
+       *     See service.proto;l=85
        * @return This builder for chaining.
        */
-      public Builder clearBody() {
+      @java.lang.Deprecated public Builder clearBody() {
         body_ = getDefaultInstance().getBody();
         bitField0_ = (bitField0_ & ~0x00000004);
         onChanged();
         return this;
       }
       /**
-       * <code>string Body = 3;</code>
+       * <code>string Body = 3 [deprecated = true];</code>
+       * @deprecated services.HttpResp.Body is deprecated.
+       *     See service.proto;l=85
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
-      public Builder setBodyBytes(
+      @java.lang.Deprecated public Builder setBodyBytes(
           com.google.protobuf.ByteString value) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         body_ = value;
         bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.ByteString bodyData_ = com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>bytes BodyData = 8;</code>
+       * @return The bodyData.
+       */
+      @java.lang.Override
+      public com.google.protobuf.ByteString getBodyData() {
+        return bodyData_;
+      }
+      /**
+       * <code>bytes BodyData = 8;</code>
+       * @param value The bodyData to set.
+       * @return This builder for chaining.
+       */
+      public Builder setBodyData(com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        bodyData_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>bytes BodyData = 8;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearBodyData() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        bodyData_ = getDefaultInstance().getBodyData();
         onChanged();
         return this;
       }
@@ -14076,7 +14258,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         statusMessage_ = value;
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         onChanged();
         return this;
       }
@@ -14086,7 +14268,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
        */
       public Builder clearStatusMessage() {
         statusMessage_ = getDefaultInstance().getStatusMessage();
-        bitField0_ = (bitField0_ & ~0x00000008);
+        bitField0_ = (bitField0_ & ~0x00000010);
         onChanged();
         return this;
       }
@@ -14100,7 +14282,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         statusMessage_ = value;
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         onChanged();
         return this;
       }
@@ -14122,7 +14304,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       public Builder setProtoMajor(long value) {
         
         protoMajor_ = value;
-        bitField0_ |= 0x00000010;
+        bitField0_ |= 0x00000020;
         onChanged();
         return this;
       }
@@ -14131,7 +14313,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
        * @return This builder for chaining.
        */
       public Builder clearProtoMajor() {
-        bitField0_ = (bitField0_ & ~0x00000010);
+        bitField0_ = (bitField0_ & ~0x00000020);
         protoMajor_ = 0L;
         onChanged();
         return this;
@@ -14154,7 +14336,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       public Builder setProtoMinor(long value) {
         
         protoMinor_ = value;
-        bitField0_ |= 0x00000020;
+        bitField0_ |= 0x00000040;
         onChanged();
         return this;
       }
@@ -14163,7 +14345,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
        * @return This builder for chaining.
        */
       public Builder clearProtoMinor() {
-        bitField0_ = (bitField0_ & ~0x00000020);
+        bitField0_ = (bitField0_ & ~0x00000040);
         protoMinor_ = 0L;
         onChanged();
         return this;
@@ -14212,7 +14394,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         binary_ = value;
-        bitField0_ |= 0x00000040;
+        bitField0_ |= 0x00000080;
         onChanged();
         return this;
       }
@@ -14222,7 +14404,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
        */
       public Builder clearBinary() {
         binary_ = getDefaultInstance().getBinary();
-        bitField0_ = (bitField0_ & ~0x00000040);
+        bitField0_ = (bitField0_ & ~0x00000080);
         onChanged();
         return this;
       }
@@ -14236,7 +14418,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         binary_ = value;
-        bitField0_ |= 0x00000040;
+        bitField0_ |= 0x00000080;
         onChanged();
         return this;
       }
@@ -24042,10 +24224,39 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
       io.keploy.grpc.stubs.Service.TableOrBuilder getTableOrBuilder();
 
       /**
+       * <pre>
+       * change it to rows commited
+       * </pre>
+       *
        * <code>int64 Int = 10;</code>
        * @return The int.
        */
       long getInt();
+
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @return A list containing the err.
+       */
+      java.util.List<java.lang.String>
+          getErrList();
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @return The count of err.
+       */
+      int getErrCount();
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @param index The index of the element to return.
+       * @return The err at the given index.
+       */
+      java.lang.String getErr(int index);
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the err at the given index.
+       */
+      com.google.protobuf.ByteString
+          getErrBytes(int index);
     }
     /**
      * Protobuf type {@code services.Mock.SpecSchema}
@@ -24063,6 +24274,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
         objects_ = java.util.Collections.emptyList();
         mocks_ = com.google.protobuf.LazyStringArrayList.EMPTY;
         type_ = "";
+        err_ = com.google.protobuf.LazyStringArrayList.EMPTY;
       }
 
       @java.lang.Override
@@ -24479,12 +24691,52 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       public static final int INT_FIELD_NUMBER = 10;
       private long int_ = 0L;
       /**
+       * <pre>
+       * change it to rows commited
+       * </pre>
+       *
        * <code>int64 Int = 10;</code>
        * @return The int.
        */
       @java.lang.Override
       public long getInt() {
         return int_;
+      }
+
+      public static final int ERR_FIELD_NUMBER = 11;
+      @SuppressWarnings("serial")
+      private com.google.protobuf.LazyStringList err_;
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @return A list containing the err.
+       */
+      public com.google.protobuf.ProtocolStringList
+          getErrList() {
+        return err_;
+      }
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @return The count of err.
+       */
+      public int getErrCount() {
+        return err_.size();
+      }
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @param index The index of the element to return.
+       * @return The err at the given index.
+       */
+      public java.lang.String getErr(int index) {
+        return err_.get(index);
+      }
+      /**
+       * <code>repeated string Err = 11;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the err at the given index.
+       */
+      public com.google.protobuf.ByteString
+          getErrBytes(int index) {
+        return err_.getByteString(index);
       }
 
       private byte memoizedIsInitialized = -1;
@@ -24536,6 +24788,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
         if (int_ != 0L) {
           output.writeInt64(10, int_);
+        }
+        for (int i = 0; i < err_.size(); i++) {
+          com.google.protobuf.GeneratedMessageV3.writeString(output, 11, err_.getRaw(i));
         }
         getUnknownFields().writeTo(output);
       }
@@ -24601,6 +24856,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           size += com.google.protobuf.CodedOutputStream
             .computeInt64Size(10, int_);
         }
+        {
+          int dataSize = 0;
+          for (int i = 0; i < err_.size(); i++) {
+            dataSize += computeStringSizeNoTag(err_.getRaw(i));
+          }
+          size += dataSize;
+          size += 1 * getErrList().size();
+        }
         size += getUnknownFields().getSerializedSize();
         memoizedSize = size;
         return size;
@@ -24645,6 +24908,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
         if (getInt()
             != other.getInt()) return false;
+        if (!getErrList()
+            .equals(other.getErrList())) return false;
         if (!getUnknownFields().equals(other.getUnknownFields())) return false;
         return true;
       }
@@ -24692,6 +24957,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         hash = (37 * hash) + INT_FIELD_NUMBER;
         hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
             getInt());
+        if (getErrCount() > 0) {
+          hash = (37 * hash) + ERR_FIELD_NUMBER;
+          hash = (53 * hash) + getErrList().hashCode();
+        }
         hash = (29 * hash) + getUnknownFields().hashCode();
         memoizedHashCode = hash;
         return hash;
@@ -24885,6 +25154,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
             tableBuilder_ = null;
           }
           int_ = 0L;
+          err_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+          bitField0_ = (bitField0_ & ~0x00000400);
           return this;
         }
 
@@ -24932,6 +25203,11 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
             bitField0_ = (bitField0_ & ~0x00000010);
           }
           result.mocks_ = mocks_;
+          if (((bitField0_ & 0x00000400) != 0)) {
+            err_ = err_.getUnmodifiableView();
+            bitField0_ = (bitField0_ & ~0x00000400);
+          }
+          result.err_ = err_;
         }
 
         private void buildPartial0(io.keploy.grpc.stubs.Service.Mock.SpecSchema result) {
@@ -25079,6 +25355,16 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           if (other.getInt() != 0L) {
             setInt(other.getInt());
           }
+          if (!other.err_.isEmpty()) {
+            if (err_.isEmpty()) {
+              err_ = other.err_;
+              bitField0_ = (bitField0_ & ~0x00000400);
+            } else {
+              ensureErrIsMutable();
+              err_.addAll(other.err_);
+            }
+            onChanged();
+          }
           this.mergeUnknownFields(other.getUnknownFields());
           onChanged();
           return this;
@@ -25178,6 +25464,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
                   bitField0_ |= 0x00000200;
                   break;
                 } // case 80
+                case 90: {
+                  java.lang.String s = input.readStringRequireUtf8();
+                  ensureErrIsMutable();
+                  err_.add(s);
+                  break;
+                } // case 90
                 default: {
                   if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                     done = true; // was an endgroup tag
@@ -26276,6 +26568,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
 
         private long int_ ;
         /**
+         * <pre>
+         * change it to rows commited
+         * </pre>
+         *
          * <code>int64 Int = 10;</code>
          * @return The int.
          */
@@ -26284,6 +26580,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           return int_;
         }
         /**
+         * <pre>
+         * change it to rows commited
+         * </pre>
+         *
          * <code>int64 Int = 10;</code>
          * @param value The int to set.
          * @return This builder for chaining.
@@ -26296,12 +26596,120 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           return this;
         }
         /**
+         * <pre>
+         * change it to rows commited
+         * </pre>
+         *
          * <code>int64 Int = 10;</code>
          * @return This builder for chaining.
          */
         public Builder clearInt() {
           bitField0_ = (bitField0_ & ~0x00000200);
           int_ = 0L;
+          onChanged();
+          return this;
+        }
+
+        private com.google.protobuf.LazyStringList err_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        private void ensureErrIsMutable() {
+          if (!((bitField0_ & 0x00000400) != 0)) {
+            err_ = new com.google.protobuf.LazyStringArrayList(err_);
+            bitField0_ |= 0x00000400;
+           }
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @return A list containing the err.
+         */
+        public com.google.protobuf.ProtocolStringList
+            getErrList() {
+          return err_.getUnmodifiableView();
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @return The count of err.
+         */
+        public int getErrCount() {
+          return err_.size();
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param index The index of the element to return.
+         * @return The err at the given index.
+         */
+        public java.lang.String getErr(int index) {
+          return err_.get(index);
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param index The index of the value to return.
+         * @return The bytes of the err at the given index.
+         */
+        public com.google.protobuf.ByteString
+            getErrBytes(int index) {
+          return err_.getByteString(index);
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param index The index to set the value at.
+         * @param value The err to set.
+         * @return This builder for chaining.
+         */
+        public Builder setErr(
+            int index, java.lang.String value) {
+          if (value == null) { throw new NullPointerException(); }
+          ensureErrIsMutable();
+          err_.set(index, value);
+          onChanged();
+          return this;
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param value The err to add.
+         * @return This builder for chaining.
+         */
+        public Builder addErr(
+            java.lang.String value) {
+          if (value == null) { throw new NullPointerException(); }
+          ensureErrIsMutable();
+          err_.add(value);
+          onChanged();
+          return this;
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param values The err to add.
+         * @return This builder for chaining.
+         */
+        public Builder addAllErr(
+            java.lang.Iterable<java.lang.String> values) {
+          ensureErrIsMutable();
+          com.google.protobuf.AbstractMessageLite.Builder.addAll(
+              values, err_);
+          onChanged();
+          return this;
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @return This builder for chaining.
+         */
+        public Builder clearErr() {
+          err_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+          bitField0_ = (bitField0_ & ~0x00000400);
+          onChanged();
+          return this;
+        }
+        /**
+         * <code>repeated string Err = 11;</code>
+         * @param value The bytes of the err to add.
+         * @return This builder for chaining.
+         */
+        public Builder addErrBytes(
+            com.google.protobuf.ByteString value) {
+          if (value == null) { throw new NullPointerException(); }
+          checkByteStringIsUtf8(value);
+          ensureErrIsMutable();
+          err_.add(value);
           onChanged();
           return this;
         }
@@ -31924,6 +32332,24 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
      */
     com.google.protobuf.ByteString
         getModeBytes();
+
+    /**
+     * <code>bool OverWrite = 3;</code>
+     * @return The overWrite.
+     */
+    boolean getOverWrite();
+
+    /**
+     * <code>string Name = 4;</code>
+     * @return The name.
+     */
+    java.lang.String getName();
+    /**
+     * <code>string Name = 4;</code>
+     * @return The bytes for name.
+     */
+    com.google.protobuf.ByteString
+        getNameBytes();
   }
   /**
    * Protobuf type {@code services.StartMockReq}
@@ -31940,6 +32366,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     private StartMockReq() {
       path_ = "";
       mode_ = "";
+      name_ = "";
     }
 
     @java.lang.Override
@@ -32045,6 +32472,56 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
     }
 
+    public static final int OVERWRITE_FIELD_NUMBER = 3;
+    private boolean overWrite_ = false;
+    /**
+     * <code>bool OverWrite = 3;</code>
+     * @return The overWrite.
+     */
+    @java.lang.Override
+    public boolean getOverWrite() {
+      return overWrite_;
+    }
+
+    public static final int NAME_FIELD_NUMBER = 4;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object name_ = "";
+    /**
+     * <code>string Name = 4;</code>
+     * @return The name.
+     */
+    @java.lang.Override
+    public java.lang.String getName() {
+      java.lang.Object ref = name_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        name_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string Name = 4;</code>
+     * @return The bytes for name.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getNameBytes() {
+      java.lang.Object ref = name_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        name_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -32065,6 +32542,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(mode_)) {
         com.google.protobuf.GeneratedMessageV3.writeString(output, 2, mode_);
       }
+      if (overWrite_ != false) {
+        output.writeBool(3, overWrite_);
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(name_)) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 4, name_);
+      }
       getUnknownFields().writeTo(output);
     }
 
@@ -32079,6 +32562,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(mode_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, mode_);
+      }
+      if (overWrite_ != false) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBoolSize(3, overWrite_);
+      }
+      if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(name_)) {
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(4, name_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -32099,6 +32589,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           .equals(other.getPath())) return false;
       if (!getMode()
           .equals(other.getMode())) return false;
+      if (getOverWrite()
+          != other.getOverWrite()) return false;
+      if (!getName()
+          .equals(other.getName())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -32114,6 +32608,11 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       hash = (53 * hash) + getPath().hashCode();
       hash = (37 * hash) + MODE_FIELD_NUMBER;
       hash = (53 * hash) + getMode().hashCode();
+      hash = (37 * hash) + OVERWRITE_FIELD_NUMBER;
+      hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+          getOverWrite());
+      hash = (37 * hash) + NAME_FIELD_NUMBER;
+      hash = (53 * hash) + getName().hashCode();
       hash = (29 * hash) + getUnknownFields().hashCode();
       memoizedHashCode = hash;
       return hash;
@@ -32245,6 +32744,8 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         bitField0_ = 0;
         path_ = "";
         mode_ = "";
+        overWrite_ = false;
+        name_ = "";
         return this;
       }
 
@@ -32283,6 +32784,12 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
         if (((from_bitField0_ & 0x00000002) != 0)) {
           result.mode_ = mode_;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.overWrite_ = overWrite_;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.name_ = name_;
         }
       }
 
@@ -32340,6 +32847,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           bitField0_ |= 0x00000002;
           onChanged();
         }
+        if (other.getOverWrite() != false) {
+          setOverWrite(other.getOverWrite());
+        }
+        if (!other.getName().isEmpty()) {
+          name_ = other.name_;
+          bitField0_ |= 0x00000008;
+          onChanged();
+        }
         this.mergeUnknownFields(other.getUnknownFields());
         onChanged();
         return this;
@@ -32376,6 +32891,16 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
                 bitField0_ |= 0x00000002;
                 break;
               } // case 18
+              case 24: {
+                overWrite_ = input.readBool();
+                bitField0_ |= 0x00000004;
+                break;
+              } // case 24
+              case 34: {
+                name_ = input.readStringRequireUtf8();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 34
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -32533,6 +33058,110 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         checkByteStringIsUtf8(value);
         mode_ = value;
         bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+
+      private boolean overWrite_ ;
+      /**
+       * <code>bool OverWrite = 3;</code>
+       * @return The overWrite.
+       */
+      @java.lang.Override
+      public boolean getOverWrite() {
+        return overWrite_;
+      }
+      /**
+       * <code>bool OverWrite = 3;</code>
+       * @param value The overWrite to set.
+       * @return This builder for chaining.
+       */
+      public Builder setOverWrite(boolean value) {
+        
+        overWrite_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>bool OverWrite = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearOverWrite() {
+        bitField0_ = (bitField0_ & ~0x00000004);
+        overWrite_ = false;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object name_ = "";
+      /**
+       * <code>string Name = 4;</code>
+       * @return The name.
+       */
+      public java.lang.String getName() {
+        java.lang.Object ref = name_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          name_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string Name = 4;</code>
+       * @return The bytes for name.
+       */
+      public com.google.protobuf.ByteString
+          getNameBytes() {
+        java.lang.Object ref = name_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          name_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string Name = 4;</code>
+       * @param value The name to set.
+       * @return This builder for chaining.
+       */
+      public Builder setName(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        name_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Name = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearName() {
+        name_ = getDefaultInstance().getName();
+        bitField0_ = (bitField0_ & ~0x00000008);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string Name = 4;</code>
+       * @param value The bytes for name to set.
+       * @return This builder for chaining.
+       */
+      public Builder setNameBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        name_ = value;
+        bitField0_ |= 0x00000008;
         onChanged();
         return this;
       }
@@ -33332,86 +33961,89 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       "\037\n\005value\030\002 \001(\0132\020.services.StrArr:\0028\001\032@\n\014" +
       "AnchorsEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\013" +
       "2\020.services.StrArr:\0028\001\"\030\n\006Method\022\016\n\006Meth" +
-      "od\030\001 \001(\t\"\345\002\n\007HttpReq\022\016\n\006Method\030\001 \001(\t\022\022\n\n" +
+      "od\030\001 \001(\t\"\373\002\n\007HttpReq\022\016\n\006Method\030\001 \001(\t\022\022\n\n" +
       "ProtoMajor\030\002 \001(\003\022\022\n\nProtoMinor\030\003 \001(\003\022\013\n\003" +
       "URL\030\004 \001(\t\0223\n\tURLParams\030\005 \003(\0132 .services." +
       "HttpReq.URLParamsEntry\022-\n\006Header\030\006 \003(\0132\035" +
-      ".services.HttpReq.HeaderEntry\022\014\n\004Body\030\007 " +
-      "\001(\t\022\016\n\006Binary\030\010 \001(\t\022 \n\004Form\030\t \003(\0132\022.serv" +
-      "ices.FormData\0320\n\016URLParamsEntry\022\013\n\003key\030\001" +
-      " \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032?\n\013HeaderEntry\022\013" +
-      "\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.St" +
-      "rArr:\0028\001\"6\n\010FormData\022\013\n\003Key\030\001 \001(\t\022\016\n\006Val" +
-      "ues\030\002 \003(\t\022\r\n\005Paths\030\003 \003(\t\"\027\n\006StrArr\022\r\n\005Va" +
-      "lue\030\001 \003(\t\"\354\001\n\010HttpResp\022\022\n\nStatusCode\030\001 \001" +
-      "(\003\022.\n\006Header\030\002 \003(\0132\036.services.HttpResp.H" +
-      "eaderEntry\022\014\n\004Body\030\003 \001(\t\022\025\n\rStatusMessag" +
-      "e\030\004 \001(\t\022\022\n\nProtoMajor\030\005 \001(\003\022\022\n\nProtoMino" +
-      "r\030\006 \001(\003\022\016\n\006Binary\030\007 \001(\t\032?\n\013HeaderEntry\022\013" +
-      "\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.St" +
-      "rArr:\0028\001\"(\n\nendRequest\022\016\n\006status\030\001 \001(\t\022\n" +
-      "\n\002id\030\002 \001(\t\"\036\n\013endResponse\022\017\n\007message\030\001 \001" +
-      "(\t\"R\n\014startRequest\022\r\n\005total\030\001 \001(\t\022\013\n\003app" +
-      "\030\002 \001(\t\022\024\n\014TestCasePath\030\003 \001(\t\022\020\n\010MockPath" +
-      "\030\004 \001(\t\"\033\n\rstartResponse\022\n\n\002id\030\001 \001(\t\"\'\n\014g" +
-      "etTCRequest\022\n\n\002id\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\"c\n\r" +
-      "getTCSRequest\022\013\n\003app\030\001 \001(\t\022\016\n\006offset\030\002 \001" +
-      "(\t\022\r\n\005limit\030\003 \001(\t\022\024\n\014TestCasePath\030\004 \001(\t\022" +
-      "\020\n\010MockPath\030\005 \001(\t\">\n\016getTCSResponse\022\037\n\003t" +
-      "cs\030\001 \003(\0132\022.services.TestCase\022\013\n\003eof\030\002 \001(" +
-      "\010\"r\n\016postTCResponse\0222\n\005tcsId\030\001 \003(\0132#.ser" +
-      "vices.postTCResponse.TcsIdEntry\032,\n\nTcsId" +
-      "Entry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\"\n" +
-      "\017deNoiseResponse\022\017\n\007message\030\001 \001(\t\"k\n\014tes" +
-      "tResponse\022.\n\004pass\030\001 \003(\0132 .services.testR" +
-      "esponse.PassEntry\032+\n\tPassEntry\022\013\n\003key\030\001 " +
-      "\001(\t\022\r\n\005value\030\002 \001(\010:\0028\001\"\250\006\n\004Mock\022\017\n\007Versi" +
-      "on\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\022\014\n\004Kind\030\003 \001(\t\022\'\n\004" +
-      "Spec\030\004 \001(\0132\031.services.Mock.SpecSchema\032\321\001" +
-      "\n\007Request\022\016\n\006Method\030\001 \001(\t\022\022\n\nProtoMajor\030" +
-      "\002 \001(\003\022\022\n\nProtoMinor\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0222" +
-      "\n\006Header\030\005 \003(\0132\".services.Mock.Request.H" +
-      "eaderEntry\022\014\n\004Body\030\006 \001(\t\032?\n\013HeaderEntry\022" +
-      "\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.S" +
-      "trArr:\0028\001\032$\n\006Object\022\014\n\004Type\030\001 \001(\t\022\014\n\004Dat" +
-      "a\030\002 \001(\014\032\317\003\n\nSpecSchema\0229\n\010Metadata\030\001 \003(\013" +
-      "2\'.services.Mock.SpecSchema.MetadataEntr" +
-      "y\022&\n\007Objects\030\002 \003(\0132\025.services.Mock.Objec" +
-      "t\022\036\n\003Req\030\003 \001(\0132\021.services.HttpReq\022\037\n\003Res" +
-      "\030\004 \001(\0132\022.services.HttpResp\022\r\n\005Mocks\030\005 \003(" +
-      "\t\022=\n\nAssertions\030\006 \003(\0132).services.Mock.Sp" +
-      "ecSchema.AssertionsEntry\022\017\n\007Created\030\007 \001(" +
-      "\003\022\014\n\004Type\030\010 \001(\t\022#\n\005Table\030\t \001(\0132\017.service" +
-      "s.TableH\000\210\001\001\022\013\n\003Int\030\n \001(\003\032/\n\rMetadataEnt" +
-      "ry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032C\n\017As" +
-      "sertionsEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(" +
-      "\0132\020.services.StrArr:\0028\001B\010\n\006_Table\"5\n\005Tab" +
-      "le\022\036\n\004Cols\030\001 \003(\0132\020.services.SqlCol\022\014\n\004Ro" +
-      "ws\030\002 \003(\t\"F\n\006SqlCol\022\014\n\004Name\030\001 \001(\t\022\014\n\004Type" +
-      "\030\002 \001(\t\022\021\n\tPrecision\030\003 \001(\003\022\r\n\005Scale\030\004 \001(\003" +
-      "\"8\n\nPutMockReq\022\034\n\004Mock\030\001 \001(\0132\016.services." +
-      "Mock\022\014\n\004Path\030\002 \001(\t\"\037\n\013PutMockResp\022\020\n\010Ins" +
-      "erted\030\001 \001(\003\"(\n\nGetMockReq\022\014\n\004Path\030\001 \001(\t\022" +
-      "\014\n\004Name\030\002 \001(\t\",\n\013getMockResp\022\035\n\005Mocks\030\001 " +
-      "\003(\0132\016.services.Mock\"*\n\014StartMockReq\022\014\n\004P" +
-      "ath\030\001 \001(\t\022\014\n\004Mode\030\002 \001(\t\"\037\n\rStartMockResp" +
-      "\022\016\n\006Exists\030\001 \001(\0102\314\004\n\021RegressionService\0222" +
-      "\n\003End\022\024.services.endRequest\032\025.services.e" +
-      "ndResponse\0228\n\005Start\022\026.services.startRequ" +
-      "est\032\027.services.startResponse\0223\n\005GetTC\022\026." +
-      "services.getTCRequest\032\022.services.TestCas" +
-      "e\022;\n\006GetTCS\022\027.services.getTCSRequest\032\030.s" +
-      "ervices.getTCSResponse\0229\n\006PostTC\022\025.servi" +
-      "ces.TestCaseReq\032\030.services.postTCRespons" +
-      "e\0227\n\007DeNoise\022\021.services.TestReq\032\031.servic" +
-      "es.deNoiseResponse\0221\n\004Test\022\021.services.Te" +
-      "stReq\032\026.services.testResponse\0226\n\007PutMock" +
-      "\022\024.services.PutMockReq\032\025.services.PutMoc" +
-      "kResp\0227\n\010GetMocks\022\024.services.GetMockReq\032" +
-      "\025.services.getMockResp\022?\n\014StartMocking\022\026" +
-      ".services.StartMockReq\032\027.services.StartM" +
-      "ockRespB;\n\024io.keploy.grpc.stubsZ#go.kepl" +
-      "oy.io/server/grpc/regressionb\006proto3"
+      ".services.HttpReq.HeaderEntry\022\020\n\004Body\030\007 " +
+      "\001(\tB\002\030\001\022\020\n\010BodyData\030\n \001(\014\022\016\n\006Binary\030\010 \001(" +
+      "\t\022 \n\004Form\030\t \003(\0132\022.services.FormData\0320\n\016U" +
+      "RLParamsEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(" +
+      "\t:\0028\001\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005val" +
+      "ue\030\002 \001(\0132\020.services.StrArr:\0028\001\"6\n\010FormDa" +
+      "ta\022\013\n\003Key\030\001 \001(\t\022\016\n\006Values\030\002 \003(\t\022\r\n\005Paths" +
+      "\030\003 \003(\t\"\027\n\006StrArr\022\r\n\005Value\030\001 \003(\t\"\202\002\n\010Http" +
+      "Resp\022\022\n\nStatusCode\030\001 \001(\003\022.\n\006Header\030\002 \003(\013" +
+      "2\036.services.HttpResp.HeaderEntry\022\020\n\004Body" +
+      "\030\003 \001(\tB\002\030\001\022\020\n\010BodyData\030\010 \001(\014\022\025\n\rStatusMe" +
+      "ssage\030\004 \001(\t\022\022\n\nProtoMajor\030\005 \001(\003\022\022\n\nProto" +
+      "Minor\030\006 \001(\003\022\016\n\006Binary\030\007 \001(\t\032?\n\013HeaderEnt" +
+      "ry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.service" +
+      "s.StrArr:\0028\001\"(\n\nendRequest\022\016\n\006status\030\001 \001" +
+      "(\t\022\n\n\002id\030\002 \001(\t\"\036\n\013endResponse\022\017\n\007message" +
+      "\030\001 \001(\t\"R\n\014startRequest\022\r\n\005total\030\001 \001(\t\022\013\n" +
+      "\003app\030\002 \001(\t\022\024\n\014TestCasePath\030\003 \001(\t\022\020\n\010Mock" +
+      "Path\030\004 \001(\t\"\033\n\rstartResponse\022\n\n\002id\030\001 \001(\t\"" +
+      "\'\n\014getTCRequest\022\n\n\002id\030\001 \001(\t\022\013\n\003app\030\002 \001(\t" +
+      "\"c\n\rgetTCSRequest\022\013\n\003app\030\001 \001(\t\022\016\n\006offset" +
+      "\030\002 \001(\t\022\r\n\005limit\030\003 \001(\t\022\024\n\014TestCasePath\030\004 " +
+      "\001(\t\022\020\n\010MockPath\030\005 \001(\t\">\n\016getTCSResponse\022" +
+      "\037\n\003tcs\030\001 \003(\0132\022.services.TestCase\022\013\n\003eof\030" +
+      "\002 \001(\010\"r\n\016postTCResponse\0222\n\005tcsId\030\001 \003(\0132#" +
+      ".services.postTCResponse.TcsIdEntry\032,\n\nT" +
+      "csIdEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028" +
+      "\001\"\"\n\017deNoiseResponse\022\017\n\007message\030\001 \001(\t\"k\n" +
+      "\014testResponse\022.\n\004pass\030\001 \003(\0132 .services.t" +
+      "estResponse.PassEntry\032+\n\tPassEntry\022\013\n\003ke" +
+      "y\030\001 \001(\t\022\r\n\005value\030\002 \001(\010:\0028\001\"\265\006\n\004Mock\022\017\n\007V" +
+      "ersion\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\022\014\n\004Kind\030\003 \001(\t" +
+      "\022\'\n\004Spec\030\004 \001(\0132\031.services.Mock.SpecSchem" +
+      "a\032\321\001\n\007Request\022\016\n\006Method\030\001 \001(\t\022\022\n\nProtoMa" +
+      "jor\030\002 \001(\003\022\022\n\nProtoMinor\030\003 \001(\003\022\013\n\003URL\030\004 \001" +
+      "(\t\0222\n\006Header\030\005 \003(\0132\".services.Mock.Reque" +
+      "st.HeaderEntry\022\014\n\004Body\030\006 \001(\t\032?\n\013HeaderEn" +
+      "try\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.servic" +
+      "es.StrArr:\0028\001\032$\n\006Object\022\014\n\004Type\030\001 \001(\t\022\014\n" +
+      "\004Data\030\002 \001(\014\032\334\003\n\nSpecSchema\0229\n\010Metadata\030\001" +
+      " \003(\0132\'.services.Mock.SpecSchema.Metadata" +
+      "Entry\022&\n\007Objects\030\002 \003(\0132\025.services.Mock.O" +
+      "bject\022\036\n\003Req\030\003 \001(\0132\021.services.HttpReq\022\037\n" +
+      "\003Res\030\004 \001(\0132\022.services.HttpResp\022\r\n\005Mocks\030" +
+      "\005 \003(\t\022=\n\nAssertions\030\006 \003(\0132).services.Moc" +
+      "k.SpecSchema.AssertionsEntry\022\017\n\007Created\030" +
+      "\007 \001(\003\022\014\n\004Type\030\010 \001(\t\022#\n\005Table\030\t \001(\0132\017.ser" +
+      "vices.TableH\000\210\001\001\022\013\n\003Int\030\n \001(\003\022\013\n\003Err\030\013 \003" +
+      "(\t\032/\n\rMetadataEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005valu" +
+      "e\030\002 \001(\t:\0028\001\032C\n\017AssertionsEntry\022\013\n\003key\030\001 " +
+      "\001(\t\022\037\n\005value\030\002 \001(\0132\020.services.StrArr:\0028\001" +
+      "B\010\n\006_Table\"5\n\005Table\022\036\n\004Cols\030\001 \003(\0132\020.serv" +
+      "ices.SqlCol\022\014\n\004Rows\030\002 \003(\t\"F\n\006SqlCol\022\014\n\004N" +
+      "ame\030\001 \001(\t\022\014\n\004Type\030\002 \001(\t\022\021\n\tPrecision\030\003 \001" +
+      "(\003\022\r\n\005Scale\030\004 \001(\003\"8\n\nPutMockReq\022\034\n\004Mock\030" +
+      "\001 \001(\0132\016.services.Mock\022\014\n\004Path\030\002 \001(\t\"\037\n\013P" +
+      "utMockResp\022\020\n\010Inserted\030\001 \001(\003\"(\n\nGetMockR" +
+      "eq\022\014\n\004Path\030\001 \001(\t\022\014\n\004Name\030\002 \001(\t\",\n\013getMoc" +
+      "kResp\022\035\n\005Mocks\030\001 \003(\0132\016.services.Mock\"K\n\014" +
+      "StartMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004Mode\030\002 \001(\t" +
+      "\022\021\n\tOverWrite\030\003 \001(\010\022\014\n\004Name\030\004 \001(\t\"\037\n\rSta" +
+      "rtMockResp\022\016\n\006Exists\030\001 \001(\0102\314\004\n\021Regressio" +
+      "nService\0222\n\003End\022\024.services.endRequest\032\025." +
+      "services.endResponse\0228\n\005Start\022\026.services" +
+      ".startRequest\032\027.services.startResponse\0223" +
+      "\n\005GetTC\022\026.services.getTCRequest\032\022.servic" +
+      "es.TestCase\022;\n\006GetTCS\022\027.services.getTCSR" +
+      "equest\032\030.services.getTCSResponse\0229\n\006Post" +
+      "TC\022\025.services.TestCaseReq\032\030.services.pos" +
+      "tTCResponse\0227\n\007DeNoise\022\021.services.TestRe" +
+      "q\032\031.services.deNoiseResponse\0221\n\004Test\022\021.s" +
+      "ervices.TestReq\032\026.services.testResponse\022" +
+      "6\n\007PutMock\022\024.services.PutMockReq\032\025.servi" +
+      "ces.PutMockResp\0227\n\010GetMocks\022\024.services.G" +
+      "etMockReq\032\025.services.getMockResp\022?\n\014Star" +
+      "tMocking\022\026.services.StartMockReq\032\027.servi" +
+      "ces.StartMockRespB;\n\024io.keploy.grpc.stub" +
+      "sZ#go.keploy.io/server/grpc/regressionb\006" +
+      "proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -33476,7 +34108,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_HttpReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_HttpReq_descriptor,
-        new java.lang.String[] { "Method", "ProtoMajor", "ProtoMinor", "URL", "URLParams", "Header", "Body", "Binary", "Form", });
+        new java.lang.String[] { "Method", "ProtoMajor", "ProtoMinor", "URL", "URLParams", "Header", "Body", "BodyData", "Binary", "Form", });
     internal_static_services_HttpReq_URLParamsEntry_descriptor =
       internal_static_services_HttpReq_descriptor.getNestedTypes().get(0);
     internal_static_services_HttpReq_URLParamsEntry_fieldAccessorTable = new
@@ -33506,7 +34138,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_HttpResp_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_HttpResp_descriptor,
-        new java.lang.String[] { "StatusCode", "Header", "Body", "StatusMessage", "ProtoMajor", "ProtoMinor", "Binary", });
+        new java.lang.String[] { "StatusCode", "Header", "Body", "BodyData", "StatusMessage", "ProtoMajor", "ProtoMinor", "Binary", });
     internal_static_services_HttpResp_HeaderEntry_descriptor =
       internal_static_services_HttpResp_descriptor.getNestedTypes().get(0);
     internal_static_services_HttpResp_HeaderEntry_fieldAccessorTable = new
@@ -33614,7 +34246,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_Mock_SpecSchema_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_Mock_SpecSchema_descriptor,
-        new java.lang.String[] { "Metadata", "Objects", "Req", "Res", "Mocks", "Assertions", "Created", "Type", "Table", "Int", "Table", });
+        new java.lang.String[] { "Metadata", "Objects", "Req", "Res", "Mocks", "Assertions", "Created", "Type", "Table", "Int", "Err", "Table", });
     internal_static_services_Mock_SpecSchema_MetadataEntry_descriptor =
       internal_static_services_Mock_SpecSchema_descriptor.getNestedTypes().get(0);
     internal_static_services_Mock_SpecSchema_MetadataEntry_fieldAccessorTable = new
@@ -33668,7 +34300,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_StartMockReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_StartMockReq_descriptor,
-        new java.lang.String[] { "Path", "Mode", });
+        new java.lang.String[] { "Path", "Mode", "OverWrite", "Name", });
     internal_static_services_StartMockResp_descriptor =
       getDescriptor().getMessageTypes().get(28);
     internal_static_services_StartMockResp_fieldAccessorTable = new

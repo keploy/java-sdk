@@ -10,7 +10,7 @@ import java.util.Map;
 
 public class Config {
 
-    public static Mode mode;
+    public static Mode.ModeType mode;
 
     public static String Name = "";
 

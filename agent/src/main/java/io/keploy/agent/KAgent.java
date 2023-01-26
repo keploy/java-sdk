@@ -1,5 +1,7 @@
 package io.keploy.agent;
 
+import io.keploy.service.GrpcService;
+import io.keploy.service.mock.MockLib;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
@@ -37,24 +39,13 @@ public class KAgent {
         }
 
         if (System.getenv("KEPLOY_MODE") == null) {
-
-//            if (!isJUnitTest()) {
-//                System.out.println("not a JUnit test");
-//                return;
-//            }
-//            System.out.println("yes its a junit test");
-//
-//            Map<String, String> mode = new HashMap<>();
-//            mode.put("KEPLOY_MODE", "test");
-//            try {
-//                setEnv(mode);
-//                final String keploy_mode = System.getenv("KEPLOY_MODE");
-//                System.out.println("env variable for keploy mode in premain:" + keploy_mode);
-//            } catch (Exception e) {
-//                throw new RuntimeException(e);
-//            }
             return;
         }
+
+//        if (System.getenv("MOCK_LIB") != null && Objects.equals(System.getenv("MOCK_LIB"), "true")) {
+//            new MockLib(); // this will initialize the mock lib
+//        }
+
 
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";

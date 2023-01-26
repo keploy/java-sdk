@@ -160,12 +160,11 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 Service.Mock httpMock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
                         .setKind(Mock.Kind.HTTP_EXPORT.value)
-                        .setName("")
+                        .setName(Config.Name)
                         .setSpec(specSchema)
                         .build();
 
-                // for mock library
-                new GrpcService(); // to initialize the grpcClient
+                // for mock library to work
                 if (GrpcService.blockingStub != null && kctx.getFileExport() && !Config.MockId.containsKey(kctx.getTestId())) {
                     final boolean recorded = MockLib.PutMock(Config.MockPath, httpMock);
                     String CAPTURE = "\uD83D\uDFE0";
