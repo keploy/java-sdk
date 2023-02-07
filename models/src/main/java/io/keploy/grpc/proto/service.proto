@@ -24,6 +24,9 @@ message TestCaseReq {
   string TestCasePath = 7;
   string MockPath = 8;
   repeated Mock Mocks = 9;
+  string Type = 10;
+  GrpcReq GrpcReq = 11;
+  GrpcResp GrpcResp = 12;
 }
 
 
@@ -34,6 +37,8 @@ message TestReq {
   HttpResp Resp = 4;
   string TestCasePath = 5;
   string MockPath = 6;
+  string Type = 7;
+  GrpcResp GrpcResp = 8;
 }
 
 message TestCase {
@@ -63,10 +68,12 @@ message HttpReq {
   string URL = 4;
   map<string, string> URLParams = 5;
   map<string, StrArr> Header = 6;
-  string Body = 7;
+  string Body = 7 [deprecated = true];
+  bytes BodyData = 10;
   string Binary = 8;
   repeated FormData Form = 9;
 }
+
 //for multipart request
 message FormData {
   string Key = 1; //partName
@@ -81,7 +88,8 @@ message StrArr {
 message HttpResp {
   int64 StatusCode = 1;
   map<string, StrArr> Header = 2;
-  string Body = 3;
+  string Body = 3 [deprecated = true];
+  bytes BodyData = 8;
   string StatusMessage = 4;
   int64 ProtoMajor = 5;
   int64 ProtoMinor = 6;
@@ -132,6 +140,14 @@ message deNoiseResponse {
 message testResponse{
   map<string, bool> pass = 1;
 }
+message GrpcReq {
+  string Body = 1;
+  string Method = 2;
+}
+message GrpcResp {
+  string Body = 1;
+  string Err = 2;
+}
 
 message Mock {
   message Request {
@@ -161,7 +177,10 @@ message Mock {
     // for sql
     string Type = 8;
     optional Table Table = 9;
-    int64 Int = 10;
+    int64 Int = 10; // change it to rows commited
+    repeated string Err = 11;
+    GrpcReq GrpcRequest = 12;
+    GrpcResp GrpcResp = 13;
   }
   SpecSchema Spec = 4;
 }
@@ -200,6 +219,8 @@ message getMockResp {
 message StartMockReq {
   string Path = 1;
   string Mode = 2;
+  bool OverWrite = 3;
+  string Name = 4;
 }
 
 message StartMockResp {
