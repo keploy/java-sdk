@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.keploy.regression.Mock.Kind.HTTP_EXPORT;
 import static io.keploy.utils.Utility.createFolder;
 
 public class GrpcService {
@@ -59,12 +60,6 @@ public class GrpcService {
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
 
-//        client = new OkHttpClient.Builder()
-//                .connectTimeout(1, TimeUnit.MINUTES) // connect timeout
-//                .writeTimeout(1, TimeUnit.MINUTES) // write timeout
-//                .readTimeout(1, TimeUnit.MINUTES) // read timeout
-//                .followRedirects(false)
-//                .build();
     }
 
 
@@ -133,7 +128,7 @@ public class GrpcService {
                 // for multipart-request
                 List<Service.FormData> form = saveFiles(formData);
                 Service.HttpReq httpReq = httpReqBuilder.addAllForm(form).build();
-                Service.TestCaseReq testCaseReq = testCaseReqBuilder.setHttpReq(httpReq).build();
+                Service.TestCaseReq testCaseReq = testCaseReqBuilder.setHttpReq(httpReq).setType(HTTP_EXPORT.value).build();
 
                 put(testCaseReq);
             } catch (Exception e) {
@@ -641,6 +636,7 @@ public class GrpcService {
                 .setResp(resp)
                 .setTestCasePath(k.getCfg().getApp().getTestPath())
                 .setMockPath(k.getCfg().getApp().getMockPath())
+                .setType(HTTP_EXPORT.value)
                 .build();
 
         Service.testResponse testResponse;
