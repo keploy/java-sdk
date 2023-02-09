@@ -43,12 +43,12 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.2.2)
+      <version>N.N.N</version> (eg: 1.2.5)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.2)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.5)
 
 ## Usage
 
@@ -70,12 +70,24 @@ or to *build.gradle*:
       ```
 
 - **Run along with agent to mock external calls of your API 🤩🔥**
+
     - Download the latest - Download the latest agent jar
-      from [here](https://search.maven.org/artifact/io.keploy/agent/1.2.2/jar)  (eg: 1.2.2)
-    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.2.jar`)
-    - Using Intellij : Go to Edit Configuration-> add VM options -> paste _java agent_ edited above .
-    - Using Command Line : `export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.2.jar"`
-    - For Running via Tomcat Server : `export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.2.jar "`
+      from [here](https://search.maven.org/artifact/io.keploy/keploy-sdk/1.2.5/jar)  (eg: 1.2.5)
+
+    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.5.jar`) is possible through 3 ways:-
+
+        1. **Using Intellij :** Go to Edit Configuration-> add VM options -> paste _java agent_ edited above.
+
+        2. **Using Command Line :** 
+            ```
+            export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.5.jar"
+            ```
+
+        3. **Running via Tomcat Server :** 
+            ```
+            export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.5.jar"
+            ```
+
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
     - `APP_PORT`           (default APP_PORT = 8080)
@@ -145,7 +157,7 @@ or to *build.gradle*:
                             </configuration>
                         </plugin>
                    ```  
-                - 4. Add Jacoco plugin to your *pom.xml*.
+                4. Add Jacoco plugin to your *pom.xml*.
                       ```xml
                            <plugin>
                               <groupId>org.jacoco</groupId>
