@@ -87,7 +87,7 @@ or to *build.gradle*:
             ```
             export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.5.jar"
             ```
-            
+
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
     - `APP_PORT`           (default APP_PORT = 8080)
@@ -157,7 +157,7 @@ or to *build.gradle*:
                             </configuration>
                         </plugin>
                    ```  
-                - 4. Add Jacoco plugin to your *pom.xml*.
+                4. Add Jacoco plugin to your *pom.xml*.
                       ```xml
                            <plugin>
                               <groupId>org.jacoco</groupId>
