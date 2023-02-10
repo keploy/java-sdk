@@ -255,17 +255,10 @@ public class ApacheInterceptor {
                 Service.Mock httpMock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
                         .setKind(Mock.Kind.HTTP_EXPORT.value)
-                        .setName("")
+                        .setName(Config.Name)
                         .setSpec(specSchema)
                         .build();
 
-//                if internal.GetGrpcClient() != nil && kctx.FileExport && internal.MockId.Unique(kctx.TestID) {
-//                recorded := internal.PutMock(context.Background(), internal.MockPath, httpMock)
-//                if recorded {
-//                    fmt.Println("🟠 Captured the mocked outputs for Http dependency call with meta: ", meta)
-//                }
-//                return resp, err
-//            }
 
                 // for mock library
                 new GrpcService(); // to initialize the grpcClient

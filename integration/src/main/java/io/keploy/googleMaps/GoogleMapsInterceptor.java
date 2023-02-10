@@ -227,7 +227,7 @@ public class GoogleMapsInterceptor {
                     if (recorded) {
                         logger.info(CAPTURE + " Captured the mocked outputs for Http dependency call with meta: {}", meta);
                     }
-                    return response;
+                    return responseObject;
                 }
 
                 kctx.getMock().add(httpMock);
