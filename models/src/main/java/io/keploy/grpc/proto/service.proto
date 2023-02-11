@@ -24,9 +24,11 @@ message TestCaseReq {
   string TestCasePath = 7;
   string MockPath = 8;
   repeated Mock Mocks = 9;
-  string Type = 10;
-  GrpcReq GrpcReq = 11;
-  GrpcResp GrpcResp = 12;
+  repeated string Remove = 10;
+  map<string, string> Replace = 11;
+  string Type = 12;
+  GrpcReq GrpcReq = 13;
+  GrpcResp GrpcResp = 14;
 }
 
 
@@ -201,6 +203,8 @@ message SqlCol  {
 message PutMockReq {
   Mock Mock = 1;
   string Path = 2;
+  repeated string Remove = 3;
+  map<string, string> Replace = 4;
 }
 
 message PutMockResp {

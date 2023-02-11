@@ -2025,44 +2025,103 @@ java.lang.String defaultValue) {
         int index);
 
     /**
-     * <code>string Type = 10;</code>
+     * <code>repeated string Remove = 10;</code>
+     * @return A list containing the remove.
+     */
+    java.util.List<java.lang.String>
+        getRemoveList();
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @return The count of remove.
+     */
+    int getRemoveCount();
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @param index The index of the element to return.
+     * @return The remove at the given index.
+     */
+    java.lang.String getRemove(int index);
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the remove at the given index.
+     */
+    com.google.protobuf.ByteString
+        getRemoveBytes(int index);
+
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    int getReplaceCount();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    boolean containsReplace(
+        java.lang.String key);
+    /**
+     * Use {@link #getReplaceMap()} instead.
+     */
+    @java.lang.Deprecated
+    java.util.Map<java.lang.String, java.lang.String>
+    getReplace();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    java.util.Map<java.lang.String, java.lang.String>
+    getReplaceMap();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    /* nullable */
+java.lang.String getReplaceOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue);
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    java.lang.String getReplaceOrThrow(
+        java.lang.String key);
+
+    /**
+     * <code>string Type = 12;</code>
      * @return The type.
      */
     java.lang.String getType();
     /**
-     * <code>string Type = 10;</code>
+     * <code>string Type = 12;</code>
      * @return The bytes for type.
      */
     com.google.protobuf.ByteString
         getTypeBytes();
 
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      * @return Whether the grpcReq field is set.
      */
     boolean hasGrpcReq();
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      * @return The grpcReq.
      */
     io.keploy.grpc.stubs.Service.GrpcReq getGrpcReq();
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      */
     io.keploy.grpc.stubs.Service.GrpcReqOrBuilder getGrpcReqOrBuilder();
 
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      * @return Whether the grpcResp field is set.
      */
     boolean hasGrpcResp();
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      * @return The grpcResp.
      */
     io.keploy.grpc.stubs.Service.GrpcResp getGrpcResp();
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      */
     io.keploy.grpc.stubs.Service.GrpcRespOrBuilder getGrpcRespOrBuilder();
   }
@@ -2085,6 +2144,7 @@ java.lang.String defaultValue) {
       testCasePath_ = "";
       mockPath_ = "";
       mocks_ = java.util.Collections.emptyList();
+      remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
       type_ = "";
     }
 
@@ -2105,6 +2165,18 @@ java.lang.String defaultValue) {
       return io.keploy.grpc.stubs.Service.internal_static_services_TestCaseReq_descriptor;
     }
 
+    @SuppressWarnings({"rawtypes"})
+    @java.lang.Override
+    protected com.google.protobuf.MapField internalGetMapField(
+        int number) {
+      switch (number) {
+        case 11:
+          return internalGetReplace();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -2414,11 +2486,126 @@ java.lang.String defaultValue) {
       return mocks_.get(index);
     }
 
-    public static final int TYPE_FIELD_NUMBER = 10;
+    public static final int REMOVE_FIELD_NUMBER = 10;
+    @SuppressWarnings("serial")
+    private com.google.protobuf.LazyStringList remove_;
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @return A list containing the remove.
+     */
+    public com.google.protobuf.ProtocolStringList
+        getRemoveList() {
+      return remove_;
+    }
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @return The count of remove.
+     */
+    public int getRemoveCount() {
+      return remove_.size();
+    }
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @param index The index of the element to return.
+     * @return The remove at the given index.
+     */
+    public java.lang.String getRemove(int index) {
+      return remove_.get(index);
+    }
+    /**
+     * <code>repeated string Remove = 10;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the remove at the given index.
+     */
+    public com.google.protobuf.ByteString
+        getRemoveBytes(int index) {
+      return remove_.getByteString(index);
+    }
+
+    public static final int REPLACE_FIELD_NUMBER = 11;
+    private static final class ReplaceDefaultEntryHolder {
+      static final com.google.protobuf.MapEntry<
+          java.lang.String, java.lang.String> defaultEntry =
+              com.google.protobuf.MapEntry
+              .<java.lang.String, java.lang.String>newDefaultInstance(
+                  io.keploy.grpc.stubs.Service.internal_static_services_TestCaseReq_ReplaceEntry_descriptor, 
+                  com.google.protobuf.WireFormat.FieldType.STRING,
+                  "",
+                  com.google.protobuf.WireFormat.FieldType.STRING,
+                  "");
+    }
+    @SuppressWarnings("serial")
+    private com.google.protobuf.MapField<
+        java.lang.String, java.lang.String> replace_;
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+    internalGetReplace() {
+      if (replace_ == null) {
+        return com.google.protobuf.MapField.emptyMapField(
+            ReplaceDefaultEntryHolder.defaultEntry);
+      }
+      return replace_;
+    }
+    public int getReplaceCount() {
+      return internalGetReplace().getMap().size();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    @java.lang.Override
+    public boolean containsReplace(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      return internalGetReplace().getMap().containsKey(key);
+    }
+    /**
+     * Use {@link #getReplaceMap()} instead.
+     */
+    @java.lang.Override
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String> getReplace() {
+      return getReplaceMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    @java.lang.Override
+    public java.util.Map<java.lang.String, java.lang.String> getReplaceMap() {
+      return internalGetReplace().getMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    @java.lang.Override
+    public /* nullable */
+java.lang.String getReplaceOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetReplace().getMap();
+      return map.containsKey(key) ? map.get(key) : defaultValue;
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 11;</code>
+     */
+    @java.lang.Override
+    public java.lang.String getReplaceOrThrow(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetReplace().getMap();
+      if (!map.containsKey(key)) {
+        throw new java.lang.IllegalArgumentException();
+      }
+      return map.get(key);
+    }
+
+    public static final int TYPE_FIELD_NUMBER = 12;
     @SuppressWarnings("serial")
     private volatile java.lang.Object type_ = "";
     /**
-     * <code>string Type = 10;</code>
+     * <code>string Type = 12;</code>
      * @return The type.
      */
     @java.lang.Override
@@ -2435,7 +2622,7 @@ java.lang.String defaultValue) {
       }
     }
     /**
-     * <code>string Type = 10;</code>
+     * <code>string Type = 12;</code>
      * @return The bytes for type.
      */
     @java.lang.Override
@@ -2453,10 +2640,10 @@ java.lang.String defaultValue) {
       }
     }
 
-    public static final int GRPCREQ_FIELD_NUMBER = 11;
+    public static final int GRPCREQ_FIELD_NUMBER = 13;
     private io.keploy.grpc.stubs.Service.GrpcReq grpcReq_;
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      * @return Whether the grpcReq field is set.
      */
     @java.lang.Override
@@ -2464,7 +2651,7 @@ java.lang.String defaultValue) {
       return grpcReq_ != null;
     }
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      * @return The grpcReq.
      */
     @java.lang.Override
@@ -2472,17 +2659,17 @@ java.lang.String defaultValue) {
       return grpcReq_ == null ? io.keploy.grpc.stubs.Service.GrpcReq.getDefaultInstance() : grpcReq_;
     }
     /**
-     * <code>.services.GrpcReq GrpcReq = 11;</code>
+     * <code>.services.GrpcReq GrpcReq = 13;</code>
      */
     @java.lang.Override
     public io.keploy.grpc.stubs.Service.GrpcReqOrBuilder getGrpcReqOrBuilder() {
       return grpcReq_ == null ? io.keploy.grpc.stubs.Service.GrpcReq.getDefaultInstance() : grpcReq_;
     }
 
-    public static final int GRPCRESP_FIELD_NUMBER = 12;
+    public static final int GRPCRESP_FIELD_NUMBER = 14;
     private io.keploy.grpc.stubs.Service.GrpcResp grpcResp_;
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      * @return Whether the grpcResp field is set.
      */
     @java.lang.Override
@@ -2490,7 +2677,7 @@ java.lang.String defaultValue) {
       return grpcResp_ != null;
     }
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      * @return The grpcResp.
      */
     @java.lang.Override
@@ -2498,7 +2685,7 @@ java.lang.String defaultValue) {
       return grpcResp_ == null ? io.keploy.grpc.stubs.Service.GrpcResp.getDefaultInstance() : grpcResp_;
     }
     /**
-     * <code>.services.GrpcResp GrpcResp = 12;</code>
+     * <code>.services.GrpcResp GrpcResp = 14;</code>
      */
     @java.lang.Override
     public io.keploy.grpc.stubs.Service.GrpcRespOrBuilder getGrpcRespOrBuilder() {
@@ -2546,14 +2733,23 @@ java.lang.String defaultValue) {
       for (int i = 0; i < mocks_.size(); i++) {
         output.writeMessage(9, mocks_.get(i));
       }
+      for (int i = 0; i < remove_.size(); i++) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 10, remove_.getRaw(i));
+      }
+      com.google.protobuf.GeneratedMessageV3
+        .serializeStringMapTo(
+          output,
+          internalGetReplace(),
+          ReplaceDefaultEntryHolder.defaultEntry,
+          11);
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
-        com.google.protobuf.GeneratedMessageV3.writeString(output, 10, type_);
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 12, type_);
       }
       if (grpcReq_ != null) {
-        output.writeMessage(11, getGrpcReq());
+        output.writeMessage(13, getGrpcReq());
       }
       if (grpcResp_ != null) {
-        output.writeMessage(12, getGrpcResp());
+        output.writeMessage(14, getGrpcResp());
       }
       getUnknownFields().writeTo(output);
     }
@@ -2596,16 +2792,34 @@ java.lang.String defaultValue) {
         size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(9, mocks_.get(i));
       }
+      {
+        int dataSize = 0;
+        for (int i = 0; i < remove_.size(); i++) {
+          dataSize += computeStringSizeNoTag(remove_.getRaw(i));
+        }
+        size += dataSize;
+        size += 1 * getRemoveList().size();
+      }
+      for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
+           : internalGetReplace().getMap().entrySet()) {
+        com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+        replace__ = ReplaceDefaultEntryHolder.defaultEntry.newBuilderForType()
+            .setKey(entry.getKey())
+            .setValue(entry.getValue())
+            .build();
+        size += com.google.protobuf.CodedOutputStream
+            .computeMessageSize(11, replace__);
+      }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(type_)) {
-        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(10, type_);
+        size += com.google.protobuf.GeneratedMessageV3.computeStringSize(12, type_);
       }
       if (grpcReq_ != null) {
         size += com.google.protobuf.CodedOutputStream
-          .computeMessageSize(11, getGrpcReq());
+          .computeMessageSize(13, getGrpcReq());
       }
       if (grpcResp_ != null) {
         size += com.google.protobuf.CodedOutputStream
-          .computeMessageSize(12, getGrpcResp());
+          .computeMessageSize(14, getGrpcResp());
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -2646,6 +2860,10 @@ java.lang.String defaultValue) {
           .equals(other.getMockPath())) return false;
       if (!getMocksList()
           .equals(other.getMocksList())) return false;
+      if (!getRemoveList()
+          .equals(other.getRemoveList())) return false;
+      if (!internalGetReplace().equals(
+          other.internalGetReplace())) return false;
       if (!getType()
           .equals(other.getType())) return false;
       if (hasGrpcReq() != other.hasGrpcReq()) return false;
@@ -2695,6 +2913,14 @@ java.lang.String defaultValue) {
       if (getMocksCount() > 0) {
         hash = (37 * hash) + MOCKS_FIELD_NUMBER;
         hash = (53 * hash) + getMocksList().hashCode();
+      }
+      if (getRemoveCount() > 0) {
+        hash = (37 * hash) + REMOVE_FIELD_NUMBER;
+        hash = (53 * hash) + getRemoveList().hashCode();
+      }
+      if (!internalGetReplace().getMap().isEmpty()) {
+        hash = (37 * hash) + REPLACE_FIELD_NUMBER;
+        hash = (53 * hash) + internalGetReplace().hashCode();
       }
       hash = (37 * hash) + TYPE_FIELD_NUMBER;
       hash = (53 * hash) + getType().hashCode();
@@ -2813,6 +3039,28 @@ java.lang.String defaultValue) {
         return io.keploy.grpc.stubs.Service.internal_static_services_TestCaseReq_descriptor;
       }
 
+      @SuppressWarnings({"rawtypes"})
+      protected com.google.protobuf.MapField internalGetMapField(
+          int number) {
+        switch (number) {
+          case 11:
+            return internalGetReplace();
+          default:
+            throw new RuntimeException(
+                "Invalid map field number: " + number);
+        }
+      }
+      @SuppressWarnings({"rawtypes"})
+      protected com.google.protobuf.MapField internalGetMutableMapField(
+          int number) {
+        switch (number) {
+          case 11:
+            return internalGetMutableReplace();
+          default:
+            throw new RuntimeException(
+                "Invalid map field number: " + number);
+        }
+      }
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
@@ -2864,6 +3112,9 @@ java.lang.String defaultValue) {
           mocksBuilder_.clear();
         }
         bitField0_ = (bitField0_ & ~0x00000100);
+        remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000200);
+        internalGetMutableReplace().clear();
         type_ = "";
         grpcReq_ = null;
         if (grpcReqBuilder_ != null) {
@@ -2926,6 +3177,11 @@ java.lang.String defaultValue) {
         } else {
           result.mocks_ = mocksBuilder_.build();
         }
+        if (((bitField0_ & 0x00000200) != 0)) {
+          remove_ = remove_.getUnmodifiableView();
+          bitField0_ = (bitField0_ & ~0x00000200);
+        }
+        result.remove_ = remove_;
       }
 
       private void buildPartial0(io.keploy.grpc.stubs.Service.TestCaseReq result) {
@@ -2955,15 +3211,19 @@ java.lang.String defaultValue) {
         if (((from_bitField0_ & 0x00000080) != 0)) {
           result.mockPath_ = mockPath_;
         }
-        if (((from_bitField0_ & 0x00000200) != 0)) {
+        if (((from_bitField0_ & 0x00000400) != 0)) {
+          result.replace_ = internalGetReplace();
+          result.replace_.makeImmutable();
+        }
+        if (((from_bitField0_ & 0x00000800) != 0)) {
           result.type_ = type_;
         }
-        if (((from_bitField0_ & 0x00000400) != 0)) {
+        if (((from_bitField0_ & 0x00001000) != 0)) {
           result.grpcReq_ = grpcReqBuilder_ == null
               ? grpcReq_
               : grpcReqBuilder_.build();
         }
-        if (((from_bitField0_ & 0x00000800) != 0)) {
+        if (((from_bitField0_ & 0x00002000) != 0)) {
           result.grpcResp_ = grpcRespBuilder_ == null
               ? grpcResp_
               : grpcRespBuilder_.build();
@@ -3095,9 +3355,22 @@ java.lang.String defaultValue) {
             }
           }
         }
+        if (!other.remove_.isEmpty()) {
+          if (remove_.isEmpty()) {
+            remove_ = other.remove_;
+            bitField0_ = (bitField0_ & ~0x00000200);
+          } else {
+            ensureRemoveIsMutable();
+            remove_.addAll(other.remove_);
+          }
+          onChanged();
+        }
+        internalGetMutableReplace().mergeFrom(
+            other.internalGetReplace());
+        bitField0_ |= 0x00000400;
         if (!other.getType().isEmpty()) {
           type_ = other.type_;
-          bitField0_ |= 0x00000200;
+          bitField0_ |= 0x00000800;
           onChanged();
         }
         if (other.hasGrpcReq()) {
@@ -3198,24 +3471,39 @@ java.lang.String defaultValue) {
                 break;
               } // case 74
               case 82: {
-                type_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000200;
+                java.lang.String s = input.readStringRequireUtf8();
+                ensureRemoveIsMutable();
+                remove_.add(s);
                 break;
               } // case 82
               case 90: {
-                input.readMessage(
-                    getGrpcReqFieldBuilder().getBuilder(),
-                    extensionRegistry);
+                com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+                replace__ = input.readMessage(
+                    ReplaceDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
+                internalGetMutableReplace().getMutableMap().put(
+                    replace__.getKey(), replace__.getValue());
                 bitField0_ |= 0x00000400;
                 break;
               } // case 90
               case 98: {
-                input.readMessage(
-                    getGrpcRespFieldBuilder().getBuilder(),
-                    extensionRegistry);
+                type_ = input.readStringRequireUtf8();
                 bitField0_ |= 0x00000800;
                 break;
               } // case 98
+              case 106: {
+                input.readMessage(
+                    getGrpcReqFieldBuilder().getBuilder(),
+                    extensionRegistry);
+                bitField0_ |= 0x00001000;
+                break;
+              } // case 106
+              case 114: {
+                input.readMessage(
+                    getGrpcRespFieldBuilder().getBuilder(),
+                    extensionRegistry);
+                bitField0_ |= 0x00002000;
+                break;
+              } // case 114
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -4271,9 +4559,240 @@ java.lang.String defaultValue) {
         return mocksBuilder_;
       }
 
+      private com.google.protobuf.LazyStringList remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+      private void ensureRemoveIsMutable() {
+        if (!((bitField0_ & 0x00000200) != 0)) {
+          remove_ = new com.google.protobuf.LazyStringArrayList(remove_);
+          bitField0_ |= 0x00000200;
+         }
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @return A list containing the remove.
+       */
+      public com.google.protobuf.ProtocolStringList
+          getRemoveList() {
+        return remove_.getUnmodifiableView();
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @return The count of remove.
+       */
+      public int getRemoveCount() {
+        return remove_.size();
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param index The index of the element to return.
+       * @return The remove at the given index.
+       */
+      public java.lang.String getRemove(int index) {
+        return remove_.get(index);
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the remove at the given index.
+       */
+      public com.google.protobuf.ByteString
+          getRemoveBytes(int index) {
+        return remove_.getByteString(index);
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param index The index to set the value at.
+       * @param value The remove to set.
+       * @return This builder for chaining.
+       */
+      public Builder setRemove(
+          int index, java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureRemoveIsMutable();
+        remove_.set(index, value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param value The remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRemove(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureRemoveIsMutable();
+        remove_.add(value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param values The remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllRemove(
+          java.lang.Iterable<java.lang.String> values) {
+        ensureRemoveIsMutable();
+        com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, remove_);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearRemove() {
+        remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000200);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 10;</code>
+       * @param value The bytes of the remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRemoveBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        ensureRemoveIsMutable();
+        remove_.add(value);
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.MapField<
+          java.lang.String, java.lang.String> replace_;
+      private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+          internalGetReplace() {
+        if (replace_ == null) {
+          return com.google.protobuf.MapField.emptyMapField(
+              ReplaceDefaultEntryHolder.defaultEntry);
+        }
+        return replace_;
+      }
+      private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+          internalGetMutableReplace() {
+        if (replace_ == null) {
+          replace_ = com.google.protobuf.MapField.newMapField(
+              ReplaceDefaultEntryHolder.defaultEntry);
+        }
+        if (!replace_.isMutable()) {
+          replace_ = replace_.copy();
+        }
+        bitField0_ |= 0x00000400;
+        onChanged();
+        return replace_;
+      }
+      public int getReplaceCount() {
+        return internalGetReplace().getMap().size();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      @java.lang.Override
+      public boolean containsReplace(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        return internalGetReplace().getMap().containsKey(key);
+      }
+      /**
+       * Use {@link #getReplaceMap()} instead.
+       */
+      @java.lang.Override
+      @java.lang.Deprecated
+      public java.util.Map<java.lang.String, java.lang.String> getReplace() {
+        return getReplaceMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      @java.lang.Override
+      public java.util.Map<java.lang.String, java.lang.String> getReplaceMap() {
+        return internalGetReplace().getMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      @java.lang.Override
+      public /* nullable */
+java.lang.String getReplaceOrDefault(
+          java.lang.String key,
+          /* nullable */
+java.lang.String defaultValue) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        java.util.Map<java.lang.String, java.lang.String> map =
+            internalGetReplace().getMap();
+        return map.containsKey(key) ? map.get(key) : defaultValue;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      @java.lang.Override
+      public java.lang.String getReplaceOrThrow(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        java.util.Map<java.lang.String, java.lang.String> map =
+            internalGetReplace().getMap();
+        if (!map.containsKey(key)) {
+          throw new java.lang.IllegalArgumentException();
+        }
+        return map.get(key);
+      }
+      public Builder clearReplace() {
+        bitField0_ = (bitField0_ & ~0x00000400);
+        internalGetMutableReplace().getMutableMap()
+            .clear();
+        return this;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      public Builder removeReplace(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        internalGetMutableReplace().getMutableMap()
+            .remove(key);
+        return this;
+      }
+      /**
+       * Use alternate mutation accessors instead.
+       */
+      @java.lang.Deprecated
+      public java.util.Map<java.lang.String, java.lang.String>
+          getMutableReplace() {
+        bitField0_ |= 0x00000400;
+        return internalGetMutableReplace().getMutableMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      public Builder putReplace(
+          java.lang.String key,
+          java.lang.String value) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        if (value == null) { throw new NullPointerException("map value"); }
+        internalGetMutableReplace().getMutableMap()
+            .put(key, value);
+        bitField0_ |= 0x00000400;
+        return this;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 11;</code>
+       */
+      public Builder putAllReplace(
+          java.util.Map<java.lang.String, java.lang.String> values) {
+        internalGetMutableReplace().getMutableMap()
+            .putAll(values);
+        bitField0_ |= 0x00000400;
+        return this;
+      }
+
       private java.lang.Object type_ = "";
       /**
-       * <code>string Type = 10;</code>
+       * <code>string Type = 12;</code>
        * @return The type.
        */
       public java.lang.String getType() {
@@ -4289,7 +4808,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>string Type = 10;</code>
+       * <code>string Type = 12;</code>
        * @return The bytes for type.
        */
       public com.google.protobuf.ByteString
@@ -4306,7 +4825,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>string Type = 10;</code>
+       * <code>string Type = 12;</code>
        * @param value The type to set.
        * @return This builder for chaining.
        */
@@ -4314,22 +4833,22 @@ java.lang.String defaultValue) {
           java.lang.String value) {
         if (value == null) { throw new NullPointerException(); }
         type_ = value;
-        bitField0_ |= 0x00000200;
+        bitField0_ |= 0x00000800;
         onChanged();
         return this;
       }
       /**
-       * <code>string Type = 10;</code>
+       * <code>string Type = 12;</code>
        * @return This builder for chaining.
        */
       public Builder clearType() {
         type_ = getDefaultInstance().getType();
-        bitField0_ = (bitField0_ & ~0x00000200);
+        bitField0_ = (bitField0_ & ~0x00000800);
         onChanged();
         return this;
       }
       /**
-       * <code>string Type = 10;</code>
+       * <code>string Type = 12;</code>
        * @param value The bytes for type to set.
        * @return This builder for chaining.
        */
@@ -4338,7 +4857,7 @@ java.lang.String defaultValue) {
         if (value == null) { throw new NullPointerException(); }
         checkByteStringIsUtf8(value);
         type_ = value;
-        bitField0_ |= 0x00000200;
+        bitField0_ |= 0x00000800;
         onChanged();
         return this;
       }
@@ -4347,14 +4866,14 @@ java.lang.String defaultValue) {
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.GrpcReq, io.keploy.grpc.stubs.Service.GrpcReq.Builder, io.keploy.grpc.stubs.Service.GrpcReqOrBuilder> grpcReqBuilder_;
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        * @return Whether the grpcReq field is set.
        */
       public boolean hasGrpcReq() {
-        return ((bitField0_ & 0x00000400) != 0);
+        return ((bitField0_ & 0x00001000) != 0);
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        * @return The grpcReq.
        */
       public io.keploy.grpc.stubs.Service.GrpcReq getGrpcReq() {
@@ -4365,7 +4884,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public Builder setGrpcReq(io.keploy.grpc.stubs.Service.GrpcReq value) {
         if (grpcReqBuilder_ == null) {
@@ -4376,12 +4895,12 @@ java.lang.String defaultValue) {
         } else {
           grpcReqBuilder_.setMessage(value);
         }
-        bitField0_ |= 0x00000400;
+        bitField0_ |= 0x00001000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public Builder setGrpcReq(
           io.keploy.grpc.stubs.Service.GrpcReq.Builder builderForValue) {
@@ -4390,16 +4909,16 @@ java.lang.String defaultValue) {
         } else {
           grpcReqBuilder_.setMessage(builderForValue.build());
         }
-        bitField0_ |= 0x00000400;
+        bitField0_ |= 0x00001000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public Builder mergeGrpcReq(io.keploy.grpc.stubs.Service.GrpcReq value) {
         if (grpcReqBuilder_ == null) {
-          if (((bitField0_ & 0x00000400) != 0) &&
+          if (((bitField0_ & 0x00001000) != 0) &&
             grpcReq_ != null &&
             grpcReq_ != io.keploy.grpc.stubs.Service.GrpcReq.getDefaultInstance()) {
             getGrpcReqBuilder().mergeFrom(value);
@@ -4409,15 +4928,15 @@ java.lang.String defaultValue) {
         } else {
           grpcReqBuilder_.mergeFrom(value);
         }
-        bitField0_ |= 0x00000400;
+        bitField0_ |= 0x00001000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public Builder clearGrpcReq() {
-        bitField0_ = (bitField0_ & ~0x00000400);
+        bitField0_ = (bitField0_ & ~0x00001000);
         grpcReq_ = null;
         if (grpcReqBuilder_ != null) {
           grpcReqBuilder_.dispose();
@@ -4427,15 +4946,15 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public io.keploy.grpc.stubs.Service.GrpcReq.Builder getGrpcReqBuilder() {
-        bitField0_ |= 0x00000400;
+        bitField0_ |= 0x00001000;
         onChanged();
         return getGrpcReqFieldBuilder().getBuilder();
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       public io.keploy.grpc.stubs.Service.GrpcReqOrBuilder getGrpcReqOrBuilder() {
         if (grpcReqBuilder_ != null) {
@@ -4446,7 +4965,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.GrpcReq GrpcReq = 11;</code>
+       * <code>.services.GrpcReq GrpcReq = 13;</code>
        */
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.GrpcReq, io.keploy.grpc.stubs.Service.GrpcReq.Builder, io.keploy.grpc.stubs.Service.GrpcReqOrBuilder> 
@@ -4466,14 +4985,14 @@ java.lang.String defaultValue) {
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.GrpcResp, io.keploy.grpc.stubs.Service.GrpcResp.Builder, io.keploy.grpc.stubs.Service.GrpcRespOrBuilder> grpcRespBuilder_;
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        * @return Whether the grpcResp field is set.
        */
       public boolean hasGrpcResp() {
-        return ((bitField0_ & 0x00000800) != 0);
+        return ((bitField0_ & 0x00002000) != 0);
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        * @return The grpcResp.
        */
       public io.keploy.grpc.stubs.Service.GrpcResp getGrpcResp() {
@@ -4484,7 +5003,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public Builder setGrpcResp(io.keploy.grpc.stubs.Service.GrpcResp value) {
         if (grpcRespBuilder_ == null) {
@@ -4495,12 +5014,12 @@ java.lang.String defaultValue) {
         } else {
           grpcRespBuilder_.setMessage(value);
         }
-        bitField0_ |= 0x00000800;
+        bitField0_ |= 0x00002000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public Builder setGrpcResp(
           io.keploy.grpc.stubs.Service.GrpcResp.Builder builderForValue) {
@@ -4509,16 +5028,16 @@ java.lang.String defaultValue) {
         } else {
           grpcRespBuilder_.setMessage(builderForValue.build());
         }
-        bitField0_ |= 0x00000800;
+        bitField0_ |= 0x00002000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public Builder mergeGrpcResp(io.keploy.grpc.stubs.Service.GrpcResp value) {
         if (grpcRespBuilder_ == null) {
-          if (((bitField0_ & 0x00000800) != 0) &&
+          if (((bitField0_ & 0x00002000) != 0) &&
             grpcResp_ != null &&
             grpcResp_ != io.keploy.grpc.stubs.Service.GrpcResp.getDefaultInstance()) {
             getGrpcRespBuilder().mergeFrom(value);
@@ -4528,15 +5047,15 @@ java.lang.String defaultValue) {
         } else {
           grpcRespBuilder_.mergeFrom(value);
         }
-        bitField0_ |= 0x00000800;
+        bitField0_ |= 0x00002000;
         onChanged();
         return this;
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public Builder clearGrpcResp() {
-        bitField0_ = (bitField0_ & ~0x00000800);
+        bitField0_ = (bitField0_ & ~0x00002000);
         grpcResp_ = null;
         if (grpcRespBuilder_ != null) {
           grpcRespBuilder_.dispose();
@@ -4546,15 +5065,15 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public io.keploy.grpc.stubs.Service.GrpcResp.Builder getGrpcRespBuilder() {
-        bitField0_ |= 0x00000800;
+        bitField0_ |= 0x00002000;
         onChanged();
         return getGrpcRespFieldBuilder().getBuilder();
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       public io.keploy.grpc.stubs.Service.GrpcRespOrBuilder getGrpcRespOrBuilder() {
         if (grpcRespBuilder_ != null) {
@@ -4565,7 +5084,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.GrpcResp GrpcResp = 12;</code>
+       * <code>.services.GrpcResp GrpcResp = 14;</code>
        */
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.GrpcResp, io.keploy.grpc.stubs.Service.GrpcResp.Builder, io.keploy.grpc.stubs.Service.GrpcRespOrBuilder> 
@@ -10163,14 +10682,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=70
+     *     See service.proto;l=72
      * @return The body.
      */
     @java.lang.Deprecated java.lang.String getBody();
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=70
+     *     See service.proto;l=72
      * @return The bytes for body.
      */
     @java.lang.Deprecated com.google.protobuf.ByteString
@@ -10542,7 +11061,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=70
+     *     See service.proto;l=72
      * @return The body.
      */
     @java.lang.Override
@@ -10561,7 +11080,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=70
+     *     See service.proto;l=72
      * @return The bytes for body.
      */
     @java.lang.Override
@@ -11779,7 +12298,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=70
+       *     See service.proto;l=72
        * @return The body.
        */
       @java.lang.Deprecated public java.lang.String getBody() {
@@ -11797,7 +12316,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=70
+       *     See service.proto;l=72
        * @return The bytes for body.
        */
       @java.lang.Deprecated public com.google.protobuf.ByteString
@@ -11816,7 +12335,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=70
+       *     See service.proto;l=72
        * @param value The body to set.
        * @return This builder for chaining.
        */
@@ -11831,7 +12350,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=70
+       *     See service.proto;l=72
        * @return This builder for chaining.
        */
       @java.lang.Deprecated public Builder clearBody() {
@@ -11843,7 +12362,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=70
+       *     See service.proto;l=72
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
@@ -13943,14 +14462,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=90
+     *     See service.proto;l=92
      * @return The body.
      */
     @java.lang.Deprecated java.lang.String getBody();
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=90
+     *     See service.proto;l=92
      * @return The bytes for body.
      */
     @java.lang.Deprecated com.google.protobuf.ByteString
@@ -14150,7 +14669,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=90
+     *     See service.proto;l=92
      * @return The body.
      */
     @java.lang.Override
@@ -14169,7 +14688,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=90
+     *     See service.proto;l=92
      * @return The bytes for body.
      */
     @java.lang.Override
@@ -14989,7 +15508,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=90
+       *     See service.proto;l=92
        * @return The body.
        */
       @java.lang.Deprecated public java.lang.String getBody() {
@@ -15007,7 +15526,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=90
+       *     See service.proto;l=92
        * @return The bytes for body.
        */
       @java.lang.Deprecated public com.google.protobuf.ByteString
@@ -15026,7 +15545,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=90
+       *     See service.proto;l=92
        * @param value The body to set.
        * @return This builder for chaining.
        */
@@ -15041,7 +15560,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=90
+       *     See service.proto;l=92
        * @return This builder for chaining.
        */
       @java.lang.Deprecated public Builder clearBody() {
@@ -15053,7 +15572,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=90
+       *     See service.proto;l=92
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
@@ -32300,6 +32819,65 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
      */
     com.google.protobuf.ByteString
         getPathBytes();
+
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @return A list containing the remove.
+     */
+    java.util.List<java.lang.String>
+        getRemoveList();
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @return The count of remove.
+     */
+    int getRemoveCount();
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @param index The index of the element to return.
+     * @return The remove at the given index.
+     */
+    java.lang.String getRemove(int index);
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the remove at the given index.
+     */
+    com.google.protobuf.ByteString
+        getRemoveBytes(int index);
+
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    int getReplaceCount();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    boolean containsReplace(
+        java.lang.String key);
+    /**
+     * Use {@link #getReplaceMap()} instead.
+     */
+    @java.lang.Deprecated
+    java.util.Map<java.lang.String, java.lang.String>
+    getReplace();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    java.util.Map<java.lang.String, java.lang.String>
+    getReplaceMap();
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    /* nullable */
+java.lang.String getReplaceOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue);
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    java.lang.String getReplaceOrThrow(
+        java.lang.String key);
   }
   /**
    * Protobuf type {@code services.PutMockReq}
@@ -32315,6 +32893,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     }
     private PutMockReq() {
       path_ = "";
+      remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
     }
 
     @java.lang.Override
@@ -32334,6 +32913,18 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       return io.keploy.grpc.stubs.Service.internal_static_services_PutMockReq_descriptor;
     }
 
+    @SuppressWarnings({"rawtypes"})
+    @java.lang.Override
+    protected com.google.protobuf.MapField internalGetMapField(
+        int number) {
+      switch (number) {
+        case 4:
+          return internalGetReplace();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -32407,6 +32998,121 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
     }
 
+    public static final int REMOVE_FIELD_NUMBER = 3;
+    @SuppressWarnings("serial")
+    private com.google.protobuf.LazyStringList remove_;
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @return A list containing the remove.
+     */
+    public com.google.protobuf.ProtocolStringList
+        getRemoveList() {
+      return remove_;
+    }
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @return The count of remove.
+     */
+    public int getRemoveCount() {
+      return remove_.size();
+    }
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @param index The index of the element to return.
+     * @return The remove at the given index.
+     */
+    public java.lang.String getRemove(int index) {
+      return remove_.get(index);
+    }
+    /**
+     * <code>repeated string Remove = 3;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the remove at the given index.
+     */
+    public com.google.protobuf.ByteString
+        getRemoveBytes(int index) {
+      return remove_.getByteString(index);
+    }
+
+    public static final int REPLACE_FIELD_NUMBER = 4;
+    private static final class ReplaceDefaultEntryHolder {
+      static final com.google.protobuf.MapEntry<
+          java.lang.String, java.lang.String> defaultEntry =
+              com.google.protobuf.MapEntry
+              .<java.lang.String, java.lang.String>newDefaultInstance(
+                  io.keploy.grpc.stubs.Service.internal_static_services_PutMockReq_ReplaceEntry_descriptor, 
+                  com.google.protobuf.WireFormat.FieldType.STRING,
+                  "",
+                  com.google.protobuf.WireFormat.FieldType.STRING,
+                  "");
+    }
+    @SuppressWarnings("serial")
+    private com.google.protobuf.MapField<
+        java.lang.String, java.lang.String> replace_;
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+    internalGetReplace() {
+      if (replace_ == null) {
+        return com.google.protobuf.MapField.emptyMapField(
+            ReplaceDefaultEntryHolder.defaultEntry);
+      }
+      return replace_;
+    }
+    public int getReplaceCount() {
+      return internalGetReplace().getMap().size();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    @java.lang.Override
+    public boolean containsReplace(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      return internalGetReplace().getMap().containsKey(key);
+    }
+    /**
+     * Use {@link #getReplaceMap()} instead.
+     */
+    @java.lang.Override
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String> getReplace() {
+      return getReplaceMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    @java.lang.Override
+    public java.util.Map<java.lang.String, java.lang.String> getReplaceMap() {
+      return internalGetReplace().getMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    @java.lang.Override
+    public /* nullable */
+java.lang.String getReplaceOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetReplace().getMap();
+      return map.containsKey(key) ? map.get(key) : defaultValue;
+    }
+    /**
+     * <code>map&lt;string, string&gt; Replace = 4;</code>
+     */
+    @java.lang.Override
+    public java.lang.String getReplaceOrThrow(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetReplace().getMap();
+      if (!map.containsKey(key)) {
+        throw new java.lang.IllegalArgumentException();
+      }
+      return map.get(key);
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -32427,6 +33133,15 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(path_)) {
         com.google.protobuf.GeneratedMessageV3.writeString(output, 2, path_);
       }
+      for (int i = 0; i < remove_.size(); i++) {
+        com.google.protobuf.GeneratedMessageV3.writeString(output, 3, remove_.getRaw(i));
+      }
+      com.google.protobuf.GeneratedMessageV3
+        .serializeStringMapTo(
+          output,
+          internalGetReplace(),
+          ReplaceDefaultEntryHolder.defaultEntry,
+          4);
       getUnknownFields().writeTo(output);
     }
 
@@ -32442,6 +33157,24 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(path_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, path_);
+      }
+      {
+        int dataSize = 0;
+        for (int i = 0; i < remove_.size(); i++) {
+          dataSize += computeStringSizeNoTag(remove_.getRaw(i));
+        }
+        size += dataSize;
+        size += 1 * getRemoveList().size();
+      }
+      for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
+           : internalGetReplace().getMap().entrySet()) {
+        com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+        replace__ = ReplaceDefaultEntryHolder.defaultEntry.newBuilderForType()
+            .setKey(entry.getKey())
+            .setValue(entry.getValue())
+            .build();
+        size += com.google.protobuf.CodedOutputStream
+            .computeMessageSize(4, replace__);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -32465,6 +33198,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       if (!getPath()
           .equals(other.getPath())) return false;
+      if (!getRemoveList()
+          .equals(other.getRemoveList())) return false;
+      if (!internalGetReplace().equals(
+          other.internalGetReplace())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -32482,6 +33219,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       }
       hash = (37 * hash) + PATH_FIELD_NUMBER;
       hash = (53 * hash) + getPath().hashCode();
+      if (getRemoveCount() > 0) {
+        hash = (37 * hash) + REMOVE_FIELD_NUMBER;
+        hash = (53 * hash) + getRemoveList().hashCode();
+      }
+      if (!internalGetReplace().getMap().isEmpty()) {
+        hash = (37 * hash) + REPLACE_FIELD_NUMBER;
+        hash = (53 * hash) + internalGetReplace().hashCode();
+      }
       hash = (29 * hash) + getUnknownFields().hashCode();
       memoizedHashCode = hash;
       return hash;
@@ -32589,6 +33334,28 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         return io.keploy.grpc.stubs.Service.internal_static_services_PutMockReq_descriptor;
       }
 
+      @SuppressWarnings({"rawtypes"})
+      protected com.google.protobuf.MapField internalGetMapField(
+          int number) {
+        switch (number) {
+          case 4:
+            return internalGetReplace();
+          default:
+            throw new RuntimeException(
+                "Invalid map field number: " + number);
+        }
+      }
+      @SuppressWarnings({"rawtypes"})
+      protected com.google.protobuf.MapField internalGetMutableMapField(
+          int number) {
+        switch (number) {
+          case 4:
+            return internalGetMutableReplace();
+          default:
+            throw new RuntimeException(
+                "Invalid map field number: " + number);
+        }
+      }
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
@@ -32617,6 +33384,9 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           mockBuilder_ = null;
         }
         path_ = "";
+        remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000004);
+        internalGetMutableReplace().clear();
         return this;
       }
 
@@ -32643,9 +33413,18 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       @java.lang.Override
       public io.keploy.grpc.stubs.Service.PutMockReq buildPartial() {
         io.keploy.grpc.stubs.Service.PutMockReq result = new io.keploy.grpc.stubs.Service.PutMockReq(this);
+        buildPartialRepeatedFields(result);
         if (bitField0_ != 0) { buildPartial0(result); }
         onBuilt();
         return result;
+      }
+
+      private void buildPartialRepeatedFields(io.keploy.grpc.stubs.Service.PutMockReq result) {
+        if (((bitField0_ & 0x00000004) != 0)) {
+          remove_ = remove_.getUnmodifiableView();
+          bitField0_ = (bitField0_ & ~0x00000004);
+        }
+        result.remove_ = remove_;
       }
 
       private void buildPartial0(io.keploy.grpc.stubs.Service.PutMockReq result) {
@@ -32657,6 +33436,10 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         }
         if (((from_bitField0_ & 0x00000002) != 0)) {
           result.path_ = path_;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.replace_ = internalGetReplace();
+          result.replace_.makeImmutable();
         }
       }
 
@@ -32712,6 +33495,19 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
           bitField0_ |= 0x00000002;
           onChanged();
         }
+        if (!other.remove_.isEmpty()) {
+          if (remove_.isEmpty()) {
+            remove_ = other.remove_;
+            bitField0_ = (bitField0_ & ~0x00000004);
+          } else {
+            ensureRemoveIsMutable();
+            remove_.addAll(other.remove_);
+          }
+          onChanged();
+        }
+        internalGetMutableReplace().mergeFrom(
+            other.internalGetReplace());
+        bitField0_ |= 0x00000008;
         this.mergeUnknownFields(other.getUnknownFields());
         onChanged();
         return this;
@@ -32750,6 +33546,21 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
                 bitField0_ |= 0x00000002;
                 break;
               } // case 18
+              case 26: {
+                java.lang.String s = input.readStringRequireUtf8();
+                ensureRemoveIsMutable();
+                remove_.add(s);
+                break;
+              } // case 26
+              case 34: {
+                com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+                replace__ = input.readMessage(
+                    ReplaceDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
+                internalGetMutableReplace().getMutableMap().put(
+                    replace__.getKey(), replace__.getValue());
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 34
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -32955,6 +33766,237 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
         path_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.LazyStringList remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+      private void ensureRemoveIsMutable() {
+        if (!((bitField0_ & 0x00000004) != 0)) {
+          remove_ = new com.google.protobuf.LazyStringArrayList(remove_);
+          bitField0_ |= 0x00000004;
+         }
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @return A list containing the remove.
+       */
+      public com.google.protobuf.ProtocolStringList
+          getRemoveList() {
+        return remove_.getUnmodifiableView();
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @return The count of remove.
+       */
+      public int getRemoveCount() {
+        return remove_.size();
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param index The index of the element to return.
+       * @return The remove at the given index.
+       */
+      public java.lang.String getRemove(int index) {
+        return remove_.get(index);
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the remove at the given index.
+       */
+      public com.google.protobuf.ByteString
+          getRemoveBytes(int index) {
+        return remove_.getByteString(index);
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param index The index to set the value at.
+       * @param value The remove to set.
+       * @return This builder for chaining.
+       */
+      public Builder setRemove(
+          int index, java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureRemoveIsMutable();
+        remove_.set(index, value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param value The remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRemove(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        ensureRemoveIsMutable();
+        remove_.add(value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param values The remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllRemove(
+          java.lang.Iterable<java.lang.String> values) {
+        ensureRemoveIsMutable();
+        com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, remove_);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearRemove() {
+        remove_ = com.google.protobuf.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000004);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string Remove = 3;</code>
+       * @param value The bytes of the remove to add.
+       * @return This builder for chaining.
+       */
+      public Builder addRemoveBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        ensureRemoveIsMutable();
+        remove_.add(value);
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.MapField<
+          java.lang.String, java.lang.String> replace_;
+      private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+          internalGetReplace() {
+        if (replace_ == null) {
+          return com.google.protobuf.MapField.emptyMapField(
+              ReplaceDefaultEntryHolder.defaultEntry);
+        }
+        return replace_;
+      }
+      private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+          internalGetMutableReplace() {
+        if (replace_ == null) {
+          replace_ = com.google.protobuf.MapField.newMapField(
+              ReplaceDefaultEntryHolder.defaultEntry);
+        }
+        if (!replace_.isMutable()) {
+          replace_ = replace_.copy();
+        }
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return replace_;
+      }
+      public int getReplaceCount() {
+        return internalGetReplace().getMap().size();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      @java.lang.Override
+      public boolean containsReplace(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        return internalGetReplace().getMap().containsKey(key);
+      }
+      /**
+       * Use {@link #getReplaceMap()} instead.
+       */
+      @java.lang.Override
+      @java.lang.Deprecated
+      public java.util.Map<java.lang.String, java.lang.String> getReplace() {
+        return getReplaceMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      @java.lang.Override
+      public java.util.Map<java.lang.String, java.lang.String> getReplaceMap() {
+        return internalGetReplace().getMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      @java.lang.Override
+      public /* nullable */
+java.lang.String getReplaceOrDefault(
+          java.lang.String key,
+          /* nullable */
+java.lang.String defaultValue) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        java.util.Map<java.lang.String, java.lang.String> map =
+            internalGetReplace().getMap();
+        return map.containsKey(key) ? map.get(key) : defaultValue;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      @java.lang.Override
+      public java.lang.String getReplaceOrThrow(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        java.util.Map<java.lang.String, java.lang.String> map =
+            internalGetReplace().getMap();
+        if (!map.containsKey(key)) {
+          throw new java.lang.IllegalArgumentException();
+        }
+        return map.get(key);
+      }
+      public Builder clearReplace() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        internalGetMutableReplace().getMutableMap()
+            .clear();
+        return this;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      public Builder removeReplace(
+          java.lang.String key) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        internalGetMutableReplace().getMutableMap()
+            .remove(key);
+        return this;
+      }
+      /**
+       * Use alternate mutation accessors instead.
+       */
+      @java.lang.Deprecated
+      public java.util.Map<java.lang.String, java.lang.String>
+          getMutableReplace() {
+        bitField0_ |= 0x00000008;
+        return internalGetMutableReplace().getMutableMap();
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      public Builder putReplace(
+          java.lang.String key,
+          java.lang.String value) {
+        if (key == null) { throw new NullPointerException("map key"); }
+        if (value == null) { throw new NullPointerException("map value"); }
+        internalGetMutableReplace().getMutableMap()
+            .put(key, value);
+        bitField0_ |= 0x00000008;
+        return this;
+      }
+      /**
+       * <code>map&lt;string, string&gt; Replace = 4;</code>
+       */
+      public Builder putAllReplace(
+          java.util.Map<java.lang.String, java.lang.String> values) {
+        internalGetMutableReplace().getMutableMap()
+            .putAll(values);
+        bitField0_ |= 0x00000008;
         return this;
       }
       @java.lang.Override
@@ -36414,6 +37456,11 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_services_TestCaseReq_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_services_TestCaseReq_ReplaceEntry_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_services_TestCaseReq_ReplaceEntry_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
     internal_static_services_TestReq_descriptor;
   private static final 
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
@@ -36594,6 +37641,11 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_services_PutMockReq_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_services_PutMockReq_ReplaceEntry_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_services_PutMockReq_ReplaceEntry_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
     internal_static_services_PutMockResp_descriptor;
   private static final 
     com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
@@ -36632,119 +37684,125 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       "(\0132\036.services.Dependency.MetaEntry\022!\n\004Da" +
       "ta\030\004 \003(\0132\023.services.DataBytes\032+\n\tMetaEnt" +
       "ry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\030\n\tDa" +
-      "taBytes\022\013\n\003Bin\030\001 \001(\014\"\316\002\n\013TestCaseReq\022\020\n\010" +
+      "taBytes\022\013\n\003Bin\030\001 \001(\014\"\303\003\n\013TestCaseReq\022\020\n\010" +
       "Captured\030\001 \001(\003\022\r\n\005AppID\030\002 \001(\t\022\013\n\003URI\030\003 \001" +
       "(\t\022\"\n\007HttpReq\030\004 \001(\0132\021.services.HttpReq\022$" +
       "\n\010HttpResp\030\005 \001(\0132\022.services.HttpResp\022(\n\n" +
       "Dependency\030\006 \003(\0132\024.services.Dependency\022\024" +
       "\n\014TestCasePath\030\007 \001(\t\022\020\n\010MockPath\030\010 \001(\t\022\035" +
-      "\n\005Mocks\030\t \003(\0132\016.services.Mock\022\014\n\004Type\030\n " +
-      "\001(\t\022\"\n\007GrpcReq\030\013 \001(\0132\021.services.GrpcReq\022" +
-      "$\n\010GrpcResp\030\014 \001(\0132\022.services.GrpcResp\"\261\001" +
-      "\n\007TestReq\022\n\n\002ID\030\001 \001(\t\022\r\n\005AppID\030\002 \001(\t\022\r\n\005" +
-      "RunID\030\003 \001(\t\022 \n\004Resp\030\004 \001(\0132\022.services.Htt" +
-      "pResp\022\024\n\014TestCasePath\030\005 \001(\t\022\020\n\010MockPath\030" +
-      "\006 \001(\t\022\014\n\004Type\030\007 \001(\t\022$\n\010GrpcResp\030\010 \001(\0132\022." +
-      "services.GrpcResp\"\367\003\n\010TestCase\022\n\n\002id\030\001 \001" +
-      "(\t\022\017\n\007created\030\002 \001(\003\022\017\n\007updated\030\003 \001(\003\022\020\n\010" +
-      "captured\030\004 \001(\003\022\013\n\003CID\030\005 \001(\t\022\r\n\005appID\030\006 \001" +
-      "(\t\022\013\n\003URI\030\007 \001(\t\022\"\n\007HttpReq\030\010 \001(\0132\021.servi" +
-      "ces.HttpReq\022$\n\010HttpResp\030\t \001(\0132\022.services" +
-      ".HttpResp\022\"\n\004Deps\030\n \003(\0132\024.services.Depen" +
-      "dency\0220\n\007allKeys\030\013 \003(\0132\037.services.TestCa" +
-      "se.AllKeysEntry\0220\n\007anchors\030\014 \003(\0132\037.servi" +
-      "ces.TestCase.AnchorsEntry\022\r\n\005noise\030\r \003(\t" +
-      "\022\035\n\005Mocks\030\016 \003(\0132\016.services.Mock\032@\n\014AllKe" +
-      "ysEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.se" +
-      "rvices.StrArr:\0028\001\032@\n\014AnchorsEntry\022\013\n\003key" +
-      "\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.StrArr:" +
-      "\0028\001\"\030\n\006Method\022\016\n\006Method\030\001 \001(\t\"\373\002\n\007HttpRe" +
-      "q\022\016\n\006Method\030\001 \001(\t\022\022\n\nProtoMajor\030\002 \001(\003\022\022\n" +
-      "\nProtoMinor\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0223\n\tURLPar" +
-      "ams\030\005 \003(\0132 .services.HttpReq.URLParamsEn" +
-      "try\022-\n\006Header\030\006 \003(\0132\035.services.HttpReq.H" +
-      "eaderEntry\022\020\n\004Body\030\007 \001(\tB\002\030\001\022\020\n\010BodyData" +
-      "\030\n \001(\014\022\016\n\006Binary\030\010 \001(\t\022 \n\004Form\030\t \003(\0132\022.s" +
-      "ervices.FormData\0320\n\016URLParamsEntry\022\013\n\003ke" +
-      "y\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032?\n\013HeaderEntr" +
-      "y\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services" +
-      ".StrArr:\0028\001\"6\n\010FormData\022\013\n\003Key\030\001 \001(\t\022\016\n\006" +
-      "Values\030\002 \003(\t\022\r\n\005Paths\030\003 \003(\t\"\027\n\006StrArr\022\r\n" +
-      "\005Value\030\001 \003(\t\"\202\002\n\010HttpResp\022\022\n\nStatusCode\030" +
-      "\001 \001(\003\022.\n\006Header\030\002 \003(\0132\036.services.HttpRes" +
-      "p.HeaderEntry\022\020\n\004Body\030\003 \001(\tB\002\030\001\022\020\n\010BodyD" +
-      "ata\030\010 \001(\014\022\025\n\rStatusMessage\030\004 \001(\t\022\022\n\nProt" +
-      "oMajor\030\005 \001(\003\022\022\n\nProtoMinor\030\006 \001(\003\022\016\n\006Bina" +
-      "ry\030\007 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005" +
-      "value\030\002 \001(\0132\020.services.StrArr:\0028\001\"(\n\nend" +
-      "Request\022\016\n\006status\030\001 \001(\t\022\n\n\002id\030\002 \001(\t\"\036\n\013e" +
-      "ndResponse\022\017\n\007message\030\001 \001(\t\"R\n\014startRequ" +
-      "est\022\r\n\005total\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\022\024\n\014TestC" +
-      "asePath\030\003 \001(\t\022\020\n\010MockPath\030\004 \001(\t\"\033\n\rstart" +
-      "Response\022\n\n\002id\030\001 \001(\t\"\'\n\014getTCRequest\022\n\n\002" +
-      "id\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\"c\n\rgetTCSRequest\022\013" +
-      "\n\003app\030\001 \001(\t\022\016\n\006offset\030\002 \001(\t\022\r\n\005limit\030\003 \001" +
-      "(\t\022\024\n\014TestCasePath\030\004 \001(\t\022\020\n\010MockPath\030\005 \001" +
-      "(\t\">\n\016getTCSResponse\022\037\n\003tcs\030\001 \003(\0132\022.serv" +
-      "ices.TestCase\022\013\n\003eof\030\002 \001(\010\"r\n\016postTCResp" +
-      "onse\0222\n\005tcsId\030\001 \003(\0132#.services.postTCRes" +
-      "ponse.TcsIdEntry\032,\n\nTcsIdEntry\022\013\n\003key\030\001 " +
-      "\001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\"\n\017deNoiseRespons" +
-      "e\022\017\n\007message\030\001 \001(\t\"k\n\014testResponse\022.\n\004pa" +
-      "ss\030\001 \003(\0132 .services.testResponse.PassEnt" +
-      "ry\032+\n\tPassEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 " +
-      "\001(\010:\0028\001\"\'\n\007GrpcReq\022\014\n\004Body\030\001 \001(\t\022\016\n\006Meth" +
-      "od\030\002 \001(\t\"%\n\010GrpcResp\022\014\n\004Body\030\001 \001(\t\022\013\n\003Er" +
-      "r\030\002 \001(\t\"\203\007\n\004Mock\022\017\n\007Version\030\001 \001(\t\022\014\n\004Nam" +
-      "e\030\002 \001(\t\022\014\n\004Kind\030\003 \001(\t\022\'\n\004Spec\030\004 \001(\0132\031.se" +
-      "rvices.Mock.SpecSchema\032\321\001\n\007Request\022\016\n\006Me" +
-      "thod\030\001 \001(\t\022\022\n\nProtoMajor\030\002 \001(\003\022\022\n\nProtoM" +
-      "inor\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0222\n\006Header\030\005 \003(\0132" +
-      "\".services.Mock.Request.HeaderEntry\022\014\n\004B" +
-      "ody\030\006 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n" +
-      "\005value\030\002 \001(\0132\020.services.StrArr:\0028\001\032$\n\006Ob" +
-      "ject\022\014\n\004Type\030\001 \001(\t\022\014\n\004Data\030\002 \001(\014\032\252\004\n\nSpe" +
-      "cSchema\0229\n\010Metadata\030\001 \003(\0132\'.services.Moc" +
-      "k.SpecSchema.MetadataEntry\022&\n\007Objects\030\002 " +
-      "\003(\0132\025.services.Mock.Object\022\036\n\003Req\030\003 \001(\0132" +
-      "\021.services.HttpReq\022\037\n\003Res\030\004 \001(\0132\022.servic" +
-      "es.HttpResp\022\r\n\005Mocks\030\005 \003(\t\022=\n\nAssertions" +
-      "\030\006 \003(\0132).services.Mock.SpecSchema.Assert" +
-      "ionsEntry\022\017\n\007Created\030\007 \001(\003\022\014\n\004Type\030\010 \001(\t" +
-      "\022#\n\005Table\030\t \001(\0132\017.services.TableH\000\210\001\001\022\013\n" +
-      "\003Int\030\n \001(\003\022\013\n\003Err\030\013 \003(\t\022&\n\013GrpcRequest\030\014" +
-      " \001(\0132\021.services.GrpcReq\022$\n\010GrpcResp\030\r \001(" +
-      "\0132\022.services.GrpcResp\032/\n\rMetadataEntry\022\013" +
-      "\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032C\n\017Assert" +
-      "ionsEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020." +
-      "services.StrArr:\0028\001B\010\n\006_Table\"5\n\005Table\022\036" +
-      "\n\004Cols\030\001 \003(\0132\020.services.SqlCol\022\014\n\004Rows\030\002" +
-      " \003(\t\"F\n\006SqlCol\022\014\n\004Name\030\001 \001(\t\022\014\n\004Type\030\002 \001" +
-      "(\t\022\021\n\tPrecision\030\003 \001(\003\022\r\n\005Scale\030\004 \001(\003\"8\n\n" +
-      "PutMockReq\022\034\n\004Mock\030\001 \001(\0132\016.services.Mock" +
-      "\022\014\n\004Path\030\002 \001(\t\"\037\n\013PutMockResp\022\020\n\010Inserte" +
-      "d\030\001 \001(\003\"(\n\nGetMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004N" +
-      "ame\030\002 \001(\t\",\n\013getMockResp\022\035\n\005Mocks\030\001 \003(\0132" +
-      "\016.services.Mock\"K\n\014StartMockReq\022\014\n\004Path\030" +
-      "\001 \001(\t\022\014\n\004Mode\030\002 \001(\t\022\021\n\tOverWrite\030\003 \001(\010\022\014" +
-      "\n\004Name\030\004 \001(\t\"\037\n\rStartMockResp\022\016\n\006Exists\030" +
-      "\001 \001(\0102\314\004\n\021RegressionService\0222\n\003End\022\024.ser" +
-      "vices.endRequest\032\025.services.endResponse\022" +
-      "8\n\005Start\022\026.services.startRequest\032\027.servi" +
-      "ces.startResponse\0223\n\005GetTC\022\026.services.ge" +
-      "tTCRequest\032\022.services.TestCase\022;\n\006GetTCS" +
-      "\022\027.services.getTCSRequest\032\030.services.get" +
-      "TCSResponse\0229\n\006PostTC\022\025.services.TestCas" +
-      "eReq\032\030.services.postTCResponse\0227\n\007DeNois" +
-      "e\022\021.services.TestReq\032\031.services.deNoiseR" +
-      "esponse\0221\n\004Test\022\021.services.TestReq\032\026.ser" +
-      "vices.testResponse\0226\n\007PutMock\022\024.services" +
-      ".PutMockReq\032\025.services.PutMockResp\0227\n\010Ge" +
-      "tMocks\022\024.services.GetMockReq\032\025.services." +
-      "getMockResp\022?\n\014StartMocking\022\026.services.S" +
-      "tartMockReq\032\027.services.StartMockRespB;\n\024" +
-      "io.keploy.grpc.stubsZ#go.keploy.io/serve" +
-      "r/grpc/regressionb\006proto3"
+      "\n\005Mocks\030\t \003(\0132\016.services.Mock\022\016\n\006Remove\030" +
+      "\n \003(\t\0223\n\007Replace\030\013 \003(\0132\".services.TestCa" +
+      "seReq.ReplaceEntry\022\014\n\004Type\030\014 \001(\t\022\"\n\007Grpc" +
+      "Req\030\r \001(\0132\021.services.GrpcReq\022$\n\010GrpcResp" +
+      "\030\016 \001(\0132\022.services.GrpcResp\032.\n\014ReplaceEnt" +
+      "ry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\261\001\n\007T" +
+      "estReq\022\n\n\002ID\030\001 \001(\t\022\r\n\005AppID\030\002 \001(\t\022\r\n\005Run" +
+      "ID\030\003 \001(\t\022 \n\004Resp\030\004 \001(\0132\022.services.HttpRe" +
+      "sp\022\024\n\014TestCasePath\030\005 \001(\t\022\020\n\010MockPath\030\006 \001" +
+      "(\t\022\014\n\004Type\030\007 \001(\t\022$\n\010GrpcResp\030\010 \001(\0132\022.ser" +
+      "vices.GrpcResp\"\367\003\n\010TestCase\022\n\n\002id\030\001 \001(\t\022" +
+      "\017\n\007created\030\002 \001(\003\022\017\n\007updated\030\003 \001(\003\022\020\n\010cap" +
+      "tured\030\004 \001(\003\022\013\n\003CID\030\005 \001(\t\022\r\n\005appID\030\006 \001(\t\022" +
+      "\013\n\003URI\030\007 \001(\t\022\"\n\007HttpReq\030\010 \001(\0132\021.services" +
+      ".HttpReq\022$\n\010HttpResp\030\t \001(\0132\022.services.Ht" +
+      "tpResp\022\"\n\004Deps\030\n \003(\0132\024.services.Dependen" +
+      "cy\0220\n\007allKeys\030\013 \003(\0132\037.services.TestCase." +
+      "AllKeysEntry\0220\n\007anchors\030\014 \003(\0132\037.services" +
+      ".TestCase.AnchorsEntry\022\r\n\005noise\030\r \003(\t\022\035\n" +
+      "\005Mocks\030\016 \003(\0132\016.services.Mock\032@\n\014AllKeysE" +
+      "ntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.servi" +
+      "ces.StrArr:\0028\001\032@\n\014AnchorsEntry\022\013\n\003key\030\001 " +
+      "\001(\t\022\037\n\005value\030\002 \001(\0132\020.services.StrArr:\0028\001" +
+      "\"\030\n\006Method\022\016\n\006Method\030\001 \001(\t\"\373\002\n\007HttpReq\022\016" +
+      "\n\006Method\030\001 \001(\t\022\022\n\nProtoMajor\030\002 \001(\003\022\022\n\nPr" +
+      "otoMinor\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0223\n\tURLParams" +
+      "\030\005 \003(\0132 .services.HttpReq.URLParamsEntry" +
+      "\022-\n\006Header\030\006 \003(\0132\035.services.HttpReq.Head" +
+      "erEntry\022\020\n\004Body\030\007 \001(\tB\002\030\001\022\020\n\010BodyData\030\n " +
+      "\001(\014\022\016\n\006Binary\030\010 \001(\t\022 \n\004Form\030\t \003(\0132\022.serv" +
+      "ices.FormData\0320\n\016URLParamsEntry\022\013\n\003key\030\001" +
+      " \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032?\n\013HeaderEntry\022\013" +
+      "\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.services.St" +
+      "rArr:\0028\001\"6\n\010FormData\022\013\n\003Key\030\001 \001(\t\022\016\n\006Val" +
+      "ues\030\002 \003(\t\022\r\n\005Paths\030\003 \003(\t\"\027\n\006StrArr\022\r\n\005Va" +
+      "lue\030\001 \003(\t\"\202\002\n\010HttpResp\022\022\n\nStatusCode\030\001 \001" +
+      "(\003\022.\n\006Header\030\002 \003(\0132\036.services.HttpResp.H" +
+      "eaderEntry\022\020\n\004Body\030\003 \001(\tB\002\030\001\022\020\n\010BodyData" +
+      "\030\010 \001(\014\022\025\n\rStatusMessage\030\004 \001(\t\022\022\n\nProtoMa" +
+      "jor\030\005 \001(\003\022\022\n\nProtoMinor\030\006 \001(\003\022\016\n\006Binary\030" +
+      "\007 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005val" +
+      "ue\030\002 \001(\0132\020.services.StrArr:\0028\001\"(\n\nendReq" +
+      "uest\022\016\n\006status\030\001 \001(\t\022\n\n\002id\030\002 \001(\t\"\036\n\013endR" +
+      "esponse\022\017\n\007message\030\001 \001(\t\"R\n\014startRequest" +
+      "\022\r\n\005total\030\001 \001(\t\022\013\n\003app\030\002 \001(\t\022\024\n\014TestCase" +
+      "Path\030\003 \001(\t\022\020\n\010MockPath\030\004 \001(\t\"\033\n\rstartRes" +
+      "ponse\022\n\n\002id\030\001 \001(\t\"\'\n\014getTCRequest\022\n\n\002id\030" +
+      "\001 \001(\t\022\013\n\003app\030\002 \001(\t\"c\n\rgetTCSRequest\022\013\n\003a" +
+      "pp\030\001 \001(\t\022\016\n\006offset\030\002 \001(\t\022\r\n\005limit\030\003 \001(\t\022" +
+      "\024\n\014TestCasePath\030\004 \001(\t\022\020\n\010MockPath\030\005 \001(\t\"" +
+      ">\n\016getTCSResponse\022\037\n\003tcs\030\001 \003(\0132\022.service" +
+      "s.TestCase\022\013\n\003eof\030\002 \001(\010\"r\n\016postTCRespons" +
+      "e\0222\n\005tcsId\030\001 \003(\0132#.services.postTCRespon" +
+      "se.TcsIdEntry\032,\n\nTcsIdEntry\022\013\n\003key\030\001 \001(\t" +
+      "\022\r\n\005value\030\002 \001(\t:\0028\001\"\"\n\017deNoiseResponse\022\017" +
+      "\n\007message\030\001 \001(\t\"k\n\014testResponse\022.\n\004pass\030" +
+      "\001 \003(\0132 .services.testResponse.PassEntry\032" +
+      "+\n\tPassEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\010" +
+      ":\0028\001\"\'\n\007GrpcReq\022\014\n\004Body\030\001 \001(\t\022\016\n\006Method\030" +
+      "\002 \001(\t\"%\n\010GrpcResp\022\014\n\004Body\030\001 \001(\t\022\013\n\003Err\030\002" +
+      " \001(\t\"\203\007\n\004Mock\022\017\n\007Version\030\001 \001(\t\022\014\n\004Name\030\002" +
+      " \001(\t\022\014\n\004Kind\030\003 \001(\t\022\'\n\004Spec\030\004 \001(\0132\031.servi" +
+      "ces.Mock.SpecSchema\032\321\001\n\007Request\022\016\n\006Metho" +
+      "d\030\001 \001(\t\022\022\n\nProtoMajor\030\002 \001(\003\022\022\n\nProtoMino" +
+      "r\030\003 \001(\003\022\013\n\003URL\030\004 \001(\t\0222\n\006Header\030\005 \003(\0132\".s" +
+      "ervices.Mock.Request.HeaderEntry\022\014\n\004Body" +
+      "\030\006 \001(\t\032?\n\013HeaderEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005va" +
+      "lue\030\002 \001(\0132\020.services.StrArr:\0028\001\032$\n\006Objec" +
+      "t\022\014\n\004Type\030\001 \001(\t\022\014\n\004Data\030\002 \001(\014\032\252\004\n\nSpecSc" +
+      "hema\0229\n\010Metadata\030\001 \003(\0132\'.services.Mock.S" +
+      "pecSchema.MetadataEntry\022&\n\007Objects\030\002 \003(\013" +
+      "2\025.services.Mock.Object\022\036\n\003Req\030\003 \001(\0132\021.s" +
+      "ervices.HttpReq\022\037\n\003Res\030\004 \001(\0132\022.services." +
+      "HttpResp\022\r\n\005Mocks\030\005 \003(\t\022=\n\nAssertions\030\006 " +
+      "\003(\0132).services.Mock.SpecSchema.Assertion" +
+      "sEntry\022\017\n\007Created\030\007 \001(\003\022\014\n\004Type\030\010 \001(\t\022#\n" +
+      "\005Table\030\t \001(\0132\017.services.TableH\000\210\001\001\022\013\n\003In" +
+      "t\030\n \001(\003\022\013\n\003Err\030\013 \003(\t\022&\n\013GrpcRequest\030\014 \001(" +
+      "\0132\021.services.GrpcReq\022$\n\010GrpcResp\030\r \001(\0132\022" +
+      ".services.GrpcResp\032/\n\rMetadataEntry\022\013\n\003k" +
+      "ey\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\032C\n\017Assertion" +
+      "sEntry\022\013\n\003key\030\001 \001(\t\022\037\n\005value\030\002 \001(\0132\020.ser" +
+      "vices.StrArr:\0028\001B\010\n\006_Table\"5\n\005Table\022\036\n\004C" +
+      "ols\030\001 \003(\0132\020.services.SqlCol\022\014\n\004Rows\030\002 \003(" +
+      "\t\"F\n\006SqlCol\022\014\n\004Name\030\001 \001(\t\022\014\n\004Type\030\002 \001(\t\022" +
+      "\021\n\tPrecision\030\003 \001(\003\022\r\n\005Scale\030\004 \001(\003\"\254\001\n\nPu" +
+      "tMockReq\022\034\n\004Mock\030\001 \001(\0132\016.services.Mock\022\014" +
+      "\n\004Path\030\002 \001(\t\022\016\n\006Remove\030\003 \003(\t\0222\n\007Replace\030" +
+      "\004 \003(\0132!.services.PutMockReq.ReplaceEntry" +
+      "\032.\n\014ReplaceEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002" +
+      " \001(\t:\0028\001\"\037\n\013PutMockResp\022\020\n\010Inserted\030\001 \001(" +
+      "\003\"(\n\nGetMockReq\022\014\n\004Path\030\001 \001(\t\022\014\n\004Name\030\002 " +
+      "\001(\t\",\n\013getMockResp\022\035\n\005Mocks\030\001 \003(\0132\016.serv" +
+      "ices.Mock\"K\n\014StartMockReq\022\014\n\004Path\030\001 \001(\t\022" +
+      "\014\n\004Mode\030\002 \001(\t\022\021\n\tOverWrite\030\003 \001(\010\022\014\n\004Name" +
+      "\030\004 \001(\t\"\037\n\rStartMockResp\022\016\n\006Exists\030\001 \001(\0102" +
+      "\314\004\n\021RegressionService\0222\n\003End\022\024.services." +
+      "endRequest\032\025.services.endResponse\0228\n\005Sta" +
+      "rt\022\026.services.startRequest\032\027.services.st" +
+      "artResponse\0223\n\005GetTC\022\026.services.getTCReq" +
+      "uest\032\022.services.TestCase\022;\n\006GetTCS\022\027.ser" +
+      "vices.getTCSRequest\032\030.services.getTCSRes" +
+      "ponse\0229\n\006PostTC\022\025.services.TestCaseReq\032\030" +
+      ".services.postTCResponse\0227\n\007DeNoise\022\021.se" +
+      "rvices.TestReq\032\031.services.deNoiseRespons" +
+      "e\0221\n\004Test\022\021.services.TestReq\032\026.services." +
+      "testResponse\0226\n\007PutMock\022\024.services.PutMo" +
+      "ckReq\032\025.services.PutMockResp\0227\n\010GetMocks" +
+      "\022\024.services.GetMockReq\032\025.services.getMoc" +
+      "kResp\022?\n\014StartMocking\022\026.services.StartMo" +
+      "ckReq\032\027.services.StartMockRespB;\n\024io.kep" +
+      "loy.grpc.stubsZ#go.keploy.io/server/grpc" +
+      "/regressionb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -36773,7 +37831,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_TestCaseReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_TestCaseReq_descriptor,
-        new java.lang.String[] { "Captured", "AppID", "URI", "HttpReq", "HttpResp", "Dependency", "TestCasePath", "MockPath", "Mocks", "Type", "GrpcReq", "GrpcResp", });
+        new java.lang.String[] { "Captured", "AppID", "URI", "HttpReq", "HttpResp", "Dependency", "TestCasePath", "MockPath", "Mocks", "Remove", "Replace", "Type", "GrpcReq", "GrpcResp", });
+    internal_static_services_TestCaseReq_ReplaceEntry_descriptor =
+      internal_static_services_TestCaseReq_descriptor.getNestedTypes().get(0);
+    internal_static_services_TestCaseReq_ReplaceEntry_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_services_TestCaseReq_ReplaceEntry_descriptor,
+        new java.lang.String[] { "Key", "Value", });
     internal_static_services_TestReq_descriptor =
       getDescriptor().getMessageTypes().get(3);
     internal_static_services_TestReq_fieldAccessorTable = new
@@ -36989,7 +38053,13 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     internal_static_services_PutMockReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_PutMockReq_descriptor,
-        new java.lang.String[] { "Mock", "Path", });
+        new java.lang.String[] { "Mock", "Path", "Remove", "Replace", });
+    internal_static_services_PutMockReq_ReplaceEntry_descriptor =
+      internal_static_services_PutMockReq_descriptor.getNestedTypes().get(0);
+    internal_static_services_PutMockReq_ReplaceEntry_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_services_PutMockReq_ReplaceEntry_descriptor,
+        new java.lang.String[] { "Key", "Value", });
     internal_static_services_PutMockResp_descriptor =
       getDescriptor().getMessageTypes().get(26);
     internal_static_services_PutMockResp_fieldAccessorTable = new

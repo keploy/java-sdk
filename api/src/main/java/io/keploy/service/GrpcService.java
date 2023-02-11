@@ -183,6 +183,7 @@ public class GrpcService {
         testReqBuilder.setAppID(k.getCfg().getApp().getName());
         testReqBuilder.setTestCasePath(k.getCfg().getApp().getTestPath());
         testReqBuilder.setMockPath(k.getCfg().getApp().getMockPath());
+        testReqBuilder.setType(HTTP_EXPORT.value);
         Service.TestReq bin2 = testReqBuilder.build();
 
         // send de-noise request to server

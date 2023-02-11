@@ -18,7 +18,7 @@ public class Kcontext {
 
     private io.keploy.regression.Mode.ModeType Mode = io.keploy.regression.Mode.ModeType.MODE_RECORD;
 
-    private Boolean FileExport;
+    private Boolean FileExport = false;
 
     private String TestId;
 
