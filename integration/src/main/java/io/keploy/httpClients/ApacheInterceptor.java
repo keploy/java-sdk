@@ -262,7 +262,6 @@ public class ApacheInterceptor {
 
 
                 // for mock library
-                new GrpcService(); // to initialize the grpcClient
                 if (GrpcService.blockingStub != null && kctx.getFileExport() && !Config.MockId.containsKey(kctx.getTestId())) {
                     final boolean recorded = MockLib.PutMock(Config.MockPath, httpMock);
                     String CAPTURE = "\uD83D\uDFE0";
