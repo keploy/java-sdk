@@ -12,6 +12,8 @@ import java.util.Properties;
 import java.util.concurrent.Executor;
 
 import static io.keploy.ksql.KDriver.*;
+import static io.keploy.ksql.KResultSet.*;
+import static io.keploy.utils.ProcessSQL.convertMap;
 
 
 public class KConnection implements Connection {
@@ -81,15 +83,23 @@ public class KConnection implements Connection {
             return new KPreparedStatement(resultSet);
         }
         mode = kctx.getMode();
+        MyQuery = sql;
         logger.debug("KPrepared statement after setting context with query" + sql);
         PreparedStatement ps = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
-//                ps = Mockito.mock(PreparedStatement.class);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 ps = wrappedCon.prepareStatement(sql);
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -113,6 +123,15 @@ public class KConnection implements Connection {
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = wrappedCon.prepareCall(sql);
@@ -230,7 +249,13 @@ public class KConnection implements Connection {
 
     @Override
     public void close() throws SQLException {
-
+        Kcontext kctx = Context.getCtx();
+        if (kctx == null) {
+            if (mode == recordMode) {
+                wrappedCon.isClosed();
+            }
+            return;
+        }
         wrappedCon.close();
 
     }
@@ -493,18 +518,27 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+
         mode = kctx.getMode();
+        MyQuery = sql;
         PreparedStatement rs = new KPreparedStatement();
-        mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
-//                rs = testconn.prepareStatement(sql, resultSetType, resultSetConcurrency);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
-                MyQuery = sql;
+
                 rs = wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency);
                 break;
             default:
@@ -635,11 +669,13 @@ public class KConnection implements Connection {
 
     @Override
     public Savepoint setSavepoint() throws SQLException {
+        logger.warn("{} Savepoint setSavepoint() throws SQLException {}", msg1, msg2);
         return wrappedCon.setSavepoint();
     }
 
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
+        logger.warn("{} Savepoint setSavepoint(String name) throws SQLException {}", msg1, msg2);
         return wrappedCon.setSavepoint(name);
     }
 
@@ -668,6 +704,7 @@ public class KConnection implements Connection {
 
     @Override
     public void releaseSavepoint(Savepoint savepoint) throws SQLException {
+        logger.warn("{} void releaseSavepoint(Savepoint savepoint) throws SQLException {}", msg1, msg2);
         wrappedCon.releaseSavepoint(savepoint);
     }
 
@@ -699,22 +736,30 @@ public class KConnection implements Connection {
 
     @Override
     public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
-//        System.out.println("INSIDE PREPARED STATEMENT of connection !! " + sql);
         Kcontext kctx = Context.getCtx();
         if (kctx == null) {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+        MyQuery = sql;
         mode = kctx.getMode();
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
-                MyQuery = sql;
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability));
                 break;
             default:
@@ -756,20 +801,26 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, autoGeneratedKeys);
             }
-            PreparedStatement resultSet = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
-            return new KPreparedStatement(resultSet);
+            return new KPreparedStatement();
         }
-        PreparedStatement rs = new KPreparedStatement();
+        PreparedStatement rs = null;
         logger.debug("KPrepared statement after setting context with query" + sql + "with autoGeneratedKeys : " + autoGeneratedKeys);
         mode = kctx.getMode();
         switch (mode) {
             case MODE_TEST:
                 // don't run
-                rs = new KPreparedStatement();//Mockito.mock(PreparedStatement.class);
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = wrappedCon.prepareStatement(sql, autoGeneratedKeys);
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -784,18 +835,28 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, columnIndexes);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
+        MyQuery = sql;
+
         mode = kctx.getMode();
 
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    } else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 // don't run
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnIndexes));
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -811,17 +872,26 @@ public class KConnection implements Connection {
             if (mode == recordMode) {
                 return wrappedCon.prepareStatement(sql, columnNames);
             }
+            return new KPreparedStatement();
         }
-        assert kctx != null;
         mode = kctx.getMode();
+        MyQuery = sql;
         PreparedStatement rs = new KPreparedStatement();
         switch (mode) {
             case MODE_TEST:
                 // don't run
+                meta.clear();
+                java.util.List<io.keploy.grpc.stubs.Service.Mock> mock = kctx.getMock();
+                if (mock.size() > 0) {
+                    if (mock.get(0).getKind().equals("SQL") && mock.get(0).getSpec().getMetadataMap().size() > 0) {
+                        meta = convertMap(mock.get(0).getSpec().getMetadataMap());
+                    }else {
+                        logger.debug("Query {} has no metaData", MyQuery);
+                    }
+                }
                 break;
             case MODE_RECORD:
                 rs = new KPreparedStatement(wrappedCon.prepareStatement(sql, columnNames));
-                MyQuery = sql;
                 break;
             default:
                 System.out.println("integrations: Not in a valid sdk mode");
@@ -832,21 +902,25 @@ public class KConnection implements Connection {
 
     @Override
     public Clob createClob() throws SQLException {
+        logger.warn("{} Clob createClob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createClob();
     }
 
     @Override
     public Blob createBlob() throws SQLException {
+        logger.warn("{} Blob createBlob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createBlob();
     }
 
     @Override
     public NClob createNClob() throws SQLException {
+        logger.warn("{} NClob createNClob() throws SQLException {}", msg1, msg2);
         return wrappedCon.createNClob();
     }
 
     @Override
     public SQLXML createSQLXML() throws SQLException {
+        logger.warn("{} SQLXML createSQLXML() throws SQLException {}", msg1, msg2);
         return wrappedCon.createSQLXML();
     }
 
@@ -877,66 +951,85 @@ public class KConnection implements Connection {
 
     @Override
     public void setClientInfo(String name, String value) throws SQLClientInfoException {
+        logger.warn("{} void setClientInfo(String name, String value) throws SQLException {}", msg1, msg2);
         wrappedCon.setClientInfo(name, value);
     }
 
     @Override
     public void setClientInfo(Properties properties) throws SQLClientInfoException {
+        logger.warn("{} void setClientInfo(Properties properties) throws SQLException {}", msg1, msg2);
         wrappedCon.setClientInfo(properties);
     }
 
     @Override
     public String getClientInfo(String name) throws SQLException {
+        logger.warn("{} String getClientInfo(String name) throws SQLException {}", msg1, msg2);
         return wrappedCon.getClientInfo(name);
     }
 
     @Override
     public Properties getClientInfo() throws SQLException {
+        logger.warn("{} Properties getClientInfo() throws SQLException {}", msg1, msg2);
         return wrappedCon.getClientInfo();
     }
 
     @Override
     public Array createArrayOf(String typeName, Object[] elements) throws SQLException {
+        logger.warn("{} Array createArrayOf(String typeName, Object[] elements) throws SQLException {}", msg1, msg2);
         return wrappedCon.createArrayOf(typeName, elements);
     }
 
     @Override
     public Struct createStruct(String typeName, Object[] attributes) throws SQLException {
+        logger.warn("{} Struct createStruct(String typeName, Object[] attributes) throws SQLException {}", msg1, msg2);
         return wrappedCon.createStruct(typeName, attributes);
     }
 
     @Override
     public void setSchema(String schema) throws SQLException {
+        logger.warn("{} void setSchema(String schema) throws SQLException {}", msg1, msg2);
         wrappedCon.setSchema(schema);
     }
 
     @Override
     public String getSchema() throws SQLException {
+        if (mode == testMode) {
+            return "KEPLOY_SCHEMA";
+        }
         return wrappedCon.getSchema();
     }
 
     @Override
     public void abort(Executor executor) throws SQLException {
+        logger.warn("{} void abort(Executor executor) throws SQLException {}", msg1, msg2);
         wrappedCon.abort(executor);
     }
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
+        if (mode == testMode) {
+            return;
+        }
         wrappedCon.setNetworkTimeout(executor, milliseconds);
     }
 
     @Override
     public int getNetworkTimeout() throws SQLException {
+        if (mode == testMode) {
+            return 0;
+        }
         return wrappedCon.getNetworkTimeout();
     }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
+        logger.warn("{} <T> T unwrap(Class<T> iface) throws SQLException {}", msg1, msg2);
         return wrappedCon.unwrap(iface);
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        logger.warn("{} boolean isWrapperFor(Class<?> iface) throws SQLException {}", msg1, msg2);
         return wrappedCon.isWrapperFor(iface);
     }
 }

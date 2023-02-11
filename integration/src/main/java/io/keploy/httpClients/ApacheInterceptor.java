@@ -1,7 +1,6 @@
 package io.keploy.httpClients;
 
 import com.google.protobuf.ByteString;
-import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mock;
@@ -51,7 +50,7 @@ public class ApacheInterceptor {
 
     private static final String CROSS = new String(Character.toChars(0x274C));
 
-    private static Keploy k = KeployInstance.getInstance().getKeploy();
+    private static final Keploy k = KeployInstance.getInstance().getKeploy();
 
 
     public static CloseableHttpResponse doProceed(@Origin Method method, @SuperCall Callable<CloseableHttpResponse> callable, @AllArguments Object[] args) {
@@ -143,8 +142,10 @@ public class ApacheInterceptor {
                         if (isBinaryFile(contentType)) {
                             byte[] fileData = getFileData(filePath);
                             response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, fileData, contentTypeEntity);
+                            setResponseHeaders(response, headerMap);
                         } else {
                             response = new ApacheCustomHttpResponse(new ProtocolVersion("HTTP", (int) protoMajor, (int) protoMinor), (int) statusCode, statusMessage, respbody);
+                            setResponseHeaders(response, headerMap);
                         }
                         mocks.remove(0);
                     }
@@ -176,14 +177,14 @@ public class ApacheInterceptor {
 
                 String reqBody = "";
                 try {
-                    String contentType = request.getFirstHeader("Content-Type").getValue();
-
+                    Header c_t = request.getFirstHeader("Content-Type");
+                    String contentType = "";
+                    if (c_t != null) {
+                        contentType = c_t.getValue();
+                    }
                     if (!isBinaryFile(contentType)) {
                         reqBody = getRequestBody(request);
                     }
-//                        if (!contentType.contains("application/octet-stream")) {
-//                            reqBody = getRequestBody(request);
-//                        }
                     meta.put("Body", reqBody);
                 } catch (IOException e) {
                     logger.error(CROSS + " unable to read request body", e);
@@ -331,7 +332,7 @@ public class ApacheInterceptor {
                     String fName = Utility.resolveFileName(assetsDirectory);
                     file = fName + "." + fileExt;
                 }
-            }else {
+            } else {
                 logger.debug("couldn't find extension of file its body");
             }
         }
@@ -373,6 +374,7 @@ public class ApacheInterceptor {
         try {
             InputStream is = response.getEntity().getContent();
             resBody = EntityUtils.toByteArray(response.getEntity());
+            is.close();
         } catch (IOException e) {
             logger.error(" unable to read file body from response", e);
             return resBody;
@@ -458,17 +460,32 @@ public class ApacheInterceptor {
 
         for (String key : srcMap.keySet()) {
             Service.StrArr values = srcMap.get(key);
-            ProtocolStringList valueList = values.getValueList();
-            List<String> headerValues = new ArrayList<>(valueList);
+            List<String> headerValues = new ArrayList<>(values.getValueList());
             headerMap.put(key, headerValues);
         }
 
         for (String key : headerMap.keySet()) {
             List<String> values = headerMap.get(key);
+            // since checksum can be changed with little to no changes in the mock, therefore removing it while testing.
+            if (isCheckSumHeader(key)) continue;
             for (String value : values) {
                 httpResponse.addHeader(key, value);
             }
         }
+    }
+
+    private static boolean isCheckSumHeader(String checksum) {
+        //TODO: add more checksums
+
+        if (checksum.contains("ETag")) {
+            return true;
+        } else if (checksum.contains("crc32")) {
+            return true;
+        } else if (checksum.contains("sha256")) {
+            return true;
+        }
+
+        return false;
     }
 
     @SneakyThrows
@@ -497,13 +514,11 @@ public class ApacheInterceptor {
         String METHOD = request.getMethod();
 
         InputStream reqStream;
-        BufferedHttpEntity bufferedHttpEntity;
+//        BufferedHttpEntity bufferedHttpEntity;
         String actualBody = "";
         switch (METHOD) {
             case "POST":
                 HttpPost httpPost = (HttpPost) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPost.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
                 HttpEntity postEntity = httpPost.getEntity();
                 if (postEntity != null) {
                     reqStream = postEntity.getContent();
@@ -515,8 +530,6 @@ public class ApacheInterceptor {
                 break;
             case "PUT":
                 HttpPut httpPut = (HttpPut) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPut.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
                 HttpEntity putEntity = httpPut.getEntity();
                 if (putEntity != null) {
                     reqStream = putEntity.getContent();
@@ -528,11 +541,6 @@ public class ApacheInterceptor {
                 break;
             case "PATCH":
                 HttpPatch httpPatch = (HttpPatch) request;
-//                bufferedHttpEntity = new BufferedHttpEntity(httpPatch.getEntity());
-//                reqStream = bufferedHttpEntity.getContent();
-                reqStream = httpPatch.getEntity().getContent();
-                actualBody = getActualRequestBody(reqStream);
-                httpPatch.setEntity(new StringEntity(actualBody));
                 HttpEntity patchEntity = httpPatch.getEntity();
                 if (patchEntity != null) {
                     reqStream = patchEntity.getContent();
@@ -632,7 +640,11 @@ public class ApacheInterceptor {
         //for binary file
         public ApacheCustomHttpResponse(ProtocolVersion ver, int statusCode, String statusMsg, byte[] body, ContentType contentType) {
             this(ver, statusCode, statusMsg);
-            setEntity(new ByteArrayEntity(body, contentType));
+            if (contentType.equals(ContentType.APPLICATION_OCTET_STREAM)) {
+                setEntity(new ByteArrayEntity(body));
+            } else {
+                setEntity(new ByteArrayEntity(body, contentType));
+            }
         }
 
         @Override

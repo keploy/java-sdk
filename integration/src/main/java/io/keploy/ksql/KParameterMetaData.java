@@ -1,5 +1,7 @@
 package io.keploy.ksql;
 
+import org.apache.logging.log4j.LogManager;
+
 import java.sql.ParameterMetaData;
 import java.sql.SQLException;
 import java.util.Objects;
@@ -9,8 +11,9 @@ import static io.keploy.ksql.KDriver.testMode;
 
 public class KParameterMetaData implements ParameterMetaData {
     ParameterMetaData wrappedParameterMetaData;
-
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(ParameterMetaData.class);
     public KParameterMetaData(ParameterMetaData parameterMetaData) {
+        logger.debug("Inside KParameterMetaData !!");
         wrappedParameterMetaData = parameterMetaData;
     }
 

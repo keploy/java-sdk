@@ -156,6 +156,9 @@ public class KDriver implements Driver {
 
     @Override
     public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+        if (mode == testMode) {
+            return (Logger) logger;
+        }
         return wrappedDriver.getParentLogger();
     }
 }
