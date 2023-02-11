@@ -8,6 +8,9 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.Mock;
 import io.keploy.regression.Mode;
+import io.keploy.service.GrpcService;
+import io.keploy.service.mock.Config;
+import io.keploy.service.mock.MockLib;
 import io.keploy.utils.HttpStatusReasons;
 import okhttp3.*;
 import okio.Buffer;
@@ -157,9 +160,19 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 Service.Mock httpMock = Service.Mock.newBuilder()
                         .setVersion(Mock.Version.V1_BETA1.value)
                         .setKind(Mock.Kind.HTTP_EXPORT.value)
-                        .setName("")
+                        .setName(Config.Name)
                         .setSpec(specSchema)
                         .build();
+
+                // for mock library to work
+                if (GrpcService.blockingStub != null && kctx.getFileExport() && !Config.MockId.containsKey(kctx.getTestId())) {
+                    final boolean recorded = MockLib.PutMock(Config.MockPath, httpMock);
+                    String CAPTURE = "\uD83D\uDFE0";
+                    if (recorded) {
+                        logger.info(CAPTURE + " Captured the mocked outputs for Http dependency call with meta: {}", meta);
+                    }
+                    return response;
+                }
 
                 kctx.getMock().add(httpMock);
                 return response;

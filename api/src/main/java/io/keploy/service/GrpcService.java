@@ -41,7 +41,7 @@ public class GrpcService {
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
 
     private static final String CROSS = new String(Character.toChars(0x274C));
-    private static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
+    public static RegressionServiceGrpc.RegressionServiceBlockingStub blockingStub = null;
     private static Keploy k = null;
     public static ManagedChannel channel;
 //    public static OkHttpClient client;
