@@ -30,7 +30,7 @@ public class KConnection extends Connection {
 
     static final Logger logger = LoggerFactory.getLogger(KConnection.class);
     private final Mode.ModeType keployMode = Context.getCtx().getMode().getModeFromContext();
-    private Map<String, String> meta = new HashMap<String,String>() {
+    private Map<String, String> meta = new HashMap<String, String>() {
         {
             put("name", "redis");
             put("type", "NoSqlDB");
@@ -44,7 +44,7 @@ public class KConnection extends Connection {
     public KConnection() {
         super();
         // fill data in Mock object into meta if application is in test mode.
-        if (keployMode == Mode.ModeType.MODE_TEST){
+        if (keployMode == Mode.ModeType.MODE_TEST) {
             fillMock();
         }
     }
@@ -52,7 +52,7 @@ public class KConnection extends Connection {
     public KConnection(String host) {
         super(host);
         // fill data in Mock object into meta if application is in test mode.
-        if (keployMode == Mode.ModeType.MODE_TEST){
+        if (keployMode == Mode.ModeType.MODE_TEST) {
             fillMock();
         }
     }
@@ -60,7 +60,7 @@ public class KConnection extends Connection {
     public KConnection(String host, int port) {
         super(host, port);
         // fill data in Mock object into meta if application is in test mode.
-        if (keployMode == Mode.ModeType.MODE_TEST){
+        if (keployMode == Mode.ModeType.MODE_TEST) {
             fillMock();
         }
     }
@@ -68,7 +68,7 @@ public class KConnection extends Connection {
     public KConnection(String host, int port, boolean ssl) {
         super(host, port, ssl);
         // fill data in Mock object into meta if application is in test mode.
-        if (keployMode == Mode.ModeType.MODE_TEST){
+        if (keployMode == Mode.ModeType.MODE_TEST) {
             fillMock();
         }
     }
@@ -76,7 +76,7 @@ public class KConnection extends Connection {
     public KConnection(String host, int port, boolean ssl, SSLSocketFactory sslSocketFactory, SSLParameters sslParameters, HostnameVerifier hostnameVerifier) {
         super(host, port, ssl, sslSocketFactory, sslParameters, hostnameVerifier);
         // fill data in Mock object into meta if application is in test mode.
-        if (keployMode == Mode.ModeType.MODE_TEST){
+        if (keployMode == Mode.ModeType.MODE_TEST) {
             fillMock();
         }
     }
@@ -139,7 +139,7 @@ public class KConnection extends Connection {
                   completely to Connection class.
                  */
                 byte[][] bargs = new byte[args.length][];
-                for(int i = 0; i < args.length; ++i) {
+                for (int i = 0; i < args.length; ++i) {
                     bargs[i] = SafeEncoder.encode(args[i]);
                 }
                 return this.sendCommand(cmd, bargs);
@@ -154,7 +154,7 @@ public class KConnection extends Connection {
           Implementing super class logic and calling function of this class. So the flow doesn't divert
           completely to Connection class.
          */
-        return this.sendCommand(cmd,EMPTY_ARGS);
+        return this.sendCommand(cmd, EMPTY_ARGS);
     }
 
     @Override
@@ -229,7 +229,7 @@ public class KConnection extends Connection {
         switch (keployMode) {
             case MODE_TEST:
                 break;
-                // does nothing
+            // does nothing
             default:
                 super.disconnect();
         }
@@ -353,7 +353,7 @@ public class KConnection extends Connection {
                     // recording data
                     List<byte[]> binaryMultiBulkReply = super.getBinaryMultiBulkReply();
                     List<Object> response = new ArrayList<>();
-                    for(byte[] i:binaryMultiBulkReply) {
+                    for (byte[] i : binaryMultiBulkReply) {
                         Object deserializedObject = jdkSerializationRedisSerializer.deserialize(i);
                         response.add(deserializedObject);
                     }
@@ -364,9 +364,10 @@ public class KConnection extends Connection {
             case MODE_TEST:
                 // sending recorded data
                 List<byte[]> response = new ArrayList<>();
-                Type listOfObject = new TypeToken<List<Object>>() {}.getType();
+                Type listOfObject = new TypeToken<List<Object>>() {
+                }.getType();
                 List<Object> lObj = gson.fromJson(meta.get("response"), listOfObject);
-                for (Object i: lObj) {
+                for (Object i : lObj) {
                     response.add(jdkSerializationRedisSerializer.serialize(i));
                 }
                 return response;
@@ -391,8 +392,9 @@ public class KConnection extends Connection {
                 return rawObjectMultiBulkReply;
             case MODE_TEST:
                 // sending recorded data
-                Type listOfObject = new TypeToken<List<Object>>() {}.getType();
-                return gson.fromJson(meta.get("response"),listOfObject);
+                Type listOfObject = new TypeToken<List<Object>>() {
+                }.getType();
+                return gson.fromJson(meta.get("response"), listOfObject);
             default:
                 return super.getRawObjectMultiBulkReply();
         }
@@ -409,8 +411,9 @@ public class KConnection extends Connection {
                 return objectMultiBulkReply;
             case MODE_TEST:
                 // sending recorded data
-                Type listOfObject = new TypeToken<List<Object>>() {}.getType();
-                return gson.fromJson(meta.get("response"),listOfObject);
+                Type listOfObject = new TypeToken<List<Object>>() {
+                }.getType();
+                return gson.fromJson(meta.get("response"), listOfObject);
             default:
                 return super.getObjectMultiBulkReply();
         }
@@ -427,8 +430,9 @@ public class KConnection extends Connection {
                 return integerMultiBulkReply;
             case MODE_TEST:
                 // sending recorded data
-                Type listOfLong = new TypeToken<List<Long>>() {}.getType();
-                return gson.fromJson(meta.get("response"),listOfLong);
+                Type listOfLong = new TypeToken<List<Long>>() {
+                }.getType();
+                return gson.fromJson(meta.get("response"), listOfLong);
             default:
                 return super.getIntegerMultiBulkReply();
         }
@@ -445,8 +449,9 @@ public class KConnection extends Connection {
                 return getAll;
             case MODE_TEST:
                 // sending recorded data
-                Type listOfObject = new TypeToken<List<Object>>() {}.getType();
-                return gson.fromJson(meta.get("response"),listOfObject);
+                Type listOfObject = new TypeToken<List<Object>>() {
+                }.getType();
+                return gson.fromJson(meta.get("response"), listOfObject);
             default:
                 return super.getAll();
         }
@@ -463,8 +468,9 @@ public class KConnection extends Connection {
                 return getAll;
             case MODE_TEST:
                 // sending recorded data
-                Type listOfObject = new TypeToken<List<Object>>() {}.getType();
-                return gson.fromJson(meta.get("response"),listOfObject);
+                Type listOfObject = new TypeToken<List<Object>>() {
+                }.getType();
+                return gson.fromJson(meta.get("response"), listOfObject);
             default:
                 return super.getAll(except);
         }
@@ -481,7 +487,7 @@ public class KConnection extends Connection {
                 return getOne;
             case MODE_TEST:
                 // sending recorded data
-                return gson.fromJson(meta.get("response"),Object.class);
+                return gson.fromJson(meta.get("response"), Object.class);
             default:
                 return super.getOne();
         }
@@ -505,9 +511,9 @@ public class KConnection extends Connection {
     // method to send data to server
     private void sendToServer() {
         Kcontext kctx = Context.getCtx();
-        logger.info(meta.toString());
-        if (Objects.equals(meta.get("command"),Protocol.Command.PING.toString()) ||
-                Objects.equals(meta.get("command"),Protocol.Command.QUIT.toString())) {
+        logger.debug("meta:{}", meta.toString());
+        if (Objects.equals(meta.get("command"), Protocol.Command.PING.toString()) ||
+                Objects.equals(meta.get("command"), Protocol.Command.QUIT.toString())) {
             return;
         }
         Service.Mock.SpecSchema specSchema = Service.Mock.SpecSchema.newBuilder()
@@ -524,10 +530,10 @@ public class KConnection extends Connection {
     // method to fill meta with the mock
     private void fillMock() {
         Kcontext kctx = Context.getCtx();
-        if ( kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.GENERIC_EXPORT.value)) {
+        if (kctx.getMock().size() > 0 && kctx.getMock().get(0).getKind().equals(Mock.Kind.GENERIC_EXPORT.value)) {
             List<Service.Mock> mocks = kctx.getMock();
             meta = mocks.get(0).getSpec().getMetadataMap();
-                mocks.remove(0);
+            mocks.remove(0);
         } else {
             logger.error(CROSS + " mocks not present in " + KeployInstance.getInstance().getKeploy().getCfg().getApp().getMockPath() + " directory.");
             throw new RuntimeException("unable to read mocks from keploy context");
