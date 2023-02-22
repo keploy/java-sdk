@@ -51,11 +51,5 @@
             <artifactId>grpc-core</artifactId>
             <version>1.49.2</version>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>com.squareup.okhttp3</groupId>-->
-<!--            <artifactId>okhttp</artifactId>-->
-<!--            &lt;!&ndash;            <version>4.10.0</version>&ndash;&gt;-->
-<!--            <version>3.14.9</version>-->
-<!--        </dependency>-->
     </dependencies>
 </project>

@@ -243,59 +243,6 @@ public class KAgent {
                     return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
                 }))
                 .installOn(instrumentation);
-//        try {
-//            // Assuming you have a File object representing the .jar file
-//            File jarFile = new File("/Users/gouravkumar/Desktop/Keploy/KPOCs/google-map-spring-boot-starter/target/google-map-spring-boot-starter-0.0.1-SNAPSHOT.jar");
-//
-//// Open the jar file
-//            JarFile jar = new JarFile(jarFile);
-//
-//// Get the manifest
-//            Manifest manifest = jar.getManifest();
-//            Manifest mf = new Manifest();
-//            mf.read(Files.newInputStream(new File("/Users/gouravkumar/Desktop/Keploy/KPOCs/google-map-spring-boot-starter/src/main/resources/META-INF/MANIFEST.MF").toPath()));
-//
-//// Get the main attributes of the manifest
-////            Attributes mainAttribs = manifest.getMainAttributes();
-//            Attributes mainAttribs = mf.getMainAttributes();
-//
-//// Iterate through the main attributes and print their names and values
-//            for (Map.Entry<Object, Object> entry : mainAttribs.entrySet()) {
-//                System.out.println(entry.getKey() + ": " + entry.getValue());
-//            }
-//
-//// Close the jar file
-//            jar.close();
-//        } catch (IOException e) {
-//            System.out.println("Jar Closed");
-//            throw new RuntimeException(e);
-//        }
-
-//        String dir = "/Users/gouravkumar/Desktop/Keploy/Keploy-SDKs/java-sdk/integration/target/classes";
-//        ClassLoader okhttpCl = new CustomClassLoader(dir);
-//        try {
-//            String googleInterceptorClass = "io.keploy.googleMaps.GoogleMapsInterceptor";
-//            System.out.println("flow goes here");
-//            Class<?> clazz = Class.forName(googleInterceptorClass, true, okhttpCl);
-////            Class<?> clazz = Class.forName(googleInterceptorClass, true,null);
-//        } catch (ClassNotFoundException e) {
-//            System.out.println("Class not found: " + e);
-//        }
-
-//        String dir = "/Users/gouravkumar/Desktop/Keploy/Keploy-SDKs/java-sdk/integration/target/classes/io/keploy/googleMaps/GoogleMapsInterceptor.class";
-//
-//        try {
-//            KClassLoader kClassLoader = new KClassLoader(Thread.currentThread().getContextClassLoader().getParent());
-//            String clazzz = "io.keploy.googleMaps.GoogleMapsInterceptor";
-//            KClassLoader.classPathMap.put(clazzz, dir);
-//            Class<?> gMapsCl = kClassLoader.loadClass(clazzz);
-//            ClassLoader gcl = gMapsCl.getClassLoader();
-//            System.out.println("google maps classloader: " + gcl);
-//            System.out.println("Current classloader:" + KAgent.class.getClassLoader());
-//        } catch (ClassNotFoundException e) {
-//            System.out.println("Class Not found: " + e);
-//        }
-
     }
 
     private static boolean isJUnitTest() {
