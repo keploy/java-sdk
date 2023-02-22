@@ -17,10 +17,8 @@ import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
 import java.sql.DatabaseMetaData;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
@@ -213,6 +211,46 @@ public class KAgent {
                     logger.debug("Inside DatabaseMetaData transformer");
                     return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
+//        java.io.PrintStream"
+//                .type(nameContains("org.springframework.data.jpa")
+//                                .or(nameContains("com.example.demo"))
+//                                .or(nameContains("org.apache.logging"))
+////                                .or(nameContains("java.io"))
+//                )
+//                                .and(nameContains("org.springframework.data.jpa.repository.support"))
+//                                ))
+
+//                .and(nameContains("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
+//                .and(nameContains("org.springframework.boot.data.jpa"))
+//                        .and(not(nameContains("java.lang")))
+
+
+//                .type(not(nameContains("io.keploy.regression.context.Context")))
+//                .and(not(nameContains("io.keploy.advice.DedupAdvice")))
+//                .and(not(named("net.bytebuddy")))
+//                .and(not(nameContains("org.springframework.util.ConcurrentReferenceHashMap")))
+//                .and(not(nameContains("org.springframework")))
+//                .and(not(nameContains("com.google.protobuf.LazyStringArrayList")))
+//                .and(not(nameContains("io.keploy.grpc")))
+//                .and(not(nameContains("io.keploy.regression")))
+//                .and(not(nameContains("io.grpc")))
+//                .and(not(nameContains("io.netty")))
+//                .and(not(nameContains("com.fasterxml")))
+//                .and(not(nameContains("com.zaxxer.hikari")))
+//                .and(not(nameContains("io.keploy.ksql")))
+//                .and(not(nameContains("java.sql")))
+//                .and(not(nameContains("org.postgresql")))
+//                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    //                    System.out.println("checking dedup transformer");
+//                    return builder.method(any()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.DedupAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+//                }))
+                //                .type(type -> type.getName().equals("java.io.PrintStream"))
+                //                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                //                    System.out.println("checking dedup transformer for printstream");
+                //                    return builder.method(named("println")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.DedupAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                //                }))
+
+
                 .installOn(instrumentation);
 //
 //        try {
@@ -307,3 +345,13 @@ public class KAgent {
     }
 
 }
+
+
+//                        (not(nameContains("io.keploy.regression.context.Context")))
+//                                .and(not(nameContains("io.keploy.advice.DedupAdvice")))
+//                                .and(not(named("net.bytebuddy")))
+//                                .and(not(nameContains("org.springframework.util.ConcurrentReferenceHashMap")))
+//                                .and(not(nameContains("org.springframework")))
+//                                .and(not(nameContains("com.google.protobuf.LazyStringArrayList")))
+//                                .and(not(nameContains("io.keploy.grpc")))
+//                                .and(not(nameContains("io.grpc")))

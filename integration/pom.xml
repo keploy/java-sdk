@@ -103,6 +103,11 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>org.jacoco</groupId>
+            <artifactId>org.jacoco.core</artifactId>
+            <version>0.8.7</version>
+        </dependency>
+        <dependency>
             <groupId>com.google.maps</groupId>
             <artifactId>google-maps-services</artifactId>
             <version>2.0.0</version>

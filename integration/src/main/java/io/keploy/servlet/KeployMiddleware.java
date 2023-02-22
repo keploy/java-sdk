@@ -3,19 +3,20 @@ package io.keploy.servlet;
 import io.grpc.netty.shaded.io.netty.util.internal.InternalThreadLocalMap;
 import io.keploy.grpc.stubs.Service;
 import io.keploy.regression.KeployInstance;
+import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import io.keploy.regression.keploy.AppConfig;
 import io.keploy.regression.keploy.Config;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.regression.keploy.ServerConfig;
-import io.keploy.regression.Mode;
 import io.keploy.service.GrpcService;
 import io.keploy.utils.*;
 import lombok.SneakyThrows;
 import org.apache.commons.io.IOUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jacoco.core.tools.ExecDumpClient;
 
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
@@ -30,11 +31,18 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class KeployMiddleware implements Filter {
 
     private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);
     private static final String CROSS = new String(Character.toChars(0x274C));
+    public static ArrayList<String> stackTraceArr = new ArrayList<>();
+
+    public static AtomicInteger metCount = new AtomicInteger(0);
+    public static int reqCount = 0;
+    public static AtomicInteger cnt = new AtomicInteger(0);
+    public static AtomicInteger externalMet = new AtomicInteger(0);
 
     @Override
     public void init(FilterConfig filterConfig) {
@@ -214,6 +222,17 @@ public class KeployMiddleware implements Filter {
 
         if (k == null || Mode.getMode() != null && (Mode.getMode()).equals(Mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(request, response);
+            try {
+                getCoverage();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+//            reqCount++;
+//            System.out.println(stackTraceArr.size());
+//            stackTraceArr.clear();
+//            metCount.set(0);
+//            cnt.set(0);
+//            externalMet.set(0);
             return;
         }
 
@@ -246,6 +265,29 @@ public class KeployMiddleware implements Filter {
 
 
         filterChain.doFilter(requestWrapper, responseWrapper);
+//        stackTraceArr.add("--EOR--");
+//
+//
+//        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(Files.newOutputStream(Paths.get("file" + reqCount + ".txt")), StandardCharsets.UTF_8))) {
+//            for (String item : stackTraceArr) {
+//                writer.write(item);
+//                writer.newLine();
+//            }
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//        reqCount++;
+//        System.out.println(stackTraceArr.size());
+//        stackTraceArr.clear();
+//        metCount.set(0);
+//        cnt.set(0);
+//        externalMet.set(0);
+        try {
+            getCoverage();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
 
         byte[] reqArr = requestWrapper.getData();
         byte[] resArr = responseWrapper.getData();
@@ -416,4 +458,22 @@ public class KeployMiddleware implements Filter {
     public void destroy() {
         InternalThreadLocalMap.destroy();
     }
+
+    public void getCoverage() throws IOException, InterruptedException {
+        System.out.println("getting Coverage please wait...");
+        String command1 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/jacoco-it" + reqCount + ".exec";
+//        String command2 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar report /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/jacoco-it.exec --classfiles /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/classes/com --sourcefiles src/main/java/ --xml /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/report.xml";
+
+        try {
+            Process process = Runtime.getRuntime().exec(command1);
+            process.waitFor();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        reqCount++;
+        ExecDumpClient execDumpClient = new ExecDumpClient();
+        execDumpClient.setReset(true);
+        execDumpClient.dump("localhost", 36320);
+    }
+
 }
