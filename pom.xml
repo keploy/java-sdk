@@ -41,7 +41,6 @@
         <module>api</module>
         <module>integration</module>
         <module>common</module>
-        <module>test-module</module>
         <module>models</module>
         <module>keploy-sdk</module>
     </modules>
