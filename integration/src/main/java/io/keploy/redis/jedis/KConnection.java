@@ -10,7 +10,6 @@ import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
 import redis.clients.jedis.Connection;
 import redis.clients.jedis.Protocol;
 import redis.clients.util.SafeEncoder;
@@ -36,7 +35,7 @@ public class KConnection extends Connection {
             put("type", "NoSqlDB");
         }
     };
-    private static final JdkSerializationRedisSerializer jdkSerializationRedisSerializer = new JdkSerializationRedisSerializer();
+    private static final RedisCustomSerializer redisCustomSerializer = new RedisCustomSerializer();
     private static final Gson gson = new Gson();
     private static final String CROSS = new String(Character.toChars(0x274C));
     private static final byte[][] EMPTY_ARGS = new byte[0][];
@@ -163,16 +162,16 @@ public class KConnection extends Connection {
             case MODE_RECORD:
                 /*
                   Checking if serializer is already set if not that means request sent bytes data i.e. before reaching
-                  redis client serialization is done. As JDK_REDIS_SERIALIZATION is the most used serializer using this
+                  redis client serialization is done. As REDIS_CUSTOM_SERIALIZATION is the most used serializer using this
                   serializer.
                  */
                 if (!meta.containsKey("serializer") || !Objects.equals(meta.get("serializer"), SerializationType.REDIS_SERIALIZATION.toString())) {
-                    meta.put("serializer", SerializationType.JDK_REDIS_SERIALIZATION.toString());
+                    meta.put("serializer", SerializationType.REDIS_CUSTOM_SERIALIZATION.toString());
                     // capturing data
                     meta.put("command", cmd.toString());
                     int argCount = 1;
                     for (byte[] arg : args) {
-                        Object deserializedObject = jdkSerializationRedisSerializer.deserialize(arg);
+                        Object deserializedObject = redisCustomSerializer.deserialize(arg);
                         meta.put("arg".concat(Integer.toString(argCount)), gson.toJson(deserializedObject));
                         argCount++;
                     }
@@ -280,7 +279,7 @@ public class KConnection extends Connection {
             case MODE_RECORD:
                 /*
                   Checking if serializer is already set if not that means request sent bytes data i.e. before reaching
-                  redis client serialization is done. As JDK_REDIS_SERIALIZATION is the most used serializer using this
+                  redis client serialization is done. As REDIS_CUSTOM_SERIALIZATION is the most used serializer using this
                   serializer.
                  */
                 if (Objects.equals(meta.get("serializer"), SerializationType.REDIS_SERIALIZATION.toString())) {
@@ -288,7 +287,7 @@ public class KConnection extends Connection {
                 } else {
                     // capturing data
                     byte[] binaryBulkReply = super.getBinaryBulkReply();
-                    Object deserializedObject = jdkSerializationRedisSerializer.deserialize(binaryBulkReply);
+                    Object deserializedObject = redisCustomSerializer.deserialize(binaryBulkReply);
                     meta.put("response", gson.toJson(deserializedObject));
                     sendToServer();
                     return binaryBulkReply;
@@ -296,7 +295,7 @@ public class KConnection extends Connection {
             case MODE_TEST:
                 // returning recorded data based on serializer
                 if (!Objects.equals(meta.get("serializer"), SerializationType.REDIS_SERIALIZATION.toString())) {
-                    return jdkSerializationRedisSerializer.serialize(gson.fromJson(meta.get("response"), Object.class));
+                    return redisCustomSerializer.serialize(gson.fromJson(meta.get("response"), Object.class));
                 }
                 return super.getBinaryBulkReply();
             default:
@@ -344,7 +343,7 @@ public class KConnection extends Connection {
             case MODE_RECORD:
                 /*
                   Checking if serializer is already set if not that means request sent bytes data i.e. before reaching
-                  redis client serialization is done. As JDK_REDIS_SERIALIZATION is the most used serializer using this
+                  redis client serialization is done. As REDIS_CUSTOM_SERIALIZATION is the most used serializer ,using this
                   serializer.
                  */
                 if (Objects.equals(meta.get("serializer"), SerializationType.REDIS_SERIALIZATION.toString())) {
@@ -354,7 +353,7 @@ public class KConnection extends Connection {
                     List<byte[]> binaryMultiBulkReply = super.getBinaryMultiBulkReply();
                     List<Object> response = new ArrayList<>();
                     for (byte[] i : binaryMultiBulkReply) {
-                        Object deserializedObject = jdkSerializationRedisSerializer.deserialize(i);
+                        Object deserializedObject = redisCustomSerializer.deserialize(i);
                         response.add(deserializedObject);
                     }
                     meta.put("response", gson.toJson(response));
@@ -368,7 +367,7 @@ public class KConnection extends Connection {
                 }.getType();
                 List<Object> lObj = gson.fromJson(meta.get("response"), listOfObject);
                 for (Object i : lObj) {
-                    response.add(jdkSerializationRedisSerializer.serialize(i));
+                    response.add(redisCustomSerializer.serialize(i));
                 }
                 return response;
             default:
@@ -542,7 +541,7 @@ public class KConnection extends Connection {
 
     public enum SerializationType {
         REDIS_SERIALIZATION,
-        JDK_REDIS_SERIALIZATION;
+        REDIS_CUSTOM_SERIALIZATION;
 
         SerializationType() {
 
