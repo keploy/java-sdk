@@ -1,9 +1,10 @@
 [![contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen?logo=github)](CODE_OF_CONDUCT.md)
 [![Slack](.github/slack.svg)](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA)
 [![License](.github/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Maven Central](https://img.shields.io/maven-central/v/io.keploy/keploy-sdk/1.2.6.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22%20AND%20v:%221.2.6%22)
+[![Maven Central](https://img.shields.io/maven-central/v/io.keploy/keploy-sdk.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22)
 
-[//]: # ([![Maven Central]&#40;https://img.shields.io/maven-central/v/io.keploy/keploy-sdk.svg?label=Maven%20Central&#41;]&#40;https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22&#41;)
+[//]: # ([![Maven Central]&#40;https://img.shields.io/maven-central/v/io.keploy/keploy-sdk/1.2.6.svg?label=Maven%20Central&#41;]&#40;https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22%20AND%20v:%221.2.6%22&#41;)
+
 
 # Keploy
 
@@ -45,12 +46,12 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.2.6)
+      <version>N.N.N</version> (eg: 1.2.8)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.6)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.8)
 
 ## Usage
 
@@ -74,20 +75,20 @@ or to *build.gradle*:
 - **Run along with agent to mock external calls of your API 🤩🔥**
 
     - Download the latest - Download the latest agent jar
-      from [here](https://search.maven.org/artifact/io.keploy/keploy-sdk/1.2.6/jar)  (eg: 1.2.6)
+      from [here](https://search.maven.org/artifact/io.keploy/keploy-sdk/1.2.8/jar)  (eg: 1.2.8)
 
-    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.6.jar`) is possible through 3 ways:-
+    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.8.jar`) is possible through 3 ways:-
 
         1. **Using Intellij :** Go to Edit Configuration-> add VM options -> paste _java agent_ edited above.
 
         2. **Using Command Line :** 
             ```
-            export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.6.jar"
+            export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.8.jar"
             ```
 
         3. **Running via Tomcat Server :** 
             ```
-            export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.6.jar"
+            export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.8.jar"
             ```
 
 - **Configure Environment Variables**
