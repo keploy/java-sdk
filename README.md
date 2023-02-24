@@ -77,19 +77,46 @@ or to *build.gradle*:
     - Download the latest - Download the latest agent jar
       from [here](https://search.maven.org/artifact/io.keploy/keploy-sdk/1.2.8/jar)  (eg: 1.2.8)
 
-    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.8.jar`) is possible through 3 ways:-
+    - Prefix `-javaagent:` with absolute classpath of agent jar (eg: `-javaagent:<your full path to agent jar>/agent-1.2.8.jar`).
 
         1. **Using Intellij :** Go to Edit Configuration-> add VM options -> paste _java agent_ edited above.
 
         2. **Using Command Line :** 
-            ```
-            export JAVA_OPTS="$JAVA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.8.jar"
-            ```
+            - First add below plugins in your *pom.xml* file.
+             ```xml
+                  <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-dependency-plugin</artifactId>
+                      <version>3.1.1</version>
+                      <executions>
+                          <execution>
+                              <id>copy-dependencies</id>
+                              <phase>package</phase>
+                              <goals>
+                                 <goal>copy-dependencies</goal>
+                              </goals>
+                          </execution>
+                      </executions>
+                 </plugin>
+            
+                 <plugin>
+                     <groupId>org.apache.maven.plugins</groupId>
+                     <artifactId>maven-jar-plugin</artifactId>
+                     <version>3.2.2</version>
+                     <configuration>
+                         <archive>
+                           <manifest>
+                              <addClasspath>true</addClasspath>
+                              <classpathPrefix>dependency/</classpathPrefix>
+                              <mainClass>{your main class}</mainClass>
+                           </manifest>
+                         </archive>
+                     </configuration>
+                 </plugin>
+             ```
+            - And then run this command:`java -javaagent:<your full path to agent jar>/agent-1.2.8.jar -jar <your full path to application jar>.jar`. This command will attach agent jar and also run the application. You need to set some required env variables written below in order to generate test cases. So, run this command after setting the env variables.
+  
 
-        3. **Running via Tomcat Server :** 
-            ```
-            export CATALINA_OPTS="$CATALINA_OPTS -javaagent:<your full path to agent jar>/agent-1.2.8.jar"
-            ```
 
 - **Configure Environment Variables**
     - `APP_NAME`           (default APP_NAME = myApp)
@@ -121,7 +148,7 @@ or to *build.gradle*:
                 2. You can also run the application with coverage to see the test coverage.
 
             - Using command line
-                1. Add below code in your testfile and run `mvn test`.
+                1. Add below code in your testfile and run `mvn test -DargLine="-javaagent:<your full path to agent jar>.jar"`.
 
                    ```java
                       @Test
@@ -197,7 +224,8 @@ or to *build.gradle*:
                               </executions>
                           </plugin>
                       ```
-                5. Run your tests using command : `mvn test`.
+                5. Run your tests using command : `mvn test -DargLine="-javaagent:<your full path to agent jar>.jar"
+                   `.
 
 
 ### KEPLOY_MODE
