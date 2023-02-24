@@ -82,6 +82,7 @@
             <artifactId>okhttp</artifactId>
 <!--            <version>4.10.0</version>-->
             <version>3.14.9</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
