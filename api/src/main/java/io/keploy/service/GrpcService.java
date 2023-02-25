@@ -5,6 +5,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
+import io.keploy.grpc.stubs.Service.TestCaseReq;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
@@ -153,7 +154,23 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
+
+        // similar to denoise, but for mocking dependencies
+        // boolean dep_remove = k.getCfg().getServer().getRemoveDependency();
+        // if (dep_remove) {
+        //     removeDependency(id, testCaseReq);
+        // }
     }
+
+    // private static void removeDependency(String id, TestCaseReq testCaseReq) {
+    //     // remove the dependency that yser doesn't want in the test case
+    //     try {
+    //         TimeUnit.SECONDS.sleep(3);
+    //     } catch (InterruptedException e) {
+    //         logger.error(CROSS + " (removeDependency): unable to sleep", e);
+    //     }
+    // }
+
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
         // run the request again to find noisy fields
@@ -208,7 +225,7 @@ public class GrpcService {
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
-        k.getDeps().remove(testCase.getId());
+        k.getDeps().remove(testCase.getId()); // remove dependency from shared context (reem)
         k.getMocks().remove(testCase.getId());
         k.getMocktime().remove(testCase.getId());
 

@@ -160,7 +160,7 @@ java.lang.String defaultValue);
     private volatile java.lang.Object name_ = "";
     /**
      * <code>string Name = 1;</code>
-     * @return The name.
+     * @return The name. //name of the dependency
      */
     @java.lang.Override
     public java.lang.String getName() {
@@ -199,7 +199,7 @@ java.lang.String defaultValue);
     private volatile java.lang.Object type_ = "";
     /**
      * <code>string Type = 2;</code>
-     * @return The type.
+     * @return The type. // type of the dependency
      */
     @java.lang.Override
     public java.lang.String getType() {
@@ -417,7 +417,7 @@ java.lang.String defaultValue) {
     }
 
     @java.lang.Override
-    public boolean equals(final java.lang.Object obj) {
+    public boolean equals(final java.lang.Object obj) { // this function checks if the object is equal to the current object
       if (obj == this) {
        return true;
       }
@@ -439,7 +439,7 @@ java.lang.String defaultValue) {
     }
 
     @java.lang.Override
-    public int hashCode() {
+    public int hashCode() { // need hashcode function to be able to use the dependency object as a key in a map
       if (memoizedHashCode != 0) {
         return memoizedHashCode;
       }
