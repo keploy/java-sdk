@@ -7,11 +7,13 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 public class Filter {
-    private String UrlRegex;
+    private String acceptUrlRegex;
     private String[] HeaderRegex;
+    private String[] rejectUrlRegex;
 
-    public Filter(String urlRegex, String[] headerRegex) {
-        UrlRegex = urlRegex;
+    public Filter(String acceptUrlRegex, String[] headerRegex, String[] rejectUrlRegex) {
+        this.acceptUrlRegex = acceptUrlRegex;
         HeaderRegex = headerRegex;
+        this.rejectUrlRegex = rejectUrlRegex;
     }
 }

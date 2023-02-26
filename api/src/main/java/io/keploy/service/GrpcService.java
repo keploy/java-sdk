@@ -9,6 +9,7 @@ import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import io.keploy.regression.keploy.Filter;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.utils.AssertKTests;
 import io.keploy.utils.MultipartContent;
@@ -32,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import static io.keploy.regression.Mock.Kind.HTTP_EXPORT;
 import static io.keploy.utils.Utility.createFolder;
@@ -136,9 +138,15 @@ public class GrpcService {
         }).start();
     }
 
+    /**
+     * Put. This method is used to send the test case to backend
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case
+     */
     public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse;
         try {
+            if (isValidTestCaseRequest(testCaseReq)) return;
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error(CROSS + " failed to send testcase to backend, please ensure keploy server is up!", e);
@@ -153,6 +161,75 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
+    }
+
+    /**
+     * Filter.  This method is used to filter the test cases based on the regex provided in the configuration
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case
+     * @return the boolean  true if the test case is valid to be recorded, false otherwise
+     */
+    private static boolean isValidTestCaseRequest(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
+        Pattern pattern = Pattern.compile(filter.getAcceptUrlRegex());
+
+        // if headerRegex is not null and header is not valid, return
+        // if urlRegex is not null and url is not valid, return
+        boolean inValidCondition = (filter.getHeaderRegex() != null && !isValidHeader(testCaseReq))
+                || filter.getAcceptUrlRegex() != "" && pattern.matcher(testCaseReq.getURI()).matches()
+                || filter.getRejectUrlRegex() == null && isExcludedHeader(testCaseReq);
+        return !inValidCondition;
+    }
+
+    /**
+     * Is valid header boolean. This method is used to check if the header is valid or not.
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case.
+     * @return the boolean  true if header is valid, false otherwise.
+     */
+    private static boolean isValidHeader(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
+        // get header map
+        Map<String, Service.StrArr> testCaseHeaderMap = testCaseReq.getHttpReq().getHeaderMap();
+        boolean validHeader = false;
+        // loop over filter header regex
+        for (String value : filter.getHeaderRegex()) {
+            Pattern pattern = Pattern.compile(value);
+            // loop over header map
+            for (Map.Entry<String, Service.StrArr> entry : testCaseHeaderMap.entrySet()) {
+                // if header key matches with regex, return true
+                String key = entry.getKey();
+                if (pattern.matcher(key).matches()) {
+                    validHeader = true;
+                    break;
+                }
+            }
+        }
+        return validHeader;
+    }
+
+    /**
+     * Is excluded header boolean. This method is used to check if the request url should be excluded or not.
+     *
+     * @param testCaseReq the test case req the test case req object which contains all the information about the test case
+     * @return the boolean  true if header url should be excluded, false otherwise.
+     */
+    private static boolean isExcludedHeader(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
+        // get header url
+        String testCaseUrl = testCaseReq.getHttpReq().getURL();
+        boolean isExcluded = true;
+        // loop over filter header regex
+        for (String value : filter.getRejectUrlRegex()) {
+            Pattern pattern = Pattern.compile(value);
+            // if header url matches with regex, return test case is rejected
+            if (pattern.matcher(testCaseUrl).matches()) {
+                isExcluded = false;
+                break;
+            }
+        }
+        return isExcluded;
+
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
