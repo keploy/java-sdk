@@ -3,6 +3,7 @@ package io.keploy.httpClients;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
+import io.keploy.grpc.stubs.Service.Dependency;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
@@ -43,7 +44,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         Mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
 
         if (modeFromContext.equals(Mode.ModeType.MODE_OFF)) {
-            return chain.proceed(request);
+            return chain.proceed(request); // don't intercept 
         }
 
         String reqBody = getRequestBody(request);
@@ -113,6 +114,29 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 logger.debug("record mode");
 
                 response = chain.proceed(request);
+                
+                // get DEPENDENCY from environment variable
+                String listDependency = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
+
+                // Remove those dependencies from the list of dependencies in the context object 
+                // if the dependency is not in the list of dependencies from the environment variable
+                if (listDependency != null) {
+                    String[] listDependencyArray = listDependency.split(",");
+                    for (int i = 0; i < kctx.getDeps().size(); i++) {
+                        Dependency dep = kctx.getDeps().get(i);
+                        boolean found = false;
+                        for (int j = 0; j < listDependencyArray.length; j++) {
+                            if (dep.getName().equals(listDependencyArray[j])) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            kctx.getDeps().remove(i);
+                        }
+                    }
+                }
+
                 String responseBody = getResponseBody(response);
                 int statuscode = response.code();
                 String statusMsg = HttpStatusReasons.getStatusMsg(statuscode);
