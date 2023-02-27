@@ -146,7 +146,8 @@ public class GrpcService {
     public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse;
         try {
-            if (isValidTestCaseRequest(testCaseReq)) return;
+            // if no filter is added or the test request should be excluded then return
+            if (k.getCfg().getApp().getFilter() != null && isValidTestCaseRequest(testCaseReq)) return;
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error(CROSS + " failed to send testcase to backend, please ensure keploy server is up!", e);
@@ -169,7 +170,7 @@ public class GrpcService {
      * @param testCaseReq the test case req object which contains all the information about the test case
      * @return the boolean  true if the test case is valid to be recorded, false otherwise
      */
-    private static boolean isValidTestCaseRequest(Service.TestCaseReq testCaseReq) {
+    public static boolean isValidTestCaseRequest(Service.TestCaseReq testCaseReq) {
         Filter filter = k.getCfg().getApp().getFilter();
         Pattern pattern = Pattern.compile(filter.getAcceptUrlRegex());
 
@@ -187,7 +188,7 @@ public class GrpcService {
      * @param testCaseReq the test case req object which contains all the information about the test case.
      * @return the boolean  true if header is valid, false otherwise.
      */
-    private static boolean isValidHeader(Service.TestCaseReq testCaseReq) {
+    public static boolean isValidHeader(Service.TestCaseReq testCaseReq) {
         Filter filter = k.getCfg().getApp().getFilter();
         // get header map
         Map<String, Service.StrArr> testCaseHeaderMap = testCaseReq.getHttpReq().getHeaderMap();
@@ -214,7 +215,7 @@ public class GrpcService {
      * @param testCaseReq the test case req the test case req object which contains all the information about the test case
      * @return the boolean  true if header url should be excluded, false otherwise.
      */
-    private static boolean isExcludedHeader(Service.TestCaseReq testCaseReq) {
+    public static boolean isExcludedHeader(Service.TestCaseReq testCaseReq) {
         Filter filter = k.getCfg().getApp().getFilter();
         // get header url
         String testCaseUrl = testCaseReq.getHttpReq().getURL();
