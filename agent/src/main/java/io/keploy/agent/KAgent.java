@@ -23,6 +23,10 @@ import net.bytebuddy.utility.OpenedClassReader;
 import org.apache.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import io.keploy.regression.context.Kcontext;
+import io.keploy.grpc.stubs.Service.Dependency;
+import io.keploy.regression.context.Context;
 import net.bytebuddy.dynamic.DynamicType.Builder;
 
 import java.lang.instrument.Instrumentation;
@@ -41,6 +45,34 @@ public class KAgent {
 
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
+        
+        // Kcontext kCtx = Context.getCtx();
+        // get DEPENDENCY from environment variable
+        // String listDependency = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
+        // logger.debug(listDependency);
+        // logger.debug(kCtx.getDeps().get(0));
+
+        // Remove those dependencies from the list of dependencies in the context object 
+        // if the dependency is not in the list of dependencies from the environment variable
+        // if (listDependency != null) {
+        //     logger.debug("I have got dependencies to be excluded");
+        //     String[] listDependencyArray = listDependency.split(",");
+        //     for (int i = 0; i < kCtx.getDeps().size(); i++) {
+        //         Dependency dep = kCtx.getDeps().get(i);
+        //         boolean found = false;
+        //         for (int j = 0; j < listDependencyArray.length; j++) {
+        //             if (dep.getName().equals(listDependencyArray[j])) {
+        //                 logger.debug("Found !");
+        //                 found = true;
+        //                 break;
+        //             }
+        //         }
+        //         if (!found) {
+        //             kCtx.getDeps().remove(i);
+        //         }
+        //     }
+        // }
+
         if (System.getenv("KEPLOY_MODE") != null && Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
         }

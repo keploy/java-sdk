@@ -5,6 +5,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
+import io.keploy.grpc.stubs.Service.Dependency;
 import io.keploy.grpc.stubs.Service.TestCaseReq;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mode;
@@ -219,6 +220,27 @@ public class GrpcService {
         k.getMocktime().put(testCase.getId(), testCase.getCaptured());
 
         //add dependency to shared context
+        // first remove the excluded dependencies from the test case 
+        String listDependencyExcluded = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
+
+        if (listDependencyExcluded != null) {
+            String[] listDependencyArray = listDependencyExcluded.split(",");
+            for (int i = 0; i < testCase.getDepsList().size(); i++) {
+                Dependency dep = testCase.getDepsList().get(i);
+                boolean found = false;
+                for (int j = 0; j < listDependencyArray.length; j++) {
+                    if (dep.getName().equals(listDependencyArray[j])) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    testCase.getDepsList().remove(i);
+                }
+            }
+        }
+
+        // testCase.getDepsList().remove(System.getenv("DEPENDENCY"));
         k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
 
         executeSimulateRequest(testCase);

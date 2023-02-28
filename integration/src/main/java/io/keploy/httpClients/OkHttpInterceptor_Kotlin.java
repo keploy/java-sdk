@@ -112,30 +112,35 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 }
             case MODE_RECORD:
                 logger.debug("record mode");
+                logger.info("Record Mode");
 
                 response = chain.proceed(request);
                 
                 // get DEPENDENCY from environment variable
                 String listDependency = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
+                logger.info(listDependency);
+                logger.info(kctx.getDeps().get(0));
 
                 // Remove those dependencies from the list of dependencies in the context object 
                 // if the dependency is not in the list of dependencies from the environment variable
-                if (listDependency != null) {
-                    String[] listDependencyArray = listDependency.split(",");
-                    for (int i = 0; i < kctx.getDeps().size(); i++) {
-                        Dependency dep = kctx.getDeps().get(i);
-                        boolean found = false;
-                        for (int j = 0; j < listDependencyArray.length; j++) {
-                            if (dep.getName().equals(listDependencyArray[j])) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            kctx.getDeps().remove(i);
-                        }
-                    }
-                }
+                // if (listDependency != null) {
+                //     System.out.println("I have got dependencies to be excluded");
+                //     String[] listDependencyArray = listDependency.split(",");
+                //     for (int i = 0; i < kctx.getDeps().size(); i++) {
+                //         Dependency dep = kctx.getDeps().get(i);
+                //         boolean found = false;
+                //         for (int j = 0; j < listDependencyArray.length; j++) {
+                //             if (dep.getName().equals(listDependencyArray[j])) {
+                //                 System.out.println("Found !");
+                //                 found = true;
+                //                 break;
+                //             }
+                //         }
+                //         if (!found) {
+                //             kctx.getDeps().remove(i);
+                //         }
+                //     }
+                // }
 
                 String responseBody = getResponseBody(response);
                 int statuscode = response.code();
