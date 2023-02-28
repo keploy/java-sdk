@@ -1,0 +1,29 @@
+name: Lint Java Code Base using sonarqube
+
+on:
+  push:
+    branches-ignore: [main] # Can be removed when pushing on main don't test linter
+  pull_request:
+    branches: [main]
+
+jobs:
+  sonarqube:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+        with:
+          # Full git history is needed to get a proper list of changed files within the linter
+          # to know which files has changed relative to main branch
+          fetch-depth: 0
+
+      - name: Lint Code Base
+        uses: SonarSource/sonarqube-scan-action@v1.2.0
+        env:
+          VALIDATE_ALL_CODEBASE: false
+          DEFAULT_BRANCH: main
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} #linter badge, so reviewers know whether or not the linter based the code
