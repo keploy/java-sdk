@@ -36,6 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static io.keploy.regression.Mock.Kind.HTTP_EXPORT;
 import static io.keploy.utils.Utility.createFolder;
 
+/**
+ * This is a service class. This is the class where Java-sdk communicates with Keploy server to
+ * record/store tests and to perform testing.
+ */
 public class GrpcService {
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
@@ -49,7 +53,9 @@ public class GrpcService {
 
     private static final String SET_BOLD_TEXT = "\033[0;1m";
 
-
+    /**
+     * Initialising GRPC server ang Keploy instance
+     */
     public GrpcService() {
         // Channels are secure by default (via SSL/TLS). For the example we disable TLS to avoid
         // needing certificates.
@@ -61,7 +67,10 @@ public class GrpcService {
 
     }
 
-
+    /**
+     * Get the url to connect to the server
+     * @return String which contains host and port of the server
+     */
     private String getTarget() {
         String target;
         URL url;
@@ -75,6 +84,16 @@ public class GrpcService {
         return url.getAuthority();
     }
 
+    /**
+     * Modifies all the test cases and mocks that are present into the format which GRPC accepts and send request to GRPC
+     * to save tests and mocks that are recorded
+     *
+     * @param reqBody - http request body recorded from the filter
+     * @param params - http query params recorded from the filter
+     * @param httpResp - http response body recorded from the filter
+     * @param protocolType - http protocolType recorded from the filter
+     * @param formData - http form data
+     */
     public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType, Map<String, List<MultipartContent>> formData) {
         logger.debug("inside CaptureTestCases");
 
@@ -120,6 +139,12 @@ public class GrpcService {
         Capture(testCaseReqBuilder, formData, httpReqBuilder);
     }
 
+    /**
+     * This method runs in threads asynchronously and sends request to Server
+     * @param testCaseReqBuilder - test case object builder
+     * @param formData -  form data from http request
+     * @param httpReqBuilder - http request builder
+     */
     public static void Capture(Service.TestCaseReq.Builder testCaseReqBuilder, Map<String, List<MultipartContent>> formData, Service.HttpReq.Builder httpReqBuilder) {
         new Thread(() -> {
             try {
@@ -136,6 +161,10 @@ public class GrpcService {
         }).start();
     }
 
+    /**
+     * This sends the testcases to the server
+     * @param testCaseReq - test case object
+     */
     public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse;
         try {
@@ -155,6 +184,11 @@ public class GrpcService {
         }
     }
 
+    /**
+     * Denoising logic while recording test cases
+     * @param id - test case id
+     * @param testCaseReq -  test case object
+     */
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
         // run the request again to find noisy fields
         try {
@@ -194,6 +228,11 @@ public class GrpcService {
 
     }
 
+    /**
+     * Runs each test on client application by setting mocks and data in context.
+     * @param testCase - test case object
+     * @return - response for the test
+     */
     public static Service.HttpResp simulate(Service.TestCase testCase) {
         logger.debug("inside simulate");
 
@@ -204,6 +243,7 @@ public class GrpcService {
         //add dependency to shared context
         k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
 
+        // execute request on client application
         executeSimulateRequest(testCase);
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
@@ -215,6 +255,10 @@ public class GrpcService {
         return resp.build();
     }
 
+    /**
+     * Executes http request on client application in test mode
+     * @param testCase - test case object
+     */
     private static void executeSimulateRequest(Service.TestCase testCase) {
         String url = testCase.getHttpReq().getURL();
         String host = k.getCfg().getApp().getHost();
@@ -351,6 +395,9 @@ public class GrpcService {
         return respBuilder;
     }
 
+    /**
+     * Starts testing of the recorded test cases
+     */
     public static void Test() {
         String delay = "5";
         try {
@@ -445,6 +492,9 @@ public class GrpcService {
         }
     }
 
+    /**
+     * Runs all tests and shows the progress at last
+     */
     private static void runTests(ExecutorService service, ProgressBar pb, AtomicBoolean ok, CountDownLatch wg, int total, List<Service.TestCase> tcs, String id, AtomicInteger failedtestCount) {
         for (int i = 0; i < tcs.size(); i++) {
             Service.TestCase tc = tcs.get(i);
@@ -469,6 +519,11 @@ public class GrpcService {
         return (SET_BOLD_TEXT + str + SET_PLAIN_TEXT);
     }
 
+    /**
+     * Provides the test run id
+     * @param total - total no of test cases
+     * @return - test run id
+     */
     public static String start(String total) {
         logger.debug("inside start function");
         Service.startRequest startRequest = Service.startRequest.newBuilder()
@@ -490,6 +545,11 @@ public class GrpcService {
         return (startResponse != null) ? startResponse.getId() : "";
     }
 
+    /**
+     * Send request to server that test run is done. So that post-processing will be done
+     * @param id - test run id
+     * @param status - status of the test run
+     */
     public static void end(String id, boolean status) {
         logger.debug("inside end function");
         Service.endRequest endRequest = Service.endRequest.newBuilder().setId(id).setStatus(String.valueOf(status)).build();
@@ -504,6 +564,10 @@ public class GrpcService {
         }
     }
 
+    /**
+     * Fetch all the test cases and mocks that are recorded
+     * @return - list if testcase objects
+     */
     public static List<Service.TestCase> fetch() {
         logger.debug("inside fetch function");
 
@@ -560,6 +624,12 @@ public class GrpcService {
         return testCases;
     }
 
+    /**
+     * Starts the simulate for every test case and compared with the response recorded before
+     * @param testrunId - test run id
+     * @param tc - test case object
+     * @return - Boolean whether pass or fail
+     */
     public static boolean check(String testrunId, Service.TestCase tc) {
         logger.debug("running test case with [{}] testrunId", testrunId);
 

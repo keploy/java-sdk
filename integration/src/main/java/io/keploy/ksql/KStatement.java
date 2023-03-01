@@ -10,6 +10,10 @@ import static io.keploy.ksql.KDriver.*;
 import static io.keploy.ksql.KResultSet.msg1;
 import static io.keploy.ksql.KResultSet.msg2;
 
+/**
+ * KStatement is a wrapper class for Statement used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KStatement implements Statement {
     public Statement wrappedStatement;
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(KStatement.class);

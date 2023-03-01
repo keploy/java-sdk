@@ -11,6 +11,10 @@ import java.sql.*;
 import java.util.*;
 import java.util.logging.Logger;
 
+/**
+ * KDriver is a wrapper class for Driver used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KDriver implements Driver {
     public Driver wrappedDriver;
 

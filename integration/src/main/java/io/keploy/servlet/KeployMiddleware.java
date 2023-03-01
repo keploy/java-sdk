@@ -31,6 +31,10 @@ import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * KeployMiddleware is a filter. This is where according to the keploy mode the service methods to capture test cases and
+ * to run tests
+ */
 public class KeployMiddleware implements Filter {
 
     private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);

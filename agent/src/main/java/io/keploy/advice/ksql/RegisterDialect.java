@@ -7,16 +7,27 @@ import net.bytebuddy.asm.Advice;
 import java.lang.reflect.Constructor;
 import java.util.Map;
 
+/**
+ * This class is used for intercepting constructor of JpaProperties class and Modify the value of a field to
+ *  on exit of that constructor method.
+ */
 public class RegisterDialect {
 
+    /**
+     * This method gets executed before the constructor of JpaProperties class.This does nothing as we don't
+     * want to change anything before the invocation of JpaProperties constructor.
+     */
     @Advice.OnMethodEnter
     static void enterMethods(@Advice.Origin Constructor constructor) throws Exception {
-//        System.out.println("Inside RegisterDialect Enter Advice: " + constructor);
     }
 
+    /**
+     * This method gets executed after constructor of JpaProperties class and modifies the value of field properties.
+     *
+     * @param properties - a field in JpaProperties class
+     */
     @Advice.OnMethodExit
     static void exitMethods(@Advice.Origin Constructor constructor, @Advice.FieldValue(readOnly = false, value = "properties") Map<String, String> properties) throws Exception {
-//        System.out.println("Inside RegisterDialect Exit Advice: " + constructor);
         properties.put("hibernate.dialect", KDriver.Dialect);
     }
 }

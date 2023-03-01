@@ -21,6 +21,10 @@ import org.apache.logging.log4j.Logger;
 import java.io.IOException;
 import java.util.*;
 
+
+/**
+ * TODO:Add java doc
+ */
 public class OkHttpInterceptor_Kotlin implements Interceptor {
     private static final Logger logger = LogManager.getLogger(OkHttpInterceptor_Kotlin.class);
 

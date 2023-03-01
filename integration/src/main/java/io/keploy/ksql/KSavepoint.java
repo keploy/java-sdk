@@ -8,6 +8,10 @@ import java.sql.Savepoint;
 import static io.keploy.ksql.KResultSet.msg1;
 import static io.keploy.ksql.KResultSet.msg2;
 
+/**
+ * KSavepoint is a wrapper class for Savepoint used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KSavepoint implements Savepoint {
 
     Savepoint wrappedSavepoint;
