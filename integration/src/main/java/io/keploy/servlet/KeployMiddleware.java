@@ -40,7 +40,7 @@ public class KeployMiddleware implements Filter {
     public static ArrayList<String> stackTraceArr = new ArrayList<>();
 
     public static AtomicInteger metCount = new AtomicInteger(0);
-    public static int reqCount = 0;
+    public static AtomicInteger reqCount = new AtomicInteger(0);
     public static AtomicInteger cnt = new AtomicInteger(0);
     public static AtomicInteger externalMet = new AtomicInteger(0);
 
@@ -459,21 +459,32 @@ public class KeployMiddleware implements Filter {
         InternalThreadLocalMap.destroy();
     }
 
-    public void getCoverage() throws IOException, InterruptedException {
-        System.out.println("getting Coverage please wait...");
-        String command1 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/jacoco-it" + reqCount + ".exec";
+
+    // do this in a separate thread - this can be asynchronus
+    public synchronized void getCoverage() throws IOException, InterruptedException {
+        reqCount.incrementAndGet();
+        new Thread(() -> {
+            System.out.println("getting Coverage please wait...");
+            String command1 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/final/samples-java/target/jacoco-it" + reqCount + ".exec";
 //        String command2 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar report /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/jacoco-it.exec --classfiles /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/classes/com --sourcefiles src/main/java/ --xml /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/report.xml";
 
-        try {
-            Process process = Runtime.getRuntime().exec(command1);
-            process.waitFor();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        reqCount++;
-        ExecDumpClient execDumpClient = new ExecDumpClient();
-        execDumpClient.setReset(true);
-        execDumpClient.dump("localhost", 36320);
+            try {
+                Process process = Runtime.getRuntime().exec(command1);
+                process.waitFor();
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            ExecDumpClient execDumpClient = new ExecDumpClient();
+            execDumpClient.setReset(true);
+            try {
+                execDumpClient.dump("localhost", 36320);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+
+        }).start();
+
     }
 
 }

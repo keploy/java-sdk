@@ -24,6 +24,7 @@ import static io.keploy.ksql.KDriver.*;
 import static io.keploy.ksql.KResultSetMetaData.PrecisionDict;
 import static io.keploy.ksql.KResultSetMetaData.ScaleDict;
 
+// Atomic integer ..
 public class KResultSet implements ResultSet {
     ResultSet wrappedResultSet;
 
