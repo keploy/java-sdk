@@ -39,32 +39,6 @@ public class JedisPoolResource_Advice {
             logger.debug("Keploy context is null");
             return false;
         } else {
-            // get DEPENDENCY from environment variable
-            // String listDependency = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
-            // logger.debug(listDependency);
-            // logger.debug(listDependency, kCtx.getDeps().get(0));
-
-            // Remove those dependencies from the list of dependencies in the context object 
-            // if the dependency is not in the list of dependencies from the environment variable
-            // if (listDependency != null) {
-            //     logger.debug("I have got dependencies to be excluded");
-            //     String[] listDependencyArray = listDependency.split(",");
-            //     for (int i = 0; i < kCtx.getDeps().size(); i++) {
-            //         Dependency dep = kCtx.getDeps().get(i);
-            //         boolean found = false;
-            //         for (int j = 0; j < listDependencyArray.length; j++) {
-            //             if (dep.getName().equals(listDependencyArray[j])) {
-            //                 logger.debug("Found !");
-            //                 found = true;
-            //                 break;
-            //             }
-            //         }
-            //         if (!found) {
-            //             kCtx.getDeps().remove(i);
-            //         }
-            //     }
-            // }
-
             return kCtx.getMode().equals(Mode.ModeType.MODE_TEST);
         }
     }

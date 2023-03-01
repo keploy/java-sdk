@@ -155,23 +155,7 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
-
-        // similar to denoise, but for mocking dependencies
-        // boolean dep_remove = k.getCfg().getServer().getRemoveDependency();
-        // if (dep_remove) {
-        //     removeDependency(id, testCaseReq);
-        // }
     }
-
-    // private static void removeDependency(String id, TestCaseReq testCaseReq) {
-    //     // remove the dependency that yser doesn't want in the test case
-    //     try {
-    //         TimeUnit.SECONDS.sleep(3);
-    //     } catch (InterruptedException e) {
-    //         logger.error(CROSS + " (removeDependency): unable to sleep", e);
-    //     }
-    // }
-
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
         // run the request again to find noisy fields
@@ -220,34 +204,13 @@ public class GrpcService {
         k.getMocktime().put(testCase.getId(), testCase.getCaptured());
 
         //add dependency to shared context
-        // first remove the excluded dependencies from the test case 
-        String listDependencyExcluded = System.getenv("DEPENDENCY"); // List of dependencies separated by comma
-
-        if (listDependencyExcluded != null) {
-            String[] listDependencyArray = listDependencyExcluded.split(",");
-            for (int i = 0; i < testCase.getDepsList().size(); i++) {
-                Dependency dep = testCase.getDepsList().get(i);
-                boolean found = false;
-                for (int j = 0; j < listDependencyArray.length; j++) {
-                    if (dep.getName().equals(listDependencyArray[j])) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    testCase.getDepsList().remove(i);
-                }
-            }
-        }
-
-        // testCase.getDepsList().remove(System.getenv("DEPENDENCY"));
         k.getDeps().put(testCase.getId(), new ArrayList<>(testCase.getDepsList()));
 
         executeSimulateRequest(testCase);
 
         Service.HttpResp.Builder resp = GetResp(testCase.getId());
 
-        k.getDeps().remove(testCase.getId()); // remove dependency from shared context (reem)
+        k.getDeps().remove(testCase.getId());
         k.getMocks().remove(testCase.getId());
         k.getMocktime().remove(testCase.getId());
 
