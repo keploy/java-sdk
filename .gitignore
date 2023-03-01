@@ -184,3 +184,5 @@ dependency-reduced-pom.xml
 
 pom.xml.versionsBackup
 sdk.iml
+
+*.iml

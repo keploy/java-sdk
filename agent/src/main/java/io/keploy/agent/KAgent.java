@@ -93,13 +93,14 @@ public class KAgent {
                 //for okhttp client interceptor upto version 2.7.5
                 .type(named(okhttp_java))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    // if the service (for e.g.: OKHTTP) is not set or set to true, then mock it
                     if (System.getenv("OKHTTP") == null || (System.getenv("OKHTTP") != null && Boolean.parseBoolean(System.getenv("OKHTTP"))) ) 
                     {
                         logger.debug("inside OkHttpInterceptor_Java transformer");
                         return builder
                                 .constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Java").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service  don't mock this service 
                     return builder; 
                 }))
                 //for okhttp client interceptor for version 3.0+
@@ -110,7 +111,7 @@ public class KAgent {
                         logger.debug("inside OkHttpInterceptor_Kotlin transformer");
                         return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Kotlin").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder; 
                 }))
 //                for apache client interceptor
@@ -147,7 +148,7 @@ public class KAgent {
                             return builder;
                         }
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 //for apache async-client interceptor
@@ -212,7 +213,7 @@ public class KAgent {
                                 .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
                                 .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 })
                 // for sql mocking
@@ -224,7 +225,7 @@ public class KAgent {
                         return builder.method(named("setDriverClassName"))
                                 .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 })
                 .type(named(jdbc))
@@ -235,7 +236,7 @@ public class KAgent {
                         return builder.method(named("determineDriverClassName"))
                                 .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 })
                 .type(named(jpaHibernate))
@@ -245,7 +246,7 @@ public class KAgent {
                         logger.debug("Inside HibernateProperties Transformer for setDdlAuto");
                         return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 })
                 .type(named(liquibase))
@@ -255,7 +256,7 @@ public class KAgent {
                         logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
                         return builder.method(named("setEnabled").and(takesArgument(0, Boolean.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 })
                 .type(named(jpaProperties))
@@ -265,7 +266,7 @@ public class KAgent {
                         logger.debug("Inside RegisterDialect Transformer");
                         return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 .type(named(health))
@@ -275,7 +276,7 @@ public class KAgent {
                         logger.debug("Inside HealthEndpoint Transformer");
                         return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 .type(named(proxyDB))
@@ -285,7 +286,7 @@ public class KAgent {
                         logger.debug("Inside DatabaseMetaData transformer");
                         return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 /*
@@ -300,7 +301,7 @@ public class KAgent {
                     {
                         return builder.method(named("getResource")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.redis.jedis.JedisPoolResource_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 /*
@@ -315,7 +316,7 @@ public class KAgent {
                     {
                         return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
                     }
-                    // if the env variable is set to false, then return builder; // do nothing
+                    // if the env variable is set to false, then return builder; // don't mock this service 
                     return builder;
                 }))
                 .installOn(instrumentation);
