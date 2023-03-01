@@ -11,6 +11,10 @@ import static io.keploy.ksql.KDriver.mode;
 import static io.keploy.ksql.KDriver.testMode;
 import static io.keploy.ksql.KResultSet.*;
 
+/**
+ * KResultSetMetaData is a wrapper class for ResultSetMetaData used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KResultSetMetaData implements ResultSetMetaData {
     ResultSetMetaData wrappedResultSetMetaData;
 

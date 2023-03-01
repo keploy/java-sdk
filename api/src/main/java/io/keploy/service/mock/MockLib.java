@@ -20,11 +20,19 @@ import java.util.List;
 import static io.keploy.service.GrpcService.blockingStub;
 import static io.keploy.service.mock.Config.*;
 
+/**
+ * This is a service class used by Mocking feature. This is the class where Java-sdk communicates with Keploy server to
+ * record/store tests and to perform testing.
+ */
 public class MockLib {
     private static final Logger logger = LogManager.getLogger(MockLib.class);
     static Keploy k = null;
     AppConfig appConfig = new AppConfig();
 
+    /**
+     * Initialising Keploy instance and GRPC server
+     * @param name - App name
+     */
     public MockLib(String name) {
         KeployInstance ki = KeployInstance.getInstance();
         k = ki.getKeploy();
@@ -48,11 +56,14 @@ public class MockLib {
         k.setCfg(cfg);
         new GrpcService();
 
-
         Kcontext ctx = NewContext();
         System.out.println(ctx);
     }
 
+    /**
+     * Set the context according to the Keploy mode i.e. if it is in test mode add all the mock data into the context
+     * @return - Kcontext
+     */
     public Kcontext NewContext() {
         mode = Mode.ModeType.MODE_TEST;
 
@@ -110,7 +121,16 @@ public class MockLib {
         return kctx;
     }
 
-
+    /**
+     * Checks whether the mock path is available or not.
+     *
+     * @param kctx - Kcontext
+     * @param path - mock path
+     * @param mode - Kelpoy mode
+     * @param name -  app name
+     * @param overWrite - determines to overwrite the exiting file or not
+     * @return - Boolean which determines whether file exists in that path or not
+     */
     public static boolean StartRecordingMocks(String path, String mode, String name, Boolean overWrite) {
         Service.StartMockReq startMockReq = Service.StartMockReq.newBuilder().setMode(mode).setPath(path).setName(name).setOverWrite(overWrite).build();
         Service.StartMockResp startMockResp = blockingStub.startMocking(startMockReq);
@@ -121,6 +141,12 @@ public class MockLib {
         return startMockResp.getExists();
     }
 
+    /**
+     * Gets all the mocks in the test mode from the server
+     *
+     * @param getMockReq - contains mock path and app name
+     * @return -  all the mocks that are recorded
+     */
     public static ArrayList<Service.Mock> GetAllMocks(Service.GetMockReq getMockReq) {
         final Service.getMockResp resp = blockingStub.getMocks(getMockReq);
         if (resp != null) {
@@ -143,6 +169,13 @@ public class MockLib {
         return mockArrayList;
     }
 
+    /**
+     * Send recorded mocks to the server
+     *
+     * @param path - folder path where mock should be stored
+     * @param mock - mock object
+     * @return -  Boolean that determines whether mocks are stored or not
+     */
     public static boolean PutMock(String path, Service.Mock mock) {
 
         Service.PutMockReq putMockReq = Service.PutMockReq.newBuilder().setMock(mock).setPath(path).build();

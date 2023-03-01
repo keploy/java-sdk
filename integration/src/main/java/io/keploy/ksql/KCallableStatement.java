@@ -15,6 +15,10 @@ import static io.keploy.ksql.KDriver.testMode;
 import static io.keploy.ksql.KResultSet.msg1;
 import static io.keploy.ksql.KResultSet.msg2;
 
+/**
+ * KCallableStatement is a wrapper class for CallableStatement used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KCallableStatement implements CallableStatement {
 
     CallableStatement wrappedCallableStatement;

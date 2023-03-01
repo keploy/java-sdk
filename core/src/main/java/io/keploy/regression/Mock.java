@@ -4,6 +4,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * Class to identify mock type
+ */
 @Getter
 @Setter
 @NoArgsConstructor

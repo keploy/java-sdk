@@ -8,6 +8,10 @@ import static io.keploy.ksql.KDriver.mode;
 import static io.keploy.ksql.KDriver.testMode;
 
 
+/**
+ * KDatabaseMetaData is a wrapper class for DatabaseMetaData used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KDatabaseMetaData implements DatabaseMetaData {
 
     public DatabaseMetaData wrappedDatabaseMetaData = null;

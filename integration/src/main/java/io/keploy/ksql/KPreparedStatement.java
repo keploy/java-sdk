@@ -15,6 +15,10 @@ import static io.keploy.ksql.KDriver.*;
 import static io.keploy.ksql.KResultSet.msg1;
 import static io.keploy.ksql.KResultSet.msg2;
 
+/**
+ * KPreparedStatement is a wrapper class for PreparedStatement used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KPreparedStatement implements PreparedStatement {
     PreparedStatement wrappedPreparedStatement;
     Kcontext kctx = null;

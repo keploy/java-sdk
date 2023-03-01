@@ -5,6 +5,9 @@ import io.keploy.regression.context.Context;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+/**
+ * Class for Keploy Mode
+ */
 public class Mode {
 
     private static final Logger logger = LogManager.getLogger(io.keploy.regression.Mode.class);
