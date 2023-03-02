@@ -14,7 +14,7 @@ import java.lang.reflect.Method;
 import java.util.Objects;
 
 /**
- * This class is used for intercepting method parseResponse of OkHttpPendingResult class and Records required data from
+ * This class is used for intercepting method parseResponse of OkHttpPendingResult class and to record required data from
  * the method
  */
 public class CustomGoogleResponseAdvice {

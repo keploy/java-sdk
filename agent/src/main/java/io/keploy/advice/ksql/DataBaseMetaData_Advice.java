@@ -1,20 +1,16 @@
 package io.keploy.advice.ksql;
 
-
-import io.keploy.advice.redis.jedis.JedisPoolResource_Advice;
 import io.keploy.ksql.KDatabaseMetaData;
 import net.bytebuddy.asm.Advice;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
 
 import java.lang.reflect.Constructor;
 import java.sql.DatabaseMetaData;
 
 
 /**
- * This class is used for intercepting constructor of NewProxyDatabaseMetaData class and replaces a value of a field to
+ * This class is used for intercepting constructor of NewProxyDatabaseMetaData class and to replace value of a field to
  * a custom value i.e. KDatabaseMetaData on exit of that constructor method.
  */
 public class DataBaseMetaData_Advice {

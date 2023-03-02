@@ -3,6 +3,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * Filter class to filter out few Headers and Urls while recording
+ */
 @Getter
 @Setter
 @NoArgsConstructor

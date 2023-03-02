@@ -34,9 +34,9 @@ import java.util.*;
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
 /**
- * This KAgent is a specially crafted file and entry point for instrumentation. It utilizes the Instrumentation API that
- * the JVM provides to alter existing byte-code that is loaded in a JVM. This runs before main class so whatever changes
- * we want to for running keploy in different modes are done here.
+ * This KAgent is a specially crafted Class and entry point for instrumentation. It utilizes the Instrumentation API that
+ * JVM provides to alter existing byte-code that is loaded in a JVM. This runs before main class. so whatever changes
+ * that are needed for running keploy in different modes are done here.
  */
 public class KAgent {
 
@@ -45,10 +45,11 @@ public class KAgent {
     /**
      * premain is the method which runs before main. This will statically load the agent using -javaagent parameter at
      * JVM startup
-     * @param arg - It is a String that can be used to pass arguments to the agent. These arguments can be used to
-     *            configure the behavior of the agent.
+     *
+     * @param arg             - It is a String that can be used to pass arguments to the agent. These arguments can be used to
+     *                        configure the behavior of the agent.
      * @param instrumentation - It is an instance of the Instrumentation class, which provides a mechanism for the agent
-     *                       to inspect and modify the byte code of classes that are loaded into the JVM.
+     *                        to inspect and modify the byte code of classes that are loaded into the JVM.
      */
     public static void premain(String arg, Instrumentation instrumentation) {
 
@@ -77,7 +78,7 @@ public class KAgent {
                 /*
                   Transformer for okhttp client up to version 2.7.5. This transformer intercepts and runs
                   OkHttpAdvice_Java Advice before and after the execution of OkHttpClient class constructor.
-                  OkHttpAdvice_Java Advice will modify things according to the Keploy mode and allows to record test,
+                  OkHttpAdvice_Java Advice will modify things according to the Keploy mode and allows to record tests,
                   mocks and test them.
                  */
                 .type(named(okhttp_java))
@@ -90,7 +91,7 @@ public class KAgent {
                 /*
                   Transformer for okhttp client for version 3.0+. This transformer intercepts and runs
                   OkHttpAdvice_Kotlin Advice before and after the execution of OkHttpClient$Builder class constructor.
-                  OkHttpAdvice_Kotlin Advice will modify things according to the Keploy mode and allows to record test,
+                  OkHttpAdvice_Kotlin Advice will modify things according to the Keploy mode and allows to record tests,
                   mocks and test them.
                  */
                 .type(named(okhttpClientBuilder))
@@ -173,7 +174,7 @@ public class KAgent {
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
                     return builder.method(named("setEnabled")
-                            .and(takesArgument(0, Boolean.class)))
+                                    .and(takesArgument(0, Boolean.class)))
                             .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 })
                 .type(named("org.springframework.boot.autoconfigure.orm.jpa.JpaProperties"))
@@ -215,7 +216,7 @@ public class KAgent {
                  */
                 .type(named("redis.clients.jedis.BinaryClient"))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
+                    return getBuilderForClassWrapper(builder, "redis/clients/jedis/Connection", "io/keploy/redis/jedis/KConnection");
                 }))
 
                 // Interceptor for apache async-client
@@ -276,45 +277,45 @@ public class KAgent {
     }
 
     // TODO Add Java Doc
-    private static boolean isJUnitTest() {
-        for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
-            if (element.getClassName().startsWith("org.junit.")) {
-                return true;
-            }
-        }
-        return false;
-    }
+    // private static boolean isJUnitTest() {
+    //     for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
+    //         if (element.getClassName().startsWith("org.junit.")) {
+    //             return true;
+    //         }
+    //     }
+    //     return false;
+    // }
 
     // TODO Add Java Doc
-    protected static void setEnv(Map<String, String> newenv) throws Exception {
-        try {
-            Class<?> processEnvironmentClass = Class.forName("java.lang.ProcessEnvironment");
-            Field theEnvironmentField = processEnvironmentClass.getDeclaredField("theEnvironment");
-            theEnvironmentField.setAccessible(true);
-            Map<String, String> env = (Map<String, String>) theEnvironmentField.get(null);
-            env.putAll(newenv);
-            Field theCaseInsensitiveEnvironmentField = processEnvironmentClass.getDeclaredField("theCaseInsensitiveEnvironment");
-            theCaseInsensitiveEnvironmentField.setAccessible(true);
-            Map<String, String> cienv = (Map<String, String>) theCaseInsensitiveEnvironmentField.get(null);
-            cienv.putAll(newenv);
-        } catch (NoSuchFieldException e) {
-            Class[] classes = Collections.class.getDeclaredClasses();
-            Map<String, String> env = System.getenv();
-            for (Class cl : classes) {
-                if ("java.util.Collections$UnmodifiableMap".equals(cl.getName())) {
-                    Field field = cl.getDeclaredField("m");
-                    field.setAccessible(true);
-                    Object obj = field.get(env);
-                    Map<String, String> map = (Map<String, String>) obj;
-                    map.clear();
-                    map.putAll(newenv);
-                }
-            }
-        }
-    }
+    // protected static void setEnv(Map<String, String> newenv) throws Exception {
+    //     try {
+    //         Class<?> processEnvironmentClass = Class.forName("java.lang.ProcessEnvironment");
+    //         Field theEnvironmentField = processEnvironmentClass.getDeclaredField("theEnvironment");
+    //         theEnvironmentField.setAccessible(true);
+    //         Map<String, String> env = (Map<String, String>) theEnvironmentField.get(null);
+    //         env.putAll(newenv);
+    //         Field theCaseInsensitiveEnvironmentField = processEnvironmentClass.getDeclaredField("theCaseInsensitiveEnvironment");
+    //         theCaseInsensitiveEnvironmentField.setAccessible(true);
+    //         Map<String, String> cienv = (Map<String, String>) theCaseInsensitiveEnvironmentField.get(null);
+    //         cienv.putAll(newenv);
+    //     } catch (NoSuchFieldException e) {
+    //         Class[] classes = Collections.class.getDeclaredClasses();
+    //         Map<String, String> env = System.getenv();
+    //         for (Class cl : classes) {
+    //             if ("java.util.Collections$UnmodifiableMap".equals(cl.getName())) {
+    //                 Field field = cl.getDeclaredField("m");
+    //                 field.setAccessible(true);
+    //                 Object obj = field.get(env);
+    //                 Map<String, String> map = (Map<String, String>) obj;
+    //                 map.clear();
+    //                 map.putAll(newenv);
+    //             }
+    //         }
+    //     }
+    // }
 
     // A class will be replaced by another class in run time using this builder
-    private static Builder getBuilderForClassWrapper(Builder builder, String host , String guest) {
+    private static Builder getBuilderForClassWrapper(Builder builder, String host, String guest) {
         return builder.visit(
                 new AsmVisitorWrapper() {
                     @Override

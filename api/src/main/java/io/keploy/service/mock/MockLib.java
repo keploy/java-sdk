@@ -22,7 +22,7 @@ import static io.keploy.service.mock.Config.*;
 
 /**
  * This is a service class used by Mocking feature. This is the class where Java-sdk communicates with Keploy server to
- * record/store tests and to perform testing.
+ * record/store mocks and to perform mocking.
  */
 public class MockLib {
     private static final Logger logger = LogManager.getLogger(MockLib.class);

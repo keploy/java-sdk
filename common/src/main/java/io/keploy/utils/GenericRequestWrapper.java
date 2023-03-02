@@ -15,7 +15,10 @@ import javax.servlet.ServletInputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 
-
+/**
+ * GenericRequestWrapper is a wrapper over the request sent to the filter. So that the request data is cached/stored and
+ * not lost
+ */
 public class GenericRequestWrapper extends HttpServletRequestWrapper {
     private static final String FORM_CONTENT_TYPE = "application/x-www-form-urlencoded";
     private final ByteArrayOutputStream cachedContent;

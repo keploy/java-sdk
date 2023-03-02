@@ -6,7 +6,7 @@ import net.bytebuddy.asm.Advice;
 import java.lang.reflect.Method;
 
 /**
- * This class is used for intercepting method setDriverClassName of DataSourceProperties class and replaces a argument value to
+ * This class is used for intercepting method setDriverClassName of DataSourceProperties class and to replace an argument value to
  * a custom value on entry of setDriverClassName method.
  */
 public class RegisterDriverAdvice {

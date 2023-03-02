@@ -8,8 +8,8 @@ import java.lang.reflect.Constructor;
 import java.util.Map;
 
 /**
- * This class is used for intercepting constructor of JpaProperties class and Modify the value of a field to
- *  on exit of that constructor method.
+ * This class is used for intercepting constructor of JpaProperties class and to modify the value of a field value of
+ * the class on exit of that constructor method.
  */
 public class RegisterDialect {
 
@@ -22,7 +22,7 @@ public class RegisterDialect {
     }
 
     /**
-     * This method gets executed after constructor of JpaProperties class and modifies the value of field properties.
+     * This method gets executed after constructor of JpaProperties class and modifies the value of the field - properties.
      *
      * @param properties - a field in JpaProperties class
      */

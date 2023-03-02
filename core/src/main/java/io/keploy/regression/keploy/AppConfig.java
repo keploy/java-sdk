@@ -7,6 +7,9 @@ import lombok.Setter;
 
 import java.time.Duration;
 
+/**
+ * All the information regarding the user application are stored here
+ */
 @Getter
 @Setter
 @NoArgsConstructor

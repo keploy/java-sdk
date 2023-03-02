@@ -10,7 +10,7 @@ import java.lang.reflect.Constructor;
 
 
 /**
- * This class is used for intercepting constructor of OkHttpClient$Builder class and Adds a interceptor to its builder
+ * This class is used for intercepting constructor of OkHttpClient$Builder class and to add an interceptor to its builder
  */
 public class OkHttpAdvice_Kotlin {
 
