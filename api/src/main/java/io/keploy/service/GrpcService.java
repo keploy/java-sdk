@@ -189,7 +189,8 @@ public class GrpcService {
      * @return the boolean value which indicates if the test case url and header matches the acceptance regex
      */
     public static boolean doesFollowAcceptanceRegex(Service.TestCaseReq testCaseReq) {
-        boolean isIncluded = false;
+        boolean isIncludedUrl = false;
+        boolean isIncludedHeader = false;
         Filter filter = k.getCfg().getApp().getFilter();
 
         // get test case url regex
@@ -199,14 +200,14 @@ public class GrpcService {
             for (String value : filter.getAcceptUrlRegex()) {
                 Pattern pattern = Pattern.compile(value);
                 if (pattern.matcher(testCaseUrl).matches()) {
-                    isIncluded = true;
+                    isIncludedUrl = true;
                     break;
                 }
             }
         }
 
         // get test case header regex
-        if( !isIncluded && filter.getAcceptHeaderRegex() != null && filter.getAcceptHeaderRegex().length > 0) {
+        if (filter.getAcceptHeaderRegex() != null && filter.getAcceptHeaderRegex().length > 0) {
             // check if test case header match the regex
             Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
             for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
@@ -214,13 +215,14 @@ public class GrpcService {
                 for (String value : filter.getAcceptHeaderRegex()) {
                     Pattern pattern = Pattern.compile(value);
                     if (pattern.matcher(key).matches()) {
-                        isIncluded = true;
+                        isIncludedHeader = true;
                         break;
                     }
+                    if (isIncludedHeader) break;
                 }
             }
         }
-        return isIncluded;
+        return isIncludedUrl && isIncludedHeader;
     }
 
     /**
@@ -231,7 +233,8 @@ public class GrpcService {
      * @return the boolean value which indicates if the test case url and header matches the rejection regex
      */
     public static boolean doesFollowRejectionRegex(Service.TestCaseReq testCaseReq) {
-        boolean isExcluded = true;
+        boolean isExcludedHeader = true;
+        boolean isExcludedUrl = true;
         Filter filter = k.getCfg().getApp().getFilter();
 
         // get test case url regex
@@ -241,14 +244,14 @@ public class GrpcService {
             for (String value : filter.getRejectUrlRegex()) {
                 Pattern pattern = Pattern.compile(value);
                 if (pattern.matcher(testCaseUrl).matches()) {
-                    isExcluded = false;
+                    isExcludedUrl = false;
                     break;
                 }
             }
         }
 
         // get test case header regex
-        if( isExcluded && filter.getRejectHeaderRegex() != null && filter.getRejectHeaderRegex().length > 0) {
+        if (filter.getRejectHeaderRegex() != null && filter.getRejectHeaderRegex().length > 0) {
             // check if test case header match the regex
             Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
             for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
@@ -256,13 +259,14 @@ public class GrpcService {
                 for (String value : filter.getRejectHeaderRegex()) {
                     Pattern pattern = Pattern.compile(value);
                     if (pattern.matcher(key).matches()) {
-                        isExcluded = false;
+                        isExcludedHeader = false;
                         break;
                     }
                 }
+                if (!isExcludedHeader) break;
             }
         }
-        return isExcluded;
+        return isExcludedHeader && isExcludedUrl;
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
