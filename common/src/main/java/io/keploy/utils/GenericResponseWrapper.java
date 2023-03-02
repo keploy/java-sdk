@@ -6,6 +6,10 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpServletResponseWrapper;
 import java.io.*;
 
+/**
+ * GenericResponseWrapper is a wrapper over the Response sent to the filter. So that the response data is cached/stored and
+ * not lost
+ */
 public class GenericResponseWrapper extends HttpServletResponseWrapper {
     private ServletOutputStream outputStream;
     private PrintWriter writer;

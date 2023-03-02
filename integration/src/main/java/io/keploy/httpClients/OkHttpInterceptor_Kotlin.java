@@ -23,13 +23,20 @@ import java.util.*;
 
 
 /**
- * TODO:Add java doc
+ * This class is used for intercepting constructor of OkHttpClient$Builder class and the following method runs instead of
+ * the actual method and test cases and mocks are recorded and tested via this class.
  */
 public class OkHttpInterceptor_Kotlin implements Interceptor {
     private static final Logger logger = LogManager.getLogger(OkHttpInterceptor_Kotlin.class);
 
     private static final String CROSS = new String(Character.toChars(0x274C));
 
+    /**
+     * This method will get called instead of constructor of OkHttpClient$Builder
+     *
+     * @param chain -  original method client
+     * @return - Response object
+     */
     @Override
     public Response intercept(Chain chain) throws IOException {
 

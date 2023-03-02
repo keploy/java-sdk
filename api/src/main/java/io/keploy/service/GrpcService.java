@@ -142,7 +142,7 @@ public class GrpcService {
     }
 
     /**
-     * This method runs in threads asynchronously and sends request to Server
+     * This method runs in threads asynchronously and sends request to Server to capture tests and mocks
      * @param testCaseReqBuilder - test case object builder
      * @param formData -  form data from http request
      * @param httpReqBuilder - http request builder
@@ -164,7 +164,7 @@ public class GrpcService {
     }
 
     /**
-     * This sends the testcases to the server
+     * This method sends the testcases to the server
      * @param testCaseReq - test case object
      */
     public static void put(Service.TestCaseReq testCaseReq) {
@@ -313,7 +313,7 @@ public class GrpcService {
     }
 
     /**
-     * Denoising logic while recording test cases
+     * Denoising while recording test cases
      * @param id - test case id
      * @param testCaseReq -  test case object
      */
@@ -357,7 +357,7 @@ public class GrpcService {
     }
 
     /**
-     * Runs each test on client application by setting mocks and data in context.
+     * This method runs each test on client application in test mode by setting mocks and data in context.
      * @param testCase - test case object
      * @return - response for the test
      */

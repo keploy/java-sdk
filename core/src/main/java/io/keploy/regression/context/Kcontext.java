@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Class for Keploy context where all the data required by keploy is stored
+ * Class for Keploy context which provides all the configuration required by keploy
  */
 @Getter
 @Setter

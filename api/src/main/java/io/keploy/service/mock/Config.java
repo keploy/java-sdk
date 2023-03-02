@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * This is a config class for mocking feature which contains all the basic parameters required for mocking feature.
+ * This is a config class for mocking feature which provides all the configurations required for mocking feature.
  */
 public class Config {
 
