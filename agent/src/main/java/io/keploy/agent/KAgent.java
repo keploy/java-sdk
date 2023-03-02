@@ -42,7 +42,6 @@ public class KAgent {
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
 
-
         if (System.getenv("KEPLOY_MODE") != null && Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
         }
@@ -93,33 +92,41 @@ public class KAgent {
                 //for okhttp client interceptor upto version 2.7.5
                 .type(named(okhttp_java))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    logger.debug("inside OkHttpInterceptor_Java transformer");
+
                     // if the service (for e.g.: OKHTTP) is not set or set to true, then mock it
-                    if (System.getenv("OKHTTP") == null || (System.getenv("OKHTTP") != null && Boolean.parseBoolean(System.getenv("OKHTTP"))) ) 
+                    if (System.getenv("SKIP_MOCK_OKHTTP") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_OKHTTP")) ) 
                     {
-                        logger.debug("inside OkHttpInterceptor_Java transformer");
+                        logger.debug("mocking OKHTTP");
                         return builder
                                 .constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Java").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service  don't mock this service 
+                    logger.debug("skip mocking OKHTTP");
                     return builder; 
                 }))
                 //for okhttp client interceptor for version 3.0+
                 .type(named(okhttpClientBuilder))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("OKHTTP") == null || (System.getenv("OKHTTP") != null && Boolean.parseBoolean(System.getenv("OKHTTP"))) ) 
+
+                    logger.debug("inside OkHttpInterceptor_Kotlin transformer");
+
+                    if (System.getenv("SKIP_MOCK_OKHTTP") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_OKHTTP")) ) 
                     {
-                        logger.debug("inside OkHttpInterceptor_Kotlin transformer");
+                        logger.debug("mocking OKHTTP");
                         return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Kotlin").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking OKHTTP"); 
                     return builder; 
                 }))
 //                for apache client interceptor
                 .type(named(apacheClient))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("APACHE") == null || (System.getenv("APACHE") != null && Boolean.parseBoolean(System.getenv("APACHE"))) ) 
+
+                    logger.debug("inside ApacheInterceptor transformer");
+
+                    if (System.getenv("SKIP_MOCK_APACHE") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_APACHE")) ) 
                     {
-                        logger.debug("inside ApacheInterceptor transformer");
+                        logger.debug("mocking APACHE");
                         try {
                             String apacheInterceptor = "io.keploy.httpClients.ApacheInterceptor";
 
@@ -148,7 +155,7 @@ public class KAgent {
                             return builder;
                         }
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking APACHE");
                     return builder;
                 }))
                 //for apache async-client interceptor
@@ -206,87 +213,109 @@ public class KAgent {
                 //for google-maps-services
                 .type(named(okHttpPendingResult))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("GOOGLE_MAPS") == null || (System.getenv("GOOGLE_MAPS") != null && Boolean.parseBoolean(System.getenv("GOOGLE_MAPS"))) ) 
+
+                    logger.debug("inside GoogleMapsInterceptor transformer");
+
+                    if (System.getenv("SKIP_MOCK_GOOGLE_MAPS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_GOOGLE_MAPS")) ) 
                     {
-                        logger.debug("inside GoogleMapsInterceptor transformer");
+                        logger.debug("mocking google maps");
                         return builder
                                 .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
                                 .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking google maps");
                     return builder;
                 })
                 // for sql mocking
                 .type(named(jdbc))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside RegisterDriverAdvice1 Transformer");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside RegisterDriverAdvice1 Transformer");
+                        logger.debug("mocking sql RegisterDriverAdvice1");
                         return builder.method(named("setDriverClassName"))
                                 .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 })
                 .type(named(jdbc))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside RegisterDriverAdvice2 Transformer");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside RegisterDriverAdvice2 Transformer");
+                        logger.debug("mocking sql RegisterDriverAdvice2");
                         return builder.method(named("determineDriverClassName"))
                                 .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 })
                 .type(named(jpaHibernate))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+                    logger.debug("Inside HibernateProperties Transformer for setDdlAuto");
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside HibernateProperties Transformer for setDdlAuto");
+                        logger.debug("mocking sql HibernateProperties");
                         return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 })
                 .type(named(liquibase))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
+                        logger.debug("mocking sql LiquibaseProperties");
                         return builder.method(named("setEnabled").and(takesArgument(0, Boolean.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 })
                 .type(named(jpaProperties))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside RegisterDialect Transformer");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside RegisterDialect Transformer");
+                        logger.debug("mocking sql RegisterDialect");
                         return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 }))
                 .type(named(health))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside HealthEndpoint Transformer");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside HealthEndpoint Transformer");
+                        logger.debug("mocking sql HealthEndpoint");
                         return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql"); 
                     return builder;
                 }))
                 .type(named(proxyDB))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("SQL") == null || (System.getenv("SQL") != null && Boolean.parseBoolean(System.getenv("SQL"))) ) 
+
+                    logger.debug("Inside DatabaseMetaData transformer");
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
                     {
-                        logger.debug("Inside DatabaseMetaData transformer");
+                        logger.debug("mocking sql DatabaseMetaData");
                         return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking sql");
                     return builder;
                 }))
                 /*
@@ -297,11 +326,12 @@ public class KAgent {
                  */
                 .type(named(redisJedisPool))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("REDIS") == null || (System.getenv("REDIS") != null && Boolean.parseBoolean(System.getenv("REDIS"))) ) 
+                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) ) 
                     {
+                        logger.debug("mocking redis");
                         return builder.method(named("getResource")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.redis.jedis.JedisPoolResource_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking redis");
                     return builder;
                 }))
                 /*
@@ -312,11 +342,12 @@ public class KAgent {
                  */
                 .type(named(redisJedisBinary))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("REDIS") == null || (System.getenv("REDIS") != null && Boolean.parseBoolean(System.getenv("REDIS"))) ) 
+                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) ) 
                     {
+                        logger.debug("mocking redis");
                         return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
                     }
-                    // if the env variable is set to false, then return builder; // don't mock this service 
+                    logger.debug("skip mocking redis");
                     return builder;
                 }))
                 .installOn(instrumentation);

@@ -3,7 +3,6 @@ package io.keploy.httpClients;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.ProtocolStringList;
 import io.keploy.grpc.stubs.Service;
-import io.keploy.grpc.stubs.Service.Dependency;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
@@ -44,7 +43,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         Mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
 
         if (modeFromContext.equals(Mode.ModeType.MODE_OFF)) {
-            return chain.proceed(request); // don't intercept 
+            return chain.proceed(request); // calling original method 
         }
 
         String reqBody = getRequestBody(request);
@@ -112,7 +111,6 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 }
             case MODE_RECORD:
                 logger.debug("record mode");
-                logger.info("Record Mode");
 
                 response = chain.proceed(request);
 

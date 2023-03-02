@@ -1,6 +1,5 @@
 package io.keploy.advice.redis.jedis;
 
-import io.keploy.grpc.stubs.Service.Dependency;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;

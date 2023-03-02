@@ -17,5 +17,4 @@ public class ServerConfig {
         LicenseKey = licenseKey;
         Denoise = denoise;
     }
-
 }

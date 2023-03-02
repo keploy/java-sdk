@@ -5,8 +5,6 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.keploy.grpc.stubs.RegressionServiceGrpc;
 import io.keploy.grpc.stubs.Service;
-import io.keploy.grpc.stubs.Service.Dependency;
-import io.keploy.grpc.stubs.Service.TestCaseReq;
 import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
