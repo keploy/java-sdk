@@ -101,7 +101,7 @@ public class MockLib {
         }
         System.out.println(name + " -=-==-=-=-= " + mode.value);
         logger.info("Keploy created new mocking context in {} mode {}.If you dont see any logs about your dependencies below, your dependency/s are NOT wrapped.", mode, name);
-        boolean exists = StartRecordingMocks(kctx, mpath, mode.value, name, Config.Overwrite);
+        boolean exists = StartRecordingMocks(mpath + "/" + name + ".yaml", mode.value, name, Config.Overwrite);
         if (exists && !Config.Overwrite) {
             logger.error(" Keploy failed to record dependencies because yaml file already exists {} in directory: {}.", name, mpath);
             Config.MockId.put(name, true);
@@ -111,7 +111,7 @@ public class MockLib {
     }
 
 
-    public static boolean StartRecordingMocks(Kcontext kctx, String path, String mode, String name, Boolean overWrite) {
+    public static boolean StartRecordingMocks(String path, String mode, String name, Boolean overWrite) {
         Service.StartMockReq startMockReq = Service.StartMockReq.newBuilder().setMode(mode).setPath(path).setName(name).setOverWrite(overWrite).build();
         Service.StartMockResp startMockResp = blockingStub.startMocking(startMockReq);
         if (startMockResp == null) { // TODO - check how to handle this error
@@ -153,7 +153,6 @@ public class MockLib {
         }
         return true;
     }
-
 
 
 }
