@@ -160,7 +160,7 @@ java.lang.String defaultValue);
     private volatile java.lang.Object name_ = "";
     /**
      * <code>string Name = 1;</code>
-     * @return The name. //name of the dependency
+     * @return The name.
      */
     @java.lang.Override
     public java.lang.String getName() {
@@ -199,7 +199,7 @@ java.lang.String defaultValue);
     private volatile java.lang.Object type_ = "";
     /**
      * <code>string Type = 2;</code>
-     * @return The type. // type of the dependency
+     * @return The type.
      */
     @java.lang.Override
     public java.lang.String getType() {
