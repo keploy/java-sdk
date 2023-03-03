@@ -145,6 +145,12 @@ There are 3 modes:
       **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = false)
       **Note:** It is used to maintain the same database state when mocking is disabled.
+    - `SKIP_MOCK_OKHTTP`     for okhttp service to be mocked or not (default SKIP_MOCK_OKHTTP = false)
+    - `SKIP_MOCK_APACHE`     for apache service to be mocked or not (default SKIP_MOCK_APACHE = false)
+    - `SKIP_MOCK_GOOGLE_MAPS`  for google_maps service to be mocked or not (default SKIP_MOCK_GOOGLE_MAPS = false)
+    - `SKIP_MOCK_SQL`   	for sql service to be mocked or not (default SKIP_MOCK_SQL = false)
+    - `SKIP_MOCK_REDIS`          for redis service to be mocked or not (default SKIP_MOCK_REDIS = false)
+
 
 
 - **Generate testcases**

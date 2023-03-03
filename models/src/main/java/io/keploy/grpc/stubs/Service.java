@@ -417,7 +417,7 @@ java.lang.String defaultValue) {
     }
 
     @java.lang.Override
-    public boolean equals(final java.lang.Object obj) {
+    public boolean equals(final java.lang.Object obj) { // this function checks if the object is equal to the current object
       if (obj == this) {
        return true;
       }
@@ -439,7 +439,7 @@ java.lang.String defaultValue) {
     }
 
     @java.lang.Override
-    public int hashCode() {
+    public int hashCode() { // need hashcode function to be able to use the dependency object as a key in a map
       if (memoizedHashCode != 0) {
         return memoizedHashCode;
       }

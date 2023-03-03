@@ -43,7 +43,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
         Mode.ModeType modeFromContext = kctx.getMode().getModeFromContext();
 
         if (modeFromContext.equals(Mode.ModeType.MODE_OFF)) {
-            return chain.proceed(request);
+            return chain.proceed(request); // calling original method 
         }
 
         String reqBody = getRequestBody(request);
@@ -113,6 +113,7 @@ public class OkHttpInterceptor_Kotlin implements Interceptor {
                 logger.debug("record mode");
 
                 response = chain.proceed(request);
+
                 String responseBody = getResponseBody(response);
                 int statuscode = response.code();
                 String statusMsg = HttpStatusReasons.getStatusMsg(statuscode);

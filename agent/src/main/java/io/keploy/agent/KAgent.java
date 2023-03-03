@@ -41,6 +41,7 @@ public class KAgent {
 
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
+
         if (System.getenv("KEPLOY_MODE") != null && Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
         }
@@ -71,6 +72,15 @@ public class KAgent {
         String okhttp_java = "com.squareup.okhttp.OkHttpClient";
         String internalhttpasyncClient = "org.apache.http.impl.nio.client.InternalHttpAsyncClient";
         String okHttpPendingResult = "com.google.maps.internal.OkHttpPendingResult";
+        String jdbc = "org.springframework.boot.autoconfigure.jdbc.DataSourceProperties";
+        String jpaHibernate= "org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties";
+        String liquibase = "org.springframework.boot.autoconfigure.liquibase.LiquibaseProperties";
+        String jpaProperties ="org.springframework.boot.autoconfigure.orm.jpa.JpaProperties";
+        String health = "org.springframework.boot.actuate.health.Health$Builder";
+        String proxyDB = "com.mchange.v2.c3p0.impl.NewProxyDatabaseMetaData";
+        String redisJedisPool = "redis.clients.jedis.JedisPool";
+        String redisJedisBinary = "redis.clients.jedis.BinaryClient";
+        // String mongo= "org.springframework.boot.autoconfigure.data.mongo.MongoDataProperties"; //TODO: add mongo support
 
 
         new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
@@ -83,46 +93,70 @@ public class KAgent {
                 .type(named(okhttp_java))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("inside OkHttpInterceptor_Java transformer");
-                    return builder
-                            .constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Java").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    // if the service (for e.g.: OKHTTP) is not set or set to true, then mock it
+                    if (System.getenv("SKIP_MOCK_OKHTTP") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_OKHTTP")) ) 
+                    {
+                        logger.debug("mocking OKHTTP");
+                        return builder
+                                .constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Java").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking OKHTTP");
+                    return builder; 
                 }))
                 //for okhttp client interceptor for version 3.0+
                 .type(named(okhttpClientBuilder))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("inside OkHttpInterceptor_Kotlin transformer");
-                    return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Kotlin").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_OKHTTP") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_OKHTTP")) ) 
+                    {
+                        logger.debug("mocking OKHTTP");
+                        return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.OkHttpAdvice_Kotlin").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking OKHTTP"); 
+                    return builder; 
                 }))
 //                for apache client interceptor
                 .type(named(apacheClient))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("inside ApacheInterceptor transformer");
-                    try {
-                        String apacheInterceptor = "io.keploy.httpClients.ApacheInterceptor";
 
-                        ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
-                        new ClassFileLocator.Compound(ClassFileLocator.ForClassLoader.of(contextClassLoader),
-                                ClassFileLocator.ForClassLoader.ofSystemLoader());
-                        TypePool.Resolution resolution = TypePool.Default.of(ClassFileLocator.ForClassLoader.of(contextClassLoader)).describe(apacheInterceptor);
+                    if (System.getenv("SKIP_MOCK_APACHE") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_APACHE")) ) 
+                    {
+                        logger.debug("mocking APACHE");
+                        try {
+                            String apacheInterceptor = "io.keploy.httpClients.ApacheInterceptor";
 
-                        String request = "org.apache.http.client.methods.HttpUriRequest";
-                        String context = "org.apache.http.protocol.HttpContext";
-                        String host = "org.apache.http.HttpHost";
+                            ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
+                            new ClassFileLocator.Compound(ClassFileLocator.ForClassLoader.of(contextClassLoader),
+                                    ClassFileLocator.ForClassLoader.ofSystemLoader());
+                            TypePool.Resolution resolution = TypePool.Default.of(ClassFileLocator.ForClassLoader.of(contextClassLoader)).describe(apacheInterceptor);
 
-                        String response = "org.apache.http.client.methods.CloseableHttpResponse";
+                            String request = "org.apache.http.client.methods.HttpUriRequest";
+                            String context = "org.apache.http.protocol.HttpContext";
+                            String host = "org.apache.http.HttpHost";
 
-                        ElementMatcher.Junction<MethodDescription> md1 = takesArgument(0, named(request)).and(takesArgument(1, named(context)));
-                        ElementMatcher.Junction<MethodDescription> md2 = takesArgument(0, named(host)).and(takesArgument(1, named(request)));
-                        ElementMatcher.Junction<MethodDescription> md3 = takesArgument(0, named(host)).and(takesArgument(1, named(request))).and(takesArgument(2, named(context)));
+                            String response = "org.apache.http.client.methods.CloseableHttpResponse";
 
-                        return builder.method(named("execute").and(md1.or(md2).or(md3))
-                                        .and(returns(isSubTypeOf(HttpResponse.class))))
-//                                .intercept(MethodDelegation.to(resolution.resolve())); // contains spring class loader also.
-                                .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe(apacheInterceptor).resolve()));
-                    } catch (Exception e) {
-                        logger.error("unable to intercept apache client");
-                        e.printStackTrace();
-                        return builder;
+                            ElementMatcher.Junction<MethodDescription> md1 = takesArgument(0, named(request)).and(takesArgument(1, named(context)));
+                            ElementMatcher.Junction<MethodDescription> md2 = takesArgument(0, named(host)).and(takesArgument(1, named(request)));
+                            ElementMatcher.Junction<MethodDescription> md3 = takesArgument(0, named(host)).and(takesArgument(1, named(request))).and(takesArgument(2, named(context)));
+
+                            return builder.method(named("execute").and(md1.or(md2).or(md3))
+                                            .and(returns(isSubTypeOf(HttpResponse.class))))
+    //                                .intercept(MethodDelegation.to(resolution.resolve())); // contains spring class loader also.
+                                    .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe(apacheInterceptor).resolve()));
+                        } catch (Exception e) {
+                            logger.error("unable to intercept apache client");
+                            e.printStackTrace();
+                            return builder;
+                        }
                     }
+                    logger.debug("skip mocking APACHE");
+                    return builder;
                 }))
                 //for apache async-client interceptor
 //                .type(named(asyncApacheClient))
@@ -179,48 +213,110 @@ public class KAgent {
                 //for google-maps-services
                 .type(named(okHttpPendingResult))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("inside GoogleMapsInterceptor transformer");
-                    return builder
-                            .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
-                            .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_GOOGLE_MAPS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_GOOGLE_MAPS")) ) 
+                    {
+                        logger.debug("mocking google maps");
+                        return builder
+                                .method(named("await")).intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.googleMaps.GoogleMapsInterceptor").resolve()))
+                                .method(named("parseResponse")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.CustomGoogleResponseAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking google maps");
+                    return builder;
                 })
                 // for sql mocking
-                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .type(named(jdbc))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("Inside RegisterDriverAdvice1 Transformer");
-                    return builder.method(named("setDriverClassName"))
-                            .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql RegisterDriverAdvice1");
+                        return builder.method(named("setDriverClassName"))
+                                .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 })
-                .type(named("org.springframework.boot.autoconfigure.jdbc.DataSourceProperties"))
+                .type(named(jdbc))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("Inside RegisterDriverAdvice2 Transformer");
-                    return builder.method(named("determineDriverClassName"))
-                            .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql RegisterDriverAdvice2");
+                        return builder.method(named("determineDriverClassName"))
+                                .intercept(MethodDelegation.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDriverAdvice_Interceptor").resolve()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 })
-                .type(named("org.springframework.boot.autoconfigure.orm.jpa.HibernateProperties"))
+                .type(named(jpaHibernate))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
                     logger.debug("Inside HibernateProperties Transformer for setDdlAuto");
-                    return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql HibernateProperties");
+                        return builder.method(named("setDdlAuto").and(takesArgument(0, String.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetDdlAuto_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 })
-                .type(named("org.springframework.boot.autoconfigure.liquibase.LiquibaseProperties"))
+                .type(named(liquibase))
                 .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("Inside LiquibaseProperties Transformer for setEnabled");
-                    return builder.method(named("setEnabled").and(takesArgument(0, Boolean.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql LiquibaseProperties");
+                        return builder.method(named("setEnabled").and(takesArgument(0, Boolean.class))).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.SetEnabled_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 })
-                .type(named("org.springframework.boot.autoconfigure.orm.jpa.JpaProperties"))
+                .type(named(jpaProperties))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+
                     logger.debug("Inside RegisterDialect Transformer");
-                    return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql RegisterDialect");
+                        return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.RegisterDialect").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 }))
-                .type(named("org.springframework.boot.actuate.health.Health$Builder"))
+                .type(named(health))
                 .transform(((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+
                     logger.debug("Inside HealthEndpoint Transformer");
-                    return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql HealthEndpoint");
+                        return builder.method(named("withDetail")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.HealthCheckInterceptor").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql"); 
+                    return builder;
                 }))
-                .type(named("com.mchange.v2.c3p0.impl.NewProxyDatabaseMetaData"))
+                .type(named(proxyDB))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
+
                     logger.debug("Inside DatabaseMetaData transformer");
-                    return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+
+                    if (System.getenv("SKIP_MOCK_SQL") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_SQL")) ) 
+                    {
+                        logger.debug("mocking sql DatabaseMetaData");
+                        return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking sql");
+                    return builder;
                 }))
                 /*
                   Intercepting getResource method of JedisPool. getResource is a method where the redis client(Jedis)
@@ -228,9 +324,15 @@ public class KAgent {
                   established when Keploy is in TEST_MODE this method should be intercepted and return a Jedis object
                   without checking connection.
                  */
-                .type(named("redis.clients.jedis.JedisPool"))
+                .type(named(redisJedisPool))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    return builder.method(named("getResource")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.redis.jedis.JedisPoolResource_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) ) 
+                    {
+                        logger.debug("mocking redis");
+                        return builder.method(named("getResource")).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.redis.jedis.JedisPoolResource_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
+                    }
+                    logger.debug("skip mocking redis");
+                    return builder;
                 }))
                 /*
                   The whole logic and connection with Redis Server boils down to one Class that is Connection. But
@@ -238,9 +340,15 @@ public class KAgent {
                   interceptor wraps the super class of BinaryClient i.e. Connection . As a final result BinaryClient
                   will be extended to a wrapped class of Connection.
                  */
-                .type(named("redis.clients.jedis.BinaryClient"))
+                .type(named(redisJedisBinary))
                 .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
+                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) ) 
+                    {
+                        logger.debug("mocking redis");
+                        return getBuilderForClassWrapper(builder,"redis/clients/jedis/Connection","io/keploy/redis/jedis/KConnection");
+                    }
+                    logger.debug("skip mocking redis");
+                    return builder;
                 }))
                 .installOn(instrumentation);
     }
