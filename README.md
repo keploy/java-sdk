@@ -153,6 +153,12 @@ There are 3 modes:
       **Note:** A list of regex which is used to filter out the urls which are required to be recorded and by default it is empty list.
     - `REJECT_HEADER_REGEX_LIST`  (default REJECT_HEADER_REGEX_LIST = [])
       **Note:** A list of regex which is used to filter out the headers which are required to be recorded and by default it is empty list.
+    - `SKIP_MOCK_OKHTTP`     for okhttp service to be mocked or not (default SKIP_MOCK_OKHTTP = false)
+    - `SKIP_MOCK_APACHE`     for apache service to be mocked or not (default SKIP_MOCK_APACHE = false)
+    - `SKIP_MOCK_GOOGLE_MAPS`  for google_maps service to be mocked or not (default SKIP_MOCK_GOOGLE_MAPS = false)
+    - `SKIP_MOCK_SQL`   	for sql service to be mocked or not (default SKIP_MOCK_SQL = false)
+    - `SKIP_MOCK_REDIS`          for redis service to be mocked or not (default SKIP_MOCK_REDIS = false)
+
 
 - **Generate testcases**
     - To generate/capture TestCases set and run your application.
