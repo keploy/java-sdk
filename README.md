@@ -145,7 +145,14 @@ There are 3 modes:
       **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = false)
       **Note:** It is used to maintain the same database state when mocking is disabled.
-
+    - `ACCEPT_URL_REGEX_LIST`  (default ACCEPT_URL_REGEX_LIST = [])
+      **Note:** A list of regex which is used to filter out the urls which are not required to be recorded and by default it is empty list.
+    - `ACCEPT_HEADER_REGEX_LIST`  (default ACCEPT_HEADER_REGEX_LIST = [])
+      **Note:** A list of regex which is used to filter out the headers which are not required to be recorded and by default it is empty list.
+    - `REJECT_URL_REGEX_LIST`  (default REJECT_URL_REGEX_LIST = [])
+      **Note:** A list of regex which is used to filter out the urls which are required to be recorded and by default it is empty list.
+    - `REJECT_HEADER_REGEX_LIST`  (default REJECT_HEADER_REGEX_LIST = [])
+      **Note:** A list of regex which is used to filter out the headers which are required to be recorded and by default it is empty list.
 
 - **Generate testcases**
     - To generate/capture TestCases set and run your application.
