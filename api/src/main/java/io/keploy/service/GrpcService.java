@@ -148,6 +148,7 @@ public class GrpcService {
         try {
             // if no filter is added or the test request should be excluded then return
             if (k.getCfg().getApp().getFilter() != null && !isValidTestCaseToBeRecorded(testCaseReq)) return;
+            logger.debug("record test case");
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error(CROSS + " failed to send testcase to backend, please ensure keploy server is up!", e);
@@ -189,9 +190,9 @@ public class GrpcService {
      * @return the boolean value which indicates if the test case url and header matches the acceptance regex
      */
     public static boolean doesFollowAcceptanceRegex(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
         boolean isIncludedUrl = false;
         boolean isIncludedHeader = false;
-        Filter filter = k.getCfg().getApp().getFilter();
 
         // get test case url regex
         if (filter.getAcceptUrlRegex() != null && filter.getAcceptUrlRegex().length > 0) {
@@ -199,7 +200,9 @@ public class GrpcService {
             String testCaseUrl = testCaseReq.getHttpReq().getURL();
             for (String value : filter.getAcceptUrlRegex()) {
                 Pattern pattern = Pattern.compile(value);
-                if (pattern.matcher(testCaseUrl).matches()) {
+                logger.debug("accept url regex: " + value);
+                logger.debug("test case url: " + testCaseUrl);
+                if (pattern.matcher(testCaseUrl).find()) {
                     isIncludedUrl = true;
                     break;
                 }
@@ -212,9 +215,13 @@ public class GrpcService {
             Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
             for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
                 String key = entry.getKey();
-                for (String value : filter.getAcceptHeaderRegex()) {
-                    Pattern pattern = Pattern.compile(value);
-                    if (pattern.matcher(key).matches()) {
+                Service.StrArr value = entry.getValue();
+                String header = key + ": " + value.getValueList().get(0);
+                for (String regex : filter.getAcceptHeaderRegex()) {
+                    Pattern pattern = Pattern.compile(regex);
+                    logger.debug("accept header regex: " + regex);
+                    logger.debug("test case header: " + header);
+                    if (pattern.matcher(header).find()) {
                         isIncludedHeader = true;
                         break;
                     }
@@ -222,6 +229,9 @@ public class GrpcService {
                 }
             }
         }
+
+        logger.debug("isIncludedUrl: " + isIncludedUrl);
+        logger.debug("isIncludedHeader: " + isIncludedHeader);
         return isIncludedUrl && isIncludedHeader;
     }
 
@@ -233,18 +243,20 @@ public class GrpcService {
      * @return the boolean value which indicates if the test case url and header matches the rejection regex
      */
     public static boolean doesFollowRejectionRegex(Service.TestCaseReq testCaseReq) {
-        boolean isExcludedHeader = true;
-        boolean isExcludedUrl = true;
         Filter filter = k.getCfg().getApp().getFilter();
-
+        boolean isExcludedHeader = false;
+        boolean isExcludedUrl = false;
+        
         // get test case url regex
         if (filter.getRejectUrlRegex() != null && filter.getRejectUrlRegex().length > 0) {
             // check if test case url match the regex
             String testCaseUrl = testCaseReq.getHttpReq().getURL();
             for (String value : filter.getRejectUrlRegex()) {
                 Pattern pattern = Pattern.compile(value);
-                if (pattern.matcher(testCaseUrl).matches()) {
-                    isExcludedUrl = false;
+                logger.debug("reject url regex: " + value);
+                logger.debug("test case url: " + testCaseUrl);
+                if (pattern.matcher(testCaseUrl).find()) {
+                    isExcludedUrl = true;
                     break;
                 }
             }
@@ -256,16 +268,23 @@ public class GrpcService {
             Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
             for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
                 String key = entry.getKey();
-                for (String value : filter.getRejectHeaderRegex()) {
-                    Pattern pattern = Pattern.compile(value);
-                    if (pattern.matcher(key).matches()) {
-                        isExcludedHeader = false;
+                Service.StrArr value = entry.getValue();
+                String header = key + ": " + value.getValueList().get(0);
+                for (String regex : filter.getRejectHeaderRegex()) {
+                    Pattern pattern = Pattern.compile(regex);
+                    logger.debug("reject header regex: " + regex);
+                    logger.debug("test case header: " + header);
+                    if (pattern.matcher(header).find()) {
+                        isExcludedHeader = true;
                         break;
                     }
                 }
-                if (!isExcludedHeader) break;
+
+                if (isExcludedHeader) break;
             }
         }
+        logger.debug("isExcludedUrl: " + isExcludedUrl);
+        logger.debug("isExcludedHeader: " + isExcludedHeader);
         return isExcludedHeader && isExcludedUrl;
     }
 

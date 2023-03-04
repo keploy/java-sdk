@@ -122,6 +122,22 @@ public class KeployMiddleware implements Filter {
             serverConfig.setURL(keploy_url);
         }
 
+        logger.info("fetching filter from env variables");
+        // read a list from env variable then store them in filter of this keploy instance
+        String[] acceptUrlRegexList = System.getenv().get("ACCEPT_URL_REGEX_LIST") != null ?
+                System.getenv().get("ACCEPT_URL_REGEX_LIST").split(",") : null;
+
+        String[] acceptHeaderRegexList = System.getenv().get("ACCEPT_HEADER_REGEX_LIST") != null ?
+                System.getenv().get("ACCEPT_HEADER_REGEX_LIST").split(",") : null;
+
+        String[] rejectUrlRegexList = System.getenv().get("REJECT_URL_REGEX_LIST") != null ?
+                System.getenv().get("REJECT_URL_REGEX_LIST").split(",") : null;
+
+        String[] rejectHeaderRegexList = System.getenv().get("REJECT_HEADER_REGEX_LIST") != null ?
+                System.getenv().get("REJECT_HEADER_REGEX_LIST").split(",") : null;
+        io.keploy.regression.keploy.Filter filter = new io.keploy.regression.keploy.Filter(acceptUrlRegexList, acceptHeaderRegexList, rejectHeaderRegexList, rejectUrlRegexList);
+        appConfig.setFilter(filter);
+
         cfg.setApp(appConfig);
         cfg.setServer(serverConfig);
         kp.setCfg(cfg);
