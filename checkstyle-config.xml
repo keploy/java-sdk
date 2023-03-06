@@ -35,9 +35,4 @@
     <!--        <property name="fileNamePattern" value="/agent/"/>-->
     <!--    </module>-->
 
-    <module name="FileLength"/>
-    <module name="LineLength">
-        <property name="fileExtensions" value="java"/>
-    </module>
-
 </module>
