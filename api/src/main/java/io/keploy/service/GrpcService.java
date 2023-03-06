@@ -9,6 +9,7 @@ import io.keploy.regression.KeployInstance;
 import io.keploy.regression.Mode;
 import io.keploy.regression.context.Context;
 import io.keploy.regression.context.Kcontext;
+import io.keploy.regression.keploy.Filter;
 import io.keploy.regression.keploy.Keploy;
 import io.keploy.utils.AssertKTests;
 import io.keploy.utils.MultipartContent;
@@ -32,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import static io.keploy.regression.Mock.Kind.HTTP_EXPORT;
 import static io.keploy.utils.Utility.createFolder;
@@ -136,9 +138,17 @@ public class GrpcService {
         }).start();
     }
 
+    /**
+     * Put. This method is used to send the test case to backend
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case
+     */
     public static void put(Service.TestCaseReq testCaseReq) {
         Service.postTCResponse postTCResponse;
         try {
+            // if no filter is added or the test request should be excluded then return
+            if (k.getCfg().getApp().getFilter() != null && !isValidTestCaseToBeRecorded(testCaseReq)) return;
+            logger.debug("record test case");
             postTCResponse = blockingStub.postTC(testCaseReq);
         } catch (Exception e) {
             logger.error(CROSS + " failed to send testcase to backend, please ensure keploy server is up!", e);
@@ -153,6 +163,129 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
+    }
+
+    /**
+     * Is valid test case to be recorded boolean.
+     * This method is used to check if the test case should be recorded or discarded.
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case
+     * @return the boolean value which indicates if the test case should be recorded or discarded
+     */
+    public static boolean isValidTestCaseToBeRecorded(Service.TestCaseReq testCaseReq) {
+        // acc    rej        record/discard
+        // true   true   =>  discard
+        // true   false  =>  record
+        // false  true   =>  discard
+        // false  false  =>  discard
+        return doesFollowAcceptanceRegex(testCaseReq) && !doesFollowRejectionRegex(testCaseReq);
+
+    }
+
+    /**
+     * Does follow acceptance regex boolean.
+     * This method is used to check if the test case url and header matches the acceptance regex.
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case
+     * @return the boolean value which indicates if the test case url and header matches the acceptance regex
+     */
+    public static boolean doesFollowAcceptanceRegex(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
+        boolean isIncludedUrl = false;
+        boolean isIncludedHeader = false;
+
+        // get test case url regex
+        if (filter.getAcceptUrlRegex() != null && filter.getAcceptUrlRegex().length > 0) {
+            // check if test case url match the regex
+            String testCaseUrl = testCaseReq.getHttpReq().getURL();
+            for (String value : filter.getAcceptUrlRegex()) {
+                Pattern pattern = Pattern.compile(value);
+                logger.debug("accept url regex: " + value);
+                logger.debug("test case url: " + testCaseUrl);
+                if (pattern.matcher(testCaseUrl).find()) {
+                    isIncludedUrl = true;
+                    break;
+                }
+            }
+        }
+
+        // get test case header regex
+        if (filter.getAcceptHeaderRegex() != null && filter.getAcceptHeaderRegex().length > 0) {
+            // check if test case header match the regex
+            Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
+            for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
+                String key = entry.getKey();
+                Service.StrArr value = entry.getValue();
+                String header = key + ": " + value.getValueList().get(0);
+                for (String regex : filter.getAcceptHeaderRegex()) {
+                    Pattern pattern = Pattern.compile(regex);
+                    logger.debug("accept header regex: " + regex);
+                    logger.debug("test case header: " + header);
+                    if (pattern.matcher(header).find()) {
+                        isIncludedHeader = true;
+                        break;
+                    }
+                    if (isIncludedHeader) break;
+                }
+            }
+        }
+
+        logger.debug("isIncludedUrl: " + isIncludedUrl);
+        logger.debug("isIncludedHeader: " + isIncludedHeader);
+        return isIncludedUrl && isIncludedHeader;
+    }
+
+    /**
+     * Does follow rejection regex boolean.
+     * This method is used to check if the test case url and header matches the rejection regex.
+     *
+     * @param testCaseReq the test case req object which contains all the information about the test case.
+     * @return the boolean value which indicates if the test case url and header matches the rejection regex
+     */
+    public static boolean doesFollowRejectionRegex(Service.TestCaseReq testCaseReq) {
+        Filter filter = k.getCfg().getApp().getFilter();
+        boolean isExcludedHeader = false;
+        boolean isExcludedUrl = false;
+        
+        // get test case url regex
+        if (filter.getRejectUrlRegex() != null && filter.getRejectUrlRegex().length > 0) {
+            // check if test case url match the regex
+            String testCaseUrl = testCaseReq.getHttpReq().getURL();
+            for (String value : filter.getRejectUrlRegex()) {
+                Pattern pattern = Pattern.compile(value);
+                logger.debug("reject url regex: " + value);
+                logger.debug("test case url: " + testCaseUrl);
+                if (pattern.matcher(testCaseUrl).find()) {
+                    isExcludedUrl = true;
+                    break;
+                }
+            }
+        }
+
+        // get test case header regex
+        if (filter.getRejectHeaderRegex() != null && filter.getRejectHeaderRegex().length > 0) {
+            // check if test case header match the regex
+            Map<String, Service.StrArr> headerMap = testCaseReq.getHttpReq().getHeaderMap();
+            for (Map.Entry<String, Service.StrArr> entry : headerMap.entrySet()) {
+                String key = entry.getKey();
+                Service.StrArr value = entry.getValue();
+                String header = key + ": " + value.getValueList().get(0);
+                for (String regex : filter.getRejectHeaderRegex()) {
+                    Pattern pattern = Pattern.compile(regex);
+                    logger.debug("reject header regex: " + regex);
+                    logger.debug("test case header: " + header);
+                    if (pattern.matcher(header).find()) {
+                        isExcludedHeader = true;
+                        break;
+                    }
+                }
+
+                if (isExcludedHeader) break;
+            }
+        }
+        logger.debug("isExcludedUrl: " + isExcludedUrl);
+        logger.debug("isExcludedHeader: " + isExcludedHeader);
+        return isExcludedHeader && isExcludedUrl;
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
