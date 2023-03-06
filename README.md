@@ -146,13 +146,13 @@ There are 3 modes:
     - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = false)
       **Note:** It is used to maintain the same database state when mocking is disabled.
     - `ACCEPT_URL_REGEX_LIST`  (default ACCEPT_URL_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the urls which are not required to be recorded and by default it is empty list.
+      **Note:** A list of regex which is used to filter out the urls which are required to be recorded and by default it is empty list. **e.g.,ACCEPT_URL_REGEX_LIST=^/api**
     - `ACCEPT_HEADER_REGEX_LIST`  (default ACCEPT_HEADER_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the headers which are not required to be recorded and by default it is empty list.
+      **Note:** A list of regex which is used to filter out the headers which are required to be recorded and by default it is empty list. **e.g.,ACCEPT_HEADER_REGEX_LIST=token:bearer tgffd,content-type\s\*:\s\*application\\\/json**
     - `REJECT_URL_REGEX_LIST`  (default REJECT_URL_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the urls which are required to be recorded and by default it is empty list.
+      **Note:** A list of regex which is used to filter out the urls which are not required to be recorded and by default it is empty list. **e.g.,REJECT_URL_REGEX_LIST=^/assets**
     - `REJECT_HEADER_REGEX_LIST`  (default REJECT_HEADER_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the headers which are required to be recorded and by default it is empty list.
+      **Note:** A list of regex which is used to filter out the headers which are not required to be recorded and by default it is empty list. **e.g.,REJECT_HEADER_REGEX_LIST=token:token tgffd,content-length:\s\*:\s\*"100"**
     - `SKIP_MOCK_OKHTTP`     for okhttp service to be mocked or not (default SKIP_MOCK_OKHTTP = false)
     - `SKIP_MOCK_APACHE`     for apache service to be mocked or not (default SKIP_MOCK_APACHE = false)
     - `SKIP_MOCK_GOOGLE_MAPS`  for google_maps service to be mocked or not (default SKIP_MOCK_GOOGLE_MAPS = false)
