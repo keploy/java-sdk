@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+        "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+        "https://checkstyle.org/dtds/configuration_1_3.dtd">
+
+<module name="Checker">
+    <property name="severity" value="error"/>
+
+    <property name="fileExtensions" value="java, properties, xml"/>
+
+
+    <!--    This for ignoring specific module when start applying rules so cleaning rules violations would be easier and organized    -->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/models/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/core/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/common/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/integration/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/Agent/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/keploy-sdk/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/api/"/>-->
+    <!--    </module>-->
+    <!--    <module name="BeforeExecutionExclusionFileFilter">-->
+    <!--        <property name="fileNamePattern" value="/agent/"/>-->
+    <!--    </module>-->
+
+</module>
