@@ -43,6 +43,10 @@ import java.util.concurrent.Callable;
 import static io.keploy.utils.Utility.createFolder;
 import static org.apache.http.entity.ContentType.APPLICATION_JSON;
 
+/**
+ * This class is used for intercepting method execute of CloseableHttpClient class and the following method runs instead of
+ * the actual method and test cases and mocks are recorded and tested via this class.
+ */
 public class ApacheInterceptor {
 
 
@@ -52,7 +56,14 @@ public class ApacheInterceptor {
 
     private static final Keploy k = KeployInstance.getInstance().getKeploy();
 
-
+    /**
+     * This method will get called instead of execute
+     *
+     * @param method - contains all the details regarding original method
+     * @param callable - original method client
+     * @param args - all aruguments of the original method
+     * @return - CloseableHttpResponse
+     */
     public static CloseableHttpResponse doProceed(@Origin Method method, @SuperCall Callable<CloseableHttpResponse> callable, @AllArguments Object[] args) {
 
         logger.debug("inside ApacheInterceptor for method: " + method);

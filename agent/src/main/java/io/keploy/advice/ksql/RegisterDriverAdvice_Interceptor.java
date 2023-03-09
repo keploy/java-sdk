@@ -8,12 +8,24 @@ import java.lang.reflect.Method;
 import java.util.concurrent.Callable;
 
 
+/**
+ * This class is used for intercepting method determineDriverClassName of DataSourceProperties class and returns a
+ * custom value instead of value returned by the determineDriverClassName method .
+ */
 public class RegisterDriverAdvice_Interceptor {
 
+    /**
+     * This method will get called instead of determineDriverClassName
+     * @param client - original method client
+     * @param method - contains all the details regarding original method
+     * @return - path to Driver class
+     */
     public static String execute(@SuperCall Callable<String> client, @Origin Method method) throws Exception {
-//        System.out.println("Inside RegisterDriverAdvice_Interceptor -> " + method);
+
+        // Getting actual response from original method
         String s = client.call();
-//        System.out.println("determineDriverClassName returns : " + s);
+
+        // Changing KDriver Dialect according to the response from original method
         if (s != null && !s.equals("io.keploy.ksql.KDriver")) {
             KDriver.DriverName = s;
             switch (s) {
@@ -34,6 +46,8 @@ public class RegisterDriverAdvice_Interceptor {
                     System.out.println("Dialect for driver: " + s + " is not supported yet");
             }
         }
+
+        // returning wrapped Driver class path
         return "io.keploy.ksql.KDriver";
     }
 }

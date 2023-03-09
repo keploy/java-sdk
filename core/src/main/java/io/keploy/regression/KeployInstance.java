@@ -2,6 +2,9 @@ package io.keploy.regression;
 
 import io.keploy.regression.keploy.Keploy;
 
+/**
+ *  Keploy instance class
+ */
 public class KeployInstance {
     private static volatile KeployInstance keployInstance;
 

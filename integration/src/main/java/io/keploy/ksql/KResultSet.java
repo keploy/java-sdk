@@ -24,6 +24,10 @@ import static io.keploy.ksql.KDriver.*;
 import static io.keploy.ksql.KResultSetMetaData.PrecisionDict;
 import static io.keploy.ksql.KResultSetMetaData.ScaleDict;
 
+/**
+ * KResultSet is a wrapper class for ResultSet used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KResultSet implements ResultSet {
     ResultSet wrappedResultSet;
 

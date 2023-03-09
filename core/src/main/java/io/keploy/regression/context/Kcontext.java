@@ -9,6 +9,9 @@ import javax.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Class for Keploy context which provides all the configuration required by keploy
+ */
 @Getter
 @Setter
 @NoArgsConstructor

@@ -26,12 +26,24 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Callable;
 
+/**
+ * This class is used for intercepting method await of OkHttpPendingResult class and the following method runs instead of
+ * the actual method and test cases and mocks are recorded and tested via this class.
+ */
 public class GoogleMapsInterceptor {
 
     private static final Logger logger = LogManager.getLogger(GoogleMapsInterceptor.class);
     private static final String CROSS = new String(Character.toChars(0x274C));
 
-
+    /**
+     * This method will get called instead of await
+     *
+     * @param client - original method client
+     * @param method - contains all the details regarding original method
+     * @param request - field of the OkHttpPendingResult class
+     * @param okHttpPendingResult - OkHttpPendingResult class
+     * @return - response object
+     */
     @RuntimeType
     public static Object execute(
             @SuperCall
