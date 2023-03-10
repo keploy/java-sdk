@@ -90,11 +90,11 @@ public class GrpcService {
      * Modifies all the test cases and mocks that are present into the format which GRPC accepts and send request to GRPC
      * to save tests and mocks that are recorded
      *
-     * @param reqBody - http request body recorded from the filter
-     * @param params - http query params recorded from the filter
-     * @param httpResp - http response body recorded from the filter
+     * @param reqBody      - http request body recorded from the filter
+     * @param params       - http query params recorded from the filter
+     * @param httpResp     - http response body recorded from the filter
      * @param protocolType - http protocolType recorded from the filter
-     * @param formData - http form data
+     * @param formData     - http form data
      */
     public static void CaptureTestCases(String reqBody, Map<String, String> params, Service.HttpResp httpResp, String protocolType, Map<String, List<MultipartContent>> formData) {
         logger.debug("inside CaptureTestCases");
@@ -143,9 +143,10 @@ public class GrpcService {
 
     /**
      * This method runs in threads asynchronously and sends request to Server to capture tests and mocks
+     *
      * @param testCaseReqBuilder - test case object builder
-     * @param formData -  form data from http request
-     * @param httpReqBuilder - http request builder
+     * @param formData           -  form data from http request
+     * @param httpReqBuilder     - http request builder
      */
     public static void Capture(Service.TestCaseReq.Builder testCaseReqBuilder, Map<String, List<MultipartContent>> formData, Service.HttpReq.Builder httpReqBuilder) {
         new Thread(() -> {
@@ -215,6 +216,13 @@ public class GrpcService {
      */
     public static boolean doesFollowAcceptanceRegex(Service.TestCaseReq testCaseReq) {
         Filter filter = k.getCfg().getApp().getFilter();
+
+        //if user doesn't provide any accept regex or provide both empty, then it's valid to be recorded.
+        if ((filter.getAcceptHeaderRegex() == null || filter.getAcceptHeaderRegex().length == 0)
+                && (filter.getAcceptUrlRegex() == null || filter.getAcceptUrlRegex().length == 0)) {
+            return true;
+        }
+
         boolean isIncludedUrl = false;
         boolean isIncludedHeader = false;
 
@@ -256,7 +264,7 @@ public class GrpcService {
 
         logger.debug("isIncludedUrl: " + isIncludedUrl);
         logger.debug("isIncludedHeader: " + isIncludedHeader);
-        return isIncludedUrl && isIncludedHeader;
+        return isIncludedUrl || isIncludedHeader;
     }
 
     /**
@@ -268,6 +276,14 @@ public class GrpcService {
      */
     public static boolean doesFollowRejectionRegex(Service.TestCaseReq testCaseReq) {
         Filter filter = k.getCfg().getApp().getFilter();
+
+
+        //if user doesn't provide any reject regex or provide both empty, then it's valid to be recorded and do not reject it.
+        if ((filter.getAcceptHeaderRegex() == null || filter.getAcceptHeaderRegex().length == 0)
+                && (filter.getAcceptUrlRegex() == null || filter.getAcceptUrlRegex().length == 0)) {
+            return false;
+        }
+
         boolean isExcludedHeader = false;
         boolean isExcludedUrl = false;
 
@@ -309,12 +325,13 @@ public class GrpcService {
         }
         logger.debug("isExcludedUrl: " + isExcludedUrl);
         logger.debug("isExcludedHeader: " + isExcludedHeader);
-        return isExcludedHeader && isExcludedUrl;
+        return isExcludedHeader || isExcludedUrl;
     }
 
     /**
      * Denoising while recording test cases
-     * @param id - test case id
+     *
+     * @param id          - test case id
      * @param testCaseReq -  test case object
      */
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {
@@ -358,6 +375,7 @@ public class GrpcService {
 
     /**
      * This method runs each test on client application in test mode by setting mocks and data in context.
+     *
      * @param testCase - test case object
      * @return - response for the test
      */
@@ -385,6 +403,7 @@ public class GrpcService {
 
     /**
      * Executes http request on client application in test mode
+     *
      * @param testCase - test case object
      */
     private static void executeSimulateRequest(Service.TestCase testCase) {
@@ -649,6 +668,7 @@ public class GrpcService {
 
     /**
      * Provides the test run id
+     *
      * @param total - total no of test cases
      * @return - test run id
      */
@@ -675,7 +695,8 @@ public class GrpcService {
 
     /**
      * Send request to server that test run is done. So that post-processing will be done
-     * @param id - test run id
+     *
+     * @param id     - test run id
      * @param status - status of the test run
      */
     public static void end(String id, boolean status) {
@@ -694,6 +715,7 @@ public class GrpcService {
 
     /**
      * Fetch all the test cases and mocks that are recorded
+     *
      * @return - list if testcase objects
      */
     public static List<Service.TestCase> fetch() {
@@ -754,8 +776,9 @@ public class GrpcService {
 
     /**
      * Starts the simulate for every test case and compared with the response recorded before
+     *
      * @param testrunId - test run id
-     * @param tc - test case object
+     * @param tc        - test case object
      * @return - Boolean whether pass or fail
      */
     public static boolean check(String testrunId, Service.TestCase tc) {
