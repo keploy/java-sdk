@@ -47,10 +47,6 @@ public class MockLib {
         cfg.setServer(serverConfig);
         k.setCfg(cfg);
         new GrpcService();
-
-
-        Kcontext ctx = NewContext();
-        System.out.println(ctx);
     }
 
     public Kcontext NewContext() {

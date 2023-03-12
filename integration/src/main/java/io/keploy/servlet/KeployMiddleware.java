@@ -16,22 +16,34 @@ import lombok.SneakyThrows;
 import org.apache.commons.io.IOUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jacoco.core.analysis.Analyzer;
+import org.jacoco.core.analysis.CoverageBuilder;
+import org.jacoco.core.analysis.IClassCoverage;
+import org.jacoco.core.analysis.ICounter;
+import org.jacoco.core.data.ExecutionDataStore;
+import org.jacoco.core.data.ExecutionDataWriter;
+import org.jacoco.core.data.SessionInfoStore;
+import org.jacoco.core.runtime.*;
 import org.jacoco.core.tools.ExecDumpClient;
 
 import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.Part;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
+import java.net.InetAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.lang.System.out;
 
 public class KeployMiddleware implements Filter {
 
@@ -43,6 +55,12 @@ public class KeployMiddleware implements Filter {
     public static AtomicInteger reqCount = new AtomicInteger(0);
     public static AtomicInteger cnt = new AtomicInteger(0);
     public static AtomicInteger externalMet = new AtomicInteger(0);
+
+//    private static final String DESTFILE = "jacoco-client.exec";
+
+    private static final String ADDRESS = "localhost";
+
+    private static final int PORT = 36320;
 
     @Override
     public void init(FilterConfig filterConfig) {
@@ -222,11 +240,11 @@ public class KeployMiddleware implements Filter {
 
         if (k == null || Mode.getMode() != null && (Mode.getMode()).equals(Mode.ModeType.MODE_OFF)) {
             filterChain.doFilter(request, response);
-            try {
-                getCoverage();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+//            try {
+//                getCoverage();
+//            } catch (InterruptedException e) {
+//                throw new RuntimeException(e);
+//            }
 //            reqCount++;
 //            System.out.println(stackTraceArr.size());
 //            stackTraceArr.clear();
@@ -282,11 +300,14 @@ public class KeployMiddleware implements Filter {
 //        metCount.set(0);
 //        cnt.set(0);
 //        externalMet.set(0);
-        try {
-            getCoverage();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+        new Thread(() -> {
+            try {
+                getCoverage();
+            } catch (InterruptedException | IOException e) {
+                System.out.println("getCoverage() method failed");
+                throw new RuntimeException(e);
+            }
+        }).start();
 
 
         byte[] reqArr = requestWrapper.getData();
@@ -460,31 +481,162 @@ public class KeployMiddleware implements Filter {
     }
 
 
-    // do this in a separate thread - this can be asynchronus
-    public synchronized void getCoverage() throws IOException, InterruptedException {
+    // do this in a separate thread - this can be asynchronous
+    public void execWriter() throws IOException {
+        File directory = new File("/Users/sarthak_1/Documents/Keploy/final/samples-java/target");
+        File file = new File(directory, "jacoco-client" + reqCount.get() + ".exec");
+        final FileOutputStream localFile = new FileOutputStream(file);
+        final ExecutionDataWriter localWriter = new ExecutionDataWriter(
+                localFile);
+
+        // Open a socket to the coverage agent:
+        final Socket socket = new Socket(InetAddress.getByName(ADDRESS), PORT);
+        final RemoteControlWriter writer = new RemoteControlWriter(
+                socket.getOutputStream());
+        final RemoteControlReader reader = new RemoteControlReader(
+                socket.getInputStream());
+        reader.setSessionInfoVisitor(localWriter);
+        reader.setExecutionDataVisitor(localWriter);
+
+        // Send a dump command and read the response:
+        writer.visitDumpCommand(true, true);
+        if (!reader.read()) {
+            throw new IOException("Socket closed unexpectedly.");
+        }
+        socket.close();
+        localFile.close();
+    }
+
+    public void getCoverage() throws IOException, InterruptedException {
         reqCount.incrementAndGet();
-        new Thread(() -> {
-            System.out.println("getting Coverage please wait...");
-            String command1 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/final/samples-java/target/jacoco-it" + reqCount + ".exec";
-//        String command2 = "java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar report /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/jacoco-it.exec --classfiles /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/classes/com --sourcefiles src/main/java/ --xml /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/target/report.xml";
+//        System.out.println("getting Coverage please wait...");
 
+        // Update the command to include the reqCount in the file name
+//        String command1 = String.format("java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/final/samples-java/target/jacoco-it%d.exec", reqCount);
+//
+//        // Create a new thread pool with a maximum of 10 threads
+        ExecutorService executor = Executors.newFixedThreadPool(10);
+//
+//        // Create a CountDownLatch with a count of 1
+        CountDownLatch latch = new CountDownLatch(1);
+//
+//        // Submit the task to the thread pool
+        executor.submit(() -> {
             try {
-                Process process = Runtime.getRuntime().exec(command1);
-                process.waitFor();
-            } catch (IOException | InterruptedException e) {
-                e.printStackTrace();
-            }
-
-            ExecDumpClient execDumpClient = new ExecDumpClient();
-            execDumpClient.setReset(true);
-            try {
-                execDumpClient.dump("localhost", 36320);
+                execWriter();
+                latch.countDown();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-
-        }).start();
-
+        });
+//
+//        // Wait for the latch to countdown
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+//        // Shut down the thread pool
+        executor.shutdown();
     }
 
+    public void getCoverage2() throws IOException, InterruptedException {
+        reqCount.incrementAndGet();
+//        System.out.println("getting Coverage please wait...");
+
+        // Update the command to include the reqCount in the file name
+        String command1 = String.format("java -jar /Users/sarthak_1/Documents/Keploy/KeployJava/sample_projects/beta/jacoco-code-coverage/jacoco-code-coverage-example/src/main/resources/lib/jacococli.jar dump --address localhost --port 36320 --destfile /Users/sarthak_1/Documents/Keploy/final/samples-java/target/jacoco-it%d.exec", reqCount);
+
+        // Create a new thread pool with a maximum of 10 threads
+        ExecutorService executor = Executors.newFixedThreadPool(10);
+
+        // Create a CountDownLatch with a count of 1
+        CountDownLatch latch = new CountDownLatch(1);
+
+        // Submit the task to the thread pool
+        executor.submit(() -> {
+            try {
+                final IRuntime runtime = new LoggerRuntime();
+                final RuntimeData data = new RuntimeData();
+                runtime.startup(data);
+//                Process process = Runtime.getRuntime().exec(command1);
+//                process.waitFor();
+                final ExecutionDataStore executionData = new ExecutionDataStore();
+                final SessionInfoStore sessionInfos = new SessionInfoStore();
+                data.collect(executionData, sessionInfos, false);
+                runtime.shutdown();
+
+                // Together with the original class definition we can calculate coverage
+                // information:
+                final CoverageBuilder coverageBuilder = new CoverageBuilder();
+                final Analyzer analyzer = new Analyzer(executionData, coverageBuilder);
+//                original = getTargetClass(targetName);
+//                analyzer.analyzeClass(original, targetName);
+//                original.close();
+
+                // Let's dump some metrics and line coverage information:
+                for (final IClassCoverage cc : coverageBuilder.getClasses()) {
+                    out.printf("Coverage of class %s%n", cc.getName());
+
+                    printCounter("instructions", cc.getInstructionCounter());
+                    printCounter("branches", cc.getBranchCounter());
+                    printCounter("lines", cc.getLineCounter());
+                    printCounter("methods", cc.getMethodCounter());
+                    printCounter("complexity", cc.getComplexityCounter());
+
+                    for (int i = cc.getFirstLine(); i <= cc.getLastLine(); i++) {
+                        out.printf("Line %s: %s%n", Integer.valueOf(i),
+                                getColor(cc.getLine(i).getStatus()));
+                    }
+                }
+                ExecDumpClient execDumpClient = new ExecDumpClient();
+                execDumpClient.setReset(true);
+                try {
+                    execDumpClient.dump("localhost", 36320);
+                    latch.countDown();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            //        ExecDumpClient execDumpClient = new ExecDumpClient();
+//        execDumpClient.setReset(true);
+//        try {
+//            execDumpClient.dump("localhost", 36320);
+////                    latch.countDown();
+//        } catch (IOException e) {
+//            throw new RuntimeException(e);
+//        }
+        });
+
+        // Wait for the latch to countdown
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        // Shut down the thread pool
+        executor.shutdown();
+    }
+
+    private void printCounter(final String unit, final ICounter counter) {
+        final Integer missed = Integer.valueOf(counter.getMissedCount());
+        final Integer total = Integer.valueOf(counter.getTotalCount());
+        out.printf("%s of %s %s missed%n", missed, total, unit);
+    }
+
+    private String getColor(final int status) {
+        switch (status) {
+            case ICounter.NOT_COVERED:
+                return "red";
+            case ICounter.PARTLY_COVERED:
+                return "yellow";
+            case ICounter.FULLY_COVERED:
+                return "green";
+        }
+        return "";
+    }
 }

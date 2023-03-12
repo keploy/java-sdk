@@ -50,27 +50,20 @@ public class HttpPostMultipart {
      * @param value field value
      */
     public void addFormField(String name, String value) {
-        writer.append("--" + boundary).append(LINE);
-        writer.append("Content-Disposition: form-data; name=\"" + name + "\"").append(LINE);
-        writer.append("Content-Type: text/plain; charset=" + charset).append(LINE);
+        writer.append("--").append(boundary).append(LINE);
+        writer.append("Content-Disposition: form-data; name=\"").append(name).append("\"").append(LINE);
+        writer.append("Content-Type: text/plain; charset=").append(charset).append(LINE);
         writer.append(LINE);
         writer.append(value).append(LINE);
         writer.flush();
     }
 
-    /**
-     * Adds a upload file section to the request
-     *
-     * @param fieldName
-     * @param uploadFile
-     * @throws IOException
-     */
     public void addFilePart(String fieldName, File uploadFile)
             throws IOException {
         String fileName = uploadFile.getName();
-        writer.append("--" + boundary).append(LINE);
-        writer.append("Content-Disposition: form-data; name=\"" + fieldName + "\"; filename=\"" + fileName + "\"").append(LINE);
-        writer.append("Content-Type: " + URLConnection.guessContentTypeFromName(fileName)).append(LINE);
+        writer.append("--").append(boundary).append(LINE);
+        writer.append("Content-Disposition: form-data; name=\"").append(fieldName).append("\"; filename=\"").append(fileName).append("\"").append(LINE);
+        writer.append("Content-Type: ").append(URLConnection.guessContentTypeFromName(fileName)).append(LINE);
         writer.append("Content-Transfer-Encoding: binary").append(LINE);
         writer.append(LINE);
         writer.flush();
@@ -97,7 +90,7 @@ public class HttpPostMultipart {
     public void finish() throws IOException {
         String responseBody = "";
         writer.flush();
-        writer.append("--" + boundary + "--").append(LINE);
+        writer.append("--").append(boundary).append("--").append(LINE);
         writer.close();
 
         // checks server's status code first
