@@ -14,6 +14,18 @@ message DataBytes {
   bytes Bin = 1;
 }
 
+message DedupSpec{
+  int64 lines_covered = 1;
+  int64 branch_covered = 2;
+  int64 lines_total = 3;
+  int64 branch_total = 4;
+  int64 methods_covered = 5;
+  int64 methods_total = 6;
+  int64 classes_covered = 7;
+  int64 classes_total = 8;
+  string line_path = 9;
+}
+
 message TestCaseReq {
   int64 Captured = 1;
   string AppID = 2;
@@ -29,6 +41,7 @@ message TestCaseReq {
   string Type = 12;
   GrpcReq GrpcReq = 13;
   GrpcResp GrpcResp = 14;
+  DedupSpec DedupSpec = 18;
 }
 
 
@@ -58,6 +71,10 @@ message TestCase {
   map<string, StrArr> anchors = 12;
   repeated string noise = 13;
   repeated Mock Mocks = 14;
+  GrpcReq GrpcReq = 15;
+  GrpcResp GrpcResp = 16;
+  string Type = 17;
+  DedupSpec DedupSpec = 18;
 }
 
 message Method {
@@ -242,4 +259,5 @@ service RegressionService{
   rpc PutMock (PutMockReq) returns (PutMockResp);
   rpc GetMocks (GetMockReq) returns (getMockResp);
   rpc StartMocking (StartMockReq) returns (StartMockResp);
+  // rpc DeDuplication (TestReq) returns (DedupResponse);
 }

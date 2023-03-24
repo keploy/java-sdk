@@ -15,6 +15,23 @@
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
     </properties>
+    <dependencies>
+        <dependency>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-client</artifactId>
+            <version>2.2.3</version>
+        </dependency>
+        <dependency>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-agent</artifactId>
+            <version>2.2.3</version>
+        </dependency>
+        <dependency>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-boot</artifactId>
+            <version>2.2.3</version>
+        </dependency>
+    </dependencies>
 
 
     <build>

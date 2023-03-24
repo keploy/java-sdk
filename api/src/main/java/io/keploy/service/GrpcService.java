@@ -37,6 +37,15 @@ import static io.keploy.regression.Mock.Kind.HTTP_EXPORT;
 import static io.keploy.utils.Utility.createFolder;
 
 public class GrpcService {
+    public static int Lines_covered = 0;
+    public static int Branch_covered = 0;
+    public static int Lines_total = 0;
+    public static int Branch_total = 0;
+    public static int Methods_covered = 0;
+    public static int Methods_total = 0;
+    public static int Classes_covered = 0;
+    public static int Classes_total = 0;
+    public static String Line_Path = "";
 
     private static final Logger logger = LogManager.getLogger(GrpcService.class);
 
@@ -59,7 +68,6 @@ public class GrpcService {
                 .usePlaintext()
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-
     }
 
 
@@ -99,7 +107,6 @@ public class GrpcService {
         httpReqBuilder.setBody(reqBody);
         httpReqBuilder.setProtoMajor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 3)));
         httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 1)));
-
         testCaseReqBuilder.setAppID(k.getCfg().getApp().getName());
         testCaseReqBuilder.setCaptured(Instant.now().getEpochSecond());
 
@@ -124,11 +131,18 @@ public class GrpcService {
     public static void Capture(Service.TestCaseReq.Builder testCaseReqBuilder, Map<String, List<MultipartContent>> formData, Service.HttpReq.Builder httpReqBuilder) {
         new Thread(() -> {
             try {
-
                 // for multipart-request
+                Service.DedupSpec.Builder dedupSpecBuilder = Service.DedupSpec.newBuilder();
                 List<Service.FormData> form = saveFiles(formData);
                 Service.HttpReq httpReq = httpReqBuilder.addAllForm(form).build();
-                Service.TestCaseReq testCaseReq = testCaseReqBuilder.setHttpReq(httpReq).setType(HTTP_EXPORT.value).build();
+                Service.TestCaseReq testCaseReq = testCaseReqBuilder.setHttpReq(httpReq).setType(HTTP_EXPORT.value).setDedupSpec(dedupSpecBuilder
+                        .setBranchCovered(1).setBranchTotal(1)
+                        .setLinesCovered(Lines_covered).setLinesTotal(Lines_total)
+                        .setClassesCovered(4).setClassesTotal(5)
+                        .setMethodsCovered(6).setMethodsTotal(7)
+                        .setLinePath(Line_Path)
+                        .build()).build();
+
 
                 put(testCaseReq);
             } catch (Exception e) {
@@ -154,6 +168,12 @@ public class GrpcService {
         if (noise) {
             denoise(id, testCaseReq);
         }
+    }
+
+    // see below for denoise
+
+    public void addCoverageData() {
+
     }
 
     public static void denoise(String id, Service.TestCaseReq testCaseReq) {

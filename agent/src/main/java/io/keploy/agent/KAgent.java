@@ -1,13 +1,18 @@
 package io.keploy.agent;
 
+import io.keploy.advice.ksql.LineCoverageClassVisitor;
+import io.keploy.advice.ksql.LoggingInterceptor;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.asm.AsmVisitorWrapper;
 import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
 import net.bytebuddy.implementation.MethodDelegation;
+import net.bytebuddy.jar.asm.Opcodes;
 import net.bytebuddy.matcher.ElementMatcher;
+import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.pool.TypePool;
 import org.apache.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
@@ -35,24 +40,11 @@ public class KAgent {
         }
 
         if (System.getenv("KEPLOY_MODE") == null) {
-
-//            if (!isJUnitTest()) {
-//                System.out.println("not a JUnit test");
-//                return;
-//            }
-//            System.out.println("yes its a junit test");
-//
-//            Map<String, String> mode = new HashMap<>();
-//            mode.put("KEPLOY_MODE", "test");
-//            try {
-//                setEnv(mode);
-//                final String keploy_mode = System.getenv("KEPLOY_MODE");
-//                System.out.println("env variable for keploy mode in premain:" + keploy_mode);
-//            } catch (Exception e) {
-//                throw new RuntimeException(e);
-//            }
             return;
         }
+
+//        String targetPackage = "com/example/demo/"; // Change the package name to match the classes you want to instrument
+//        instrumentation.addTransformer(new LineLoggerTransformer(targetPackage));
 
         String apacheClient = "org.apache.http.impl.client.CloseableHttpClient";
         String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
@@ -211,6 +203,39 @@ public class KAgent {
                     logger.debug("Inside DatabaseMetaData transformer");
                     return builder.constructor(takesArgument(0, DatabaseMetaData.class)).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.ksql.DataBaseMetaData_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
                 }))
+//                .type(ElementMatchers.nameStartsWith("com.example.demo"))
+//                .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+//                        builder.method(ElementMatchers.isMethod())
+//                                .intercept(Advice.to(DedupAdvice.class))
+//                )
+//                .type(ElementMatchers.nameStartsWith("com.example.demo")) // Change the package name to match the classes you want to instrument
+//                .transform((builder, typeDescription, classLoader, module,protectionDomain) -> {
+//                    // Instrument classes using the LineNumberClassVisitor
+//                    ClassFileLocator classFileLocator = ClassFileLocator.ForClassLoader.of(classLoader);
+//                    TypePool typePool = TypePool.ClassLoading.of(classLoader);
+//                    ClassReader classReader = null;
+//                    try {
+//                        classReader = new ClassReader(classFileLocator.locate(typeDescription.getName()).resolve());
+//                    } catch (IOException e) {
+//                        throw new RuntimeException(e);
+//                    }
+//                    ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+//                    classReader.accept(new LineNumberClassVisitor(classWriter), ClassReader.SKIP_FRAMES);
+//
+//                    // Apply the LogInterceptor
+//                    return builder
+//                            .method(ElementMatchers.any()) // Intercept any method
+//                            .intercept(MethodDelegation.to(LogInterceptor.class));
+//                })
+//                .type(ElementMatchers.nameStartsWith("com.example.demo")) // Replace with the package name you want to instrument
+//                .transform((builder, typeDescription, classLoader, module,protectionDomain) -> builder
+//                        .method(ElementMatchers.any())
+//                        .intercept(MethodDelegation.to(LoggingInterceptor.class))
+//                )
+                .type(ElementMatchers.nameContains("com.example.demo")) // Replace with your package name
+                .transform((builder, typeDescription, classLoader, module,protectionDomain) ->
+                        builder.visit((AsmVisitorWrapper) new LineCoverageClassVisitor(Opcodes.ASM9, null)))
+                .installOn(instrumentation);
 //        java.io.PrintStream"
 //                .type(nameContains("org.springframework.data.jpa")
 //                                .or(nameContains("com.example.demo"))
@@ -251,7 +276,6 @@ public class KAgent {
                 //                }))
 
 
-                .installOn(instrumentation);
 //
 //        try {
 //            // Assuming you have a File object representing the .jar file
@@ -341,10 +365,37 @@ public class KAgent {
                     map.putAll(newenv);
                 }
             }
+
         }
     }
-
+    public static void logLine(String className, String methodName) {
+        if (className.startsWith("com.example.demo")) { // Replace "your.package.name" with your application's package name
+            StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
+            int lineNumber = -1;
+            for (StackTraceElement element : stackTraceElements) {
+                if (element.getClassName().equals(className) && element.getMethodName().equals(methodName)) {
+                    lineNumber = element.getLineNumber();
+                    StringBuilder methodSignature = new StringBuilder(element.getClassName() + "." + element.getMethodName() + "(");
+                    try {
+                        Class<?>[] parameterTypes = Class.forName(className).getMethod(methodName).getParameterTypes();
+                        for (int i = 0; i < parameterTypes.length; i++) {
+                            methodSignature.append(parameterTypes[i].getName());
+                            if (i < parameterTypes.length - 1) {
+                                methodSignature.append(", ");
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Handle exception
+                    }
+                    methodSignature.append(")");
+                    System.out.println("Line executed: " + methodSignature + " -> " + lineNumber);
+                    break;
+                }
+            }
+        }
+    }
 }
+
 
 
 //                        (not(nameContains("io.keploy.regression.context.Context")))
