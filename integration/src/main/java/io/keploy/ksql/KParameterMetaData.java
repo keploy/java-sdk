@@ -9,6 +9,10 @@ import java.util.Objects;
 import static io.keploy.ksql.KDriver.mode;
 import static io.keploy.ksql.KDriver.testMode;
 
+/**
+ * KParameterMetaData is a wrapper class for ParameterMetaData used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KParameterMetaData implements ParameterMetaData {
     ParameterMetaData wrappedParameterMetaData;
     private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(ParameterMetaData.class);

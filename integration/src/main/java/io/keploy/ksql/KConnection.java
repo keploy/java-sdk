@@ -16,6 +16,11 @@ import static io.keploy.ksql.KResultSet.*;
 import static io.keploy.utils.ProcessSQL.convertMap;
 
 
+
+/**
+ * KConnection is a wrapper class for Connection used in SQL, this class helps in recording data in record mode
+ * and providing data in test mode
+ */
 public class KConnection implements Connection {
 
     private Connection wrappedCon = null;

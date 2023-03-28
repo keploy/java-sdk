@@ -13,8 +13,16 @@ import org.apache.logging.log4j.Logger;
 import java.lang.reflect.Method;
 import java.util.Objects;
 
+/**
+ * This class is used for intercepting method parseResponse of OkHttpPendingResult class and to record required data from
+ * the method
+ */
 public class CustomGoogleResponseAdvice {
 
+    /**
+     * This method gets executed before method parseResponse of OkHttpPendingResult class. In record mode it saves the
+     * data from the parseResponse method arguments and help in recording mocks/tests.
+     */
     @Advice.OnMethodEnter
     static void enterMethods(@Advice.Origin Method method, @Advice.AllArguments Object[] obj) throws Exception {
         final Logger logger = LogManager.getLogger(CustomGoogleResponseAdvice.class);
