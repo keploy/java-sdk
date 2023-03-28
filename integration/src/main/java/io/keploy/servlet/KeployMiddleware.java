@@ -258,6 +258,7 @@ public class KeployMiddleware implements Filter {
                 //     p.waitFor();
                 // }
                 // System.setCurrentTimeMillis(testCase.getCaptured());
+            }
         }
 
         KeployInstance ki = KeployInstance.getInstance();
