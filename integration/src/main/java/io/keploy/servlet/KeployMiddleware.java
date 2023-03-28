@@ -31,6 +31,9 @@ import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+
 public class KeployMiddleware implements Filter {
 
     private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);
@@ -220,6 +223,42 @@ public class KeployMiddleware implements Filter {
         HttpServletRequest request = (HttpServletRequest) servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
 
+        if (System.getenv("SKIP_MOCK_JWT") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_JWT")) ) 
+        {
+            // change the system time to be the same as the time of mocking the jwt
+            String token = response.getHeader("Authorization");
+            if (token != null && token.startsWith("Bearer ")) {
+                token = token.substring(7); // remove the "Bearer " prefix
+                // decode the token    
+                String[] parts = token.split("\\.");
+                String header = new String(Base64.getDecoder().decode(parts[0]));
+                String payload = new String(Base64.getDecoder().decode(parts[1]));
+
+                // check expiration date is in the header or the payload
+                Date expirationDate = null;
+                if (header.contains("exp")) {
+                    expirationDate = new Date(Long.parseLong(header.substring(header.indexOf("exp") + 5, header.indexOf("exp") + 15)) * 1000);
+                } else if (payload.contains("exp")) {
+                    expirationDate = new Date(Long.parseLong(payload.substring(payload.indexOf("exp") + 5, payload.indexOf("exp") + 15)) * 1000);
+                }
+                // set the system time to a date before the expiration date
+                long expirationTime = expirationDate.getTime();
+                long currentTime = System.currentTimeMillis();
+                long timeDifference = expirationTime - currentTime;
+                long newTime = currentTime - timeDifference - 1000; // set the system time to 1 second before the expiration date
+
+                // check if the System.setTime() method is available
+                // if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+                //     // for Windows
+                //     Process p = Runtime.getRuntime().exec("time " + newTime);
+                //     p.waitFor();
+                // } else {
+                //     // for Unix-based systems
+                //     Process p = Runtime.getRuntime().exec("date -s @" + newTime / 1000);
+                //     p.waitFor();
+                // }
+                // System.setCurrentTimeMillis(testCase.getCaptured());
+        }
 
         KeployInstance ki = KeployInstance.getInstance();
         Keploy k = ki.getKeploy();

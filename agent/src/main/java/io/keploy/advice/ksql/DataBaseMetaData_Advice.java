@@ -17,6 +17,7 @@ public class DataBaseMetaData_Advice {
 
     @Advice.OnMethodExit
     static void exitMethods(@Advice.Origin Constructor constructor, @Advice.FieldValue(value = "inner", readOnly = false) DatabaseMetaData metaData) {
+//        inner is the variable that is intercepted and replaced with metaData
         final Logger logger = LogManager.getLogger(DataBaseMetaData_Advice.class);
         logger.debug("inside OnMethodExitAdvice for constructor: {}", constructor);
         metaData = new KDatabaseMetaData();
