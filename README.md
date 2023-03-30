@@ -281,7 +281,14 @@ There are 3 modes:
 - **Run your unit testcases**
    1. Just set `KEPLOY_MODE=test`, run your test file and you are good to go. 
 
-#### 🤩 See, you didn't even need to create a stub for your unit test cases, it's all generated using the java-sdk mock library. 
+#### 🤩 See, you didn't even need to create a stub for your unit test cases, it's all generated using the java-sdk mock library.
+
+
+### KEPLOY dependencies
+Keploy Java-SDK supports the following dependencies-
+
+<img src=./src/main/resources/amazons3.png alt="AmazonS3" title="AmazonS3" width=200 height=100>    <img src=./src/main/resources/apache.png alt="Apache" title="Apache" width=200 height=100>    <img src=./src/main/resources/dynamodb.png alt="DynamoDB" title="DynamoDB" width=200 height=100>    <img src=./src/main/resources/googlemap.png alt="GoogleMap" title="GoogleMap" width=200 height=100>  <img src=./src/main/resources/mysql.png alt="MySQL" title="MySQL" width=200 height=80> <img src=./src/main/resources/okhttp.png alt="OKHttp" title="OKHttp" width=200 height=80>   <img src=./src/main/resources/oracle.png alt="Oracle" title="Oracle" width=200 height=80>    <img src=./src/main/resources/postgresql.png alt="PostgreSQL" title="PostgreSQL" width=200 height=80>
+
 
 ## Community support
 
