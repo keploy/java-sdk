@@ -1,8 +1,8 @@
 package io.keploy.advice.ksql;
 
 import io.keploy.ksql.KDriver;
-import net.bytebuddy.asm.Advice;
 
+import net.bytebuddy.asm.Advice;
 import java.lang.reflect.Method;
 
 /**
@@ -14,12 +14,11 @@ public class RegisterDriverAdvice {
     /**
      * This method gets executed before the setDriverClassName method of DataSourceProperties class. According to the
      * driverClassName that is present, Dialect of KDriver is changed and driverClassName value is replaced with KDriver
-     * path
+     * path.
      */
     @Advice.OnMethodEnter
     public static void enterMethod(@Advice.Origin Method method, @Advice.Argument(value = 0, readOnly = false) String driverClassName) {
-
-        if (driverClassName != null && !driverClassName.equals("io.keploy.ksql.KDriver")) {
+        if (driverClassName != null && !driverClassName.equals(KDriver.class.getName())) {
             KDriver.DriverName = driverClassName;
             switch (driverClassName) {
                 case "org.postgresql.Driver":
@@ -37,16 +36,19 @@ public class RegisterDriverAdvice {
                     break;
                 default:
                     System.out.println("Dialect for driver: " + driverClassName + " is not supported yet");
+                    driverClassName = KDriver.class.getName();
+                    break;
             }
+        } else {
+            driverClassName = KDriver.class.getName();
         }
-        driverClassName = "io.keploy.ksql.KDriver";
     }
 
     /**
-     * This method gets executed after the setDriverClassName method of DataSourceProperties class.This does nothing as we don't
+     * This method gets executed after the setDriverClassName method of DataSourceProperties class. This does nothing as we don't
      * want to change anything after the completion of the setDriverClassName method of DataSourceProperties class.
      */
     @Advice.OnMethodExit
-    public static void exitMethod(@Advice.Origin Method method) {
+    public static void exitMethod() {
     }
 }
