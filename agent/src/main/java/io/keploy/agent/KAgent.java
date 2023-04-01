@@ -72,6 +72,7 @@ public class KAgent {
         String proxyDB = "com.mchange.v2.c3p0.impl.NewProxyDatabaseMetaData";
         String redisJedisPool = "redis.clients.jedis.JedisPool";
         String redisJedisBinary = "redis.clients.jedis.BinaryClient";
+        String jWString = "org.springframework.security.oauth2.provider.token.store.JwtAccessTokenConverter";
         // String mongo= "org.springframework.boot.autoconfigure.data.mongo.MongoDataProperties"; //TODO: add mongo support
 
         // String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
@@ -83,6 +84,22 @@ public class KAgent {
                 // to see the full logs in case of debugging, comment out the below line.
                 // .with(AgentBuilder.Listener.StreamWriting.toSystemOut())
                 // .with(AgentBuilder.Listener.StreamWriting.toSystemOut().withErrorsOnly())
+                
+
+                /* Transformer for JWT. This transformer intercepts and runs JwtAdvice Advice before and after the execution of 
+                 JwtAccessTokenConverter class constructor. JwtAdvice Advice will modify things according to the Keploy mode and allows to record tests,
+                 mocks and test them.
+                */
+                .type(named(jWString))
+                .transform((builder, typeDescription, classLoader, javaModule, protectionDomain) -> {
+                    if (System.getenv("SKIP_MOCK_JWT") == null ||  !Boolean.parseBoolean(System.getenv("SKIP_MOCK_JWT")) )
+                    {
+                    return builder.constructor(isDefaultConstructor()).intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.JwtAdvice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));                            
+                    // .on(named("decode")));
+                    }
+                    return builder;
+                })
+                
 
                 /*
                   Transformer for okhttp client up to version 2.7.5. This transformer intercepts and runs

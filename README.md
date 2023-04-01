@@ -153,6 +153,7 @@ There are 3 modes:
       **Note:** A list of regex which is used to filter out the urls which are not required to be recorded and by default it is empty list. **e.g.,REJECT_URL_REGEX_LIST=^/assets**
     - `REJECT_HEADER_REGEX_LIST`  (default REJECT_HEADER_REGEX_LIST = [])
       **Note:** A list of regex which is used to filter out the headers which are not required to be recorded and by default it is empty list. **e.g.,REJECT_HEADER_REGEX_LIST=token:token tgffd,content-length:\s\*:\s\*"100"**
+    - `SKIP_MOCK_JWT`     for jwt service to be mocked or not (default SKIP_MOCK_JWT = false)
     - `SKIP_MOCK_OKHTTP`     for okhttp service to be mocked or not (default SKIP_MOCK_OKHTTP = false)
     - `SKIP_MOCK_APACHE`     for apache service to be mocked or not (default SKIP_MOCK_APACHE = false)
     - `SKIP_MOCK_GOOGLE_MAPS`  for google_maps service to be mocked or not (default SKIP_MOCK_GOOGLE_MAPS = false)
