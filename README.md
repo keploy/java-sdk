@@ -85,7 +85,7 @@ There are 3 modes:
 - **Run along with agent to mock external calls of your API 🤩🔥**
 
     - Download the latest - Download the latest agent jar
-      from [here](https://search.maven.org/artifact/io.keploy/keploy-sdk/1.2.8/jar)  (eg: 1.2.8)
+      from [here](https://repo1.maven.org/maven2/io/keploy/agent/1.2.8/)  (eg: 1.2.8)
 
     - Prefix `-javaagent:` with absolute classpath of agent jar (
       eg: `-javaagent:<your full path to agent jar>/agent-1.2.8.jar`).
