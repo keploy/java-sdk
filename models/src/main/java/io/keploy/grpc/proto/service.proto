@@ -29,6 +29,7 @@ message TestCaseReq {
   string Type = 12;
   GrpcReq GrpcReq = 13;
   GrpcResp GrpcResp = 14;
+  string AppPath = 15;
 }
 
 
@@ -58,6 +59,9 @@ message TestCase {
   map<string, StrArr> anchors = 12;
   repeated string noise = 13;
   repeated Mock Mocks = 14;
+  GrpcReq GrpcReq = 15;
+  GrpcResp GrpcResp = 16;
+  string Type = 17;
 }
 
 message Method {
@@ -112,6 +116,7 @@ message startRequest {
   string app = 2;
   string TestCasePath = 3;
   string MockPath = 4;
+  string AppPath = 5;
 }
 
 message startResponse {
