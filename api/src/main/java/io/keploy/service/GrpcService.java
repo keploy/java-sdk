@@ -67,21 +67,7 @@ public class GrpcService {
                 .usePlaintext()
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-        String line = "";
-        try {
-            ProcessBuilder processBuilder = new ProcessBuilder("bash", "-c", "pwd");
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            while ((line = reader.readLine()) != null) {
-                System.out.println(line);
-                AppPath = line;
-            }
-            process.waitFor();
-        } catch (IOException | InterruptedException e) {
-            e.printStackTrace();
-        }
-
+        AppPath = System.getProperty("user.dir");
     }
 
     /**
