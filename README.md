@@ -45,12 +45,12 @@ Add *keploy-sdk* as a dependency to your *pom.xml*:
     <dependency>
       <groupId>io.keploy</groupId>
       <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.2.8)
+      <version>N.N.N</version> (eg: 1.2.9)
     </dependency>
 
 or to *build.gradle*:
 
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.8)
+    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.9)
 
 ### KEPLOY_MODE
 
@@ -85,10 +85,10 @@ There are 3 modes:
 - **Run along with agent to mock external calls of your API 🤩🔥**
 
     - Download the latest - Download the latest agent jar
-      from [here](https://repo1.maven.org/maven2/io/keploy/agent/1.2.8/)  (eg: 1.2.8)
+      from [here](https://repo1.maven.org/maven2/io/keploy/agent/1.2.9/)  (eg: 1.2.9)
 
     - Prefix `-javaagent:` with absolute classpath of agent jar (
-      eg: `-javaagent:<your full path to agent jar>/agent-1.2.8.jar`).
+      eg: `-javaagent:<your full path to agent jar>/agent-1.2.9.jar`).
 
         1. **Using Intellij:** Go to Edit Configuration-> add VM options -> paste _java agent_ edited above.
 
@@ -126,7 +126,7 @@ There are 3 modes:
                  </plugin>
              ```
             - And then run this
-              command:`java -javaagent:<your full path to agent jar>/agent-1.2.8.jar -jar <your full path to application jar>.jar`
+              command:`java -javaagent:<your full path to agent jar>/agent-1.2.9.jar -jar <your full path to application jar>.jar`
               . This command will attach agent jar and also run the application. You need to set some required env
               variables written below in order to generate test cases. So, run this command after setting the env
               variables.
