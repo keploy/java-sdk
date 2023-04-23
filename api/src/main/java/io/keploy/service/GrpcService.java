@@ -54,6 +54,7 @@ public class GrpcService {
     private static final String SET_PLAIN_TEXT = "\033[0;0m";
 
     private static final String SET_BOLD_TEXT = "\033[0;1m";
+    public static String AppPath = "";
 
     /**
      * Initialising GRPC server ang Keploy instance
@@ -66,11 +67,12 @@ public class GrpcService {
                 .usePlaintext()
                 .build();
         blockingStub = RegressionServiceGrpc.newBlockingStub(channel);
-
+        AppPath = System.getProperty("user.dir");
     }
 
     /**
      * Get the url to connect to the server
+     *
      * @return String which contains host and port of the server
      */
     private String getTarget() {
@@ -120,7 +122,7 @@ public class GrpcService {
         httpReqBuilder.setProtoMajor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 3)));
         httpReqBuilder.setProtoMinor(Character.getNumericValue(protocolType.charAt(protocolType.length() - 1)));
 
-        testCaseReqBuilder.setAppID(k.getCfg().getApp().getName());
+        testCaseReqBuilder.setAppID(k.getCfg().getApp().getName()).setAppPath(AppPath);
         testCaseReqBuilder.setCaptured(Instant.now().getEpochSecond());
 
         /*
@@ -166,6 +168,7 @@ public class GrpcService {
 
     /**
      * This method sends the testcases to the server
+     *
      * @param testCaseReq - test case object
      */
     public static void put(Service.TestCaseReq testCaseReq) {
@@ -678,6 +681,7 @@ public class GrpcService {
                 .setApp(k.getCfg().getApp().getName())
                 .setTestCasePath(k.getCfg().getApp().getTestPath())
                 .setMockPath(k.getCfg().getApp().getMockPath())
+                .setAppPath(AppPath)
                 .setTotal(total).build();
 
         Service.startResponse startResponse = null;
