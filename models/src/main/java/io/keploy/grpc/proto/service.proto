@@ -41,7 +41,7 @@ message TestCaseReq {
   string Type = 12;
   GrpcReq GrpcReq = 13;
   GrpcResp GrpcResp = 14;
-  DedupSpec DedupSpec = 18;
+  DedupSpec DedupSpec = 15;
 }
 
 
@@ -54,6 +54,7 @@ message TestReq {
   string MockPath = 6;
   string Type = 7;
   GrpcResp GrpcResp = 8;
+  DedupSpec DedupSpec = 9;
 }
 
 message TestCase {

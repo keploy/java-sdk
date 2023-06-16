@@ -20,6 +20,7 @@ import org.jacoco.core.analysis.Analyzer;
 import org.jacoco.core.analysis.CoverageBuilder;
 import org.jacoco.core.analysis.IClassCoverage;
 import org.jacoco.core.analysis.ICounter;
+import org.jacoco.core.data.ExecutionDataReader;
 import org.jacoco.core.data.ExecutionDataWriter;
 import org.jacoco.core.runtime.RemoteControlReader;
 import org.jacoco.core.runtime.RemoteControlWriter;
@@ -467,6 +468,7 @@ public class KeployMiddleware implements Filter {
         File directory = new File("/Users/sarthak_1/Documents/Keploy/final/samples-java/target");
         File file = new File(directory, "jacoco-client" + reqCount.get() + ".exec");
         final FileOutputStream localFile = new FileOutputStream(file);
+
         final ExecutionDataWriter localWriter = new ExecutionDataWriter(
                 localFile);
 
@@ -524,6 +526,10 @@ public class KeployMiddleware implements Filter {
         out.println("------------------------------------------");
         Line_Path = "";
         ExecFileLoader loader = new ExecFileLoader();
+//        ExecutionDataWriter executionDataWriter = new ExecutionDataWriter(null);
+//        ExecutionDataReader reader = new ExecutionDataReader(null);
+//        reader.read();
+
         // Load the coverage data file
         File coverageFile = new File("/Users/sarthak_1/Documents/Keploy/final/samples-java/target/jacoco-client" + reqCount.get() + ".exec");
         loader.load(coverageFile);
@@ -531,35 +537,35 @@ public class KeployMiddleware implements Filter {
         final CoverageBuilder coverageBuilder = new CoverageBuilder();
         final Analyzer analyzer = new Analyzer(loader.getExecutionDataStore(), coverageBuilder);
         analyzer.analyzeAll(binDir);
-
+        int x = 0;
         // Let's dump some metrics and line coverage information:
         for (final IClassCoverage cc : coverageBuilder.getClasses()) {
-            out.printf("Coverage of class %s%n", cc.getName());
-
+//            out.printf("Coverage of class %s%n", cc.getName());
+                String ClassName = base64Encode(cc.getName());
 //            System.out.println(cc.getMethods());
             java.util.Collection<org.jacoco.core.analysis.IMethodCoverage> method = cc.getMethods();
-            for (org.jacoco.core.analysis.IMethodCoverage m : method) {
-                out.printf("Coverage of method %s%n", m.getName());
-                printCounter("instructions", m.getInstructionCounter());
-                printCounter("branches", m.getBranchCounter());
-
-                printCounter("lines", m.getLineCounter());
-                printCounter("methods", m.getMethodCounter());
-                printCounter("complexity", m.getComplexityCounter());
-            }
+//            for (org.jacoco.core.analysis.IMethodCoverage m : method) {
+//                out.printf("Coverage of method %s%n", m.getName());
+//                printCounter("instructions", m.getInstructionCounter());
+//                printCounter("branches", m.getBranchCounter());
+//
+//                printCounter("lines", m.getLineCounter());
+//                printCounter("methods", m.getMethodCounter());
+//                printCounter("complexity", m.getComplexityCounter());
+//            }
 //            System.out.println("THIS IS METHOD SIZE -- " + method.size());
 //            cc.getMethodCounter().getTotalCount();
 //            linesCovered.addAndGet(cc.getLineCounter().getCoveredCount());
-            printCounter("instructions", cc.getInstructionCounter());
-            printCounter("branches", cc.getBranchCounter());
-            printCounter("lines", cc.getLineCounter());
-            printCounter("methods", cc.getMethodCounter());
-            printCounter("complexity", cc.getComplexityCounter());
+//            printCounter("instructions", cc.getInstructionCounter());
+//            printCounter("branches", cc.getBranchCounter());
+//            printCounter("lines", cc.getLineCounter());
+//            printCounter("methods", cc.getMethodCounter());
+//            printCounter("complexity", cc.getComplexityCounter());
             cc.getInstructionCounter().getTotalCount();
             for (int i = cc.getFirstLine(); i <= cc.getLastLine(); i++) {
-                out.printf("Line %s: %s%n", Integer.valueOf(i), getColor(cc.getLine(i).getStatus()));
+//                out.printf("Line %s: %s%n", Integer.valueOf(i), getColor(cc.getLine(i).getStatus()));
                 if (getColor(cc.getLine(i).getStatus()).equals("green")) {
-                    GrpcService.Line_Path += i + ",";
+                    GrpcService.Line_Path += ClassName+i + ",";
                 }
             }
         }
@@ -586,5 +592,9 @@ public class KeployMiddleware implements Filter {
                 return "green";
         }
         return "";
+    }
+    public static String base64Encode(String input) {
+        byte[] encodedBytes = Base64.getEncoder().encode(input.getBytes());
+        return new String(encodedBytes);
     }
 }

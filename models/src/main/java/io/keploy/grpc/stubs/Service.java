@@ -3265,17 +3265,17 @@ java.lang.String defaultValue);
     io.keploy.grpc.stubs.Service.GrpcRespOrBuilder getGrpcRespOrBuilder();
 
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      * @return Whether the dedupSpec field is set.
      */
     boolean hasDedupSpec();
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      * @return The dedupSpec.
      */
     io.keploy.grpc.stubs.Service.DedupSpec getDedupSpec();
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      */
     io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder();
   }
@@ -3846,10 +3846,10 @@ java.lang.String defaultValue) {
       return grpcResp_ == null ? io.keploy.grpc.stubs.Service.GrpcResp.getDefaultInstance() : grpcResp_;
     }
 
-    public static final int DEDUPSPEC_FIELD_NUMBER = 18;
+    public static final int DEDUPSPEC_FIELD_NUMBER = 15;
     private io.keploy.grpc.stubs.Service.DedupSpec dedupSpec_;
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      * @return Whether the dedupSpec field is set.
      */
     @java.lang.Override
@@ -3857,7 +3857,7 @@ java.lang.String defaultValue) {
       return dedupSpec_ != null;
     }
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      * @return The dedupSpec.
      */
     @java.lang.Override
@@ -3865,7 +3865,7 @@ java.lang.String defaultValue) {
       return dedupSpec_ == null ? io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance() : dedupSpec_;
     }
     /**
-     * <code>.services.DedupSpec DedupSpec = 18;</code>
+     * <code>.services.DedupSpec DedupSpec = 15;</code>
      */
     @java.lang.Override
     public io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder() {
@@ -3932,7 +3932,7 @@ java.lang.String defaultValue) {
         output.writeMessage(14, getGrpcResp());
       }
       if (dedupSpec_ != null) {
-        output.writeMessage(18, getDedupSpec());
+        output.writeMessage(15, getDedupSpec());
       }
       getUnknownFields().writeTo(output);
     }
@@ -4006,7 +4006,7 @@ java.lang.String defaultValue) {
       }
       if (dedupSpec_ != null) {
         size += com.google.protobuf.CodedOutputStream
-          .computeMessageSize(18, getDedupSpec());
+          .computeMessageSize(15, getDedupSpec());
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -4713,13 +4713,13 @@ java.lang.String defaultValue) {
                 bitField0_ |= 0x00002000;
                 break;
               } // case 114
-              case 146: {
+              case 122: {
                 input.readMessage(
                     getDedupSpecFieldBuilder().getBuilder(),
                     extensionRegistry);
                 bitField0_ |= 0x00004000;
                 break;
-              } // case 146
+              } // case 122
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -6320,14 +6320,14 @@ java.lang.String defaultValue) {
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.DedupSpec, io.keploy.grpc.stubs.Service.DedupSpec.Builder, io.keploy.grpc.stubs.Service.DedupSpecOrBuilder> dedupSpecBuilder_;
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        * @return Whether the dedupSpec field is set.
        */
       public boolean hasDedupSpec() {
         return ((bitField0_ & 0x00004000) != 0);
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        * @return The dedupSpec.
        */
       public io.keploy.grpc.stubs.Service.DedupSpec getDedupSpec() {
@@ -6338,7 +6338,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public Builder setDedupSpec(io.keploy.grpc.stubs.Service.DedupSpec value) {
         if (dedupSpecBuilder_ == null) {
@@ -6354,7 +6354,7 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public Builder setDedupSpec(
           io.keploy.grpc.stubs.Service.DedupSpec.Builder builderForValue) {
@@ -6368,7 +6368,7 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public Builder mergeDedupSpec(io.keploy.grpc.stubs.Service.DedupSpec value) {
         if (dedupSpecBuilder_ == null) {
@@ -6387,7 +6387,7 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public Builder clearDedupSpec() {
         bitField0_ = (bitField0_ & ~0x00004000);
@@ -6400,7 +6400,7 @@ java.lang.String defaultValue) {
         return this;
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public io.keploy.grpc.stubs.Service.DedupSpec.Builder getDedupSpecBuilder() {
         bitField0_ |= 0x00004000;
@@ -6408,7 +6408,7 @@ java.lang.String defaultValue) {
         return getDedupSpecFieldBuilder().getBuilder();
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       public io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder() {
         if (dedupSpecBuilder_ != null) {
@@ -6419,7 +6419,7 @@ java.lang.String defaultValue) {
         }
       }
       /**
-       * <code>.services.DedupSpec DedupSpec = 18;</code>
+       * <code>.services.DedupSpec DedupSpec = 15;</code>
        */
       private com.google.protobuf.SingleFieldBuilderV3<
           io.keploy.grpc.stubs.Service.DedupSpec, io.keploy.grpc.stubs.Service.DedupSpec.Builder, io.keploy.grpc.stubs.Service.DedupSpecOrBuilder> 
@@ -6603,6 +6603,21 @@ java.lang.String defaultValue) {
      * <code>.services.GrpcResp GrpcResp = 8;</code>
      */
     io.keploy.grpc.stubs.Service.GrpcRespOrBuilder getGrpcRespOrBuilder();
+
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     * @return Whether the dedupSpec field is set.
+     */
+    boolean hasDedupSpec();
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     * @return The dedupSpec.
+     */
+    io.keploy.grpc.stubs.Service.DedupSpec getDedupSpec();
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     */
+    io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder();
   }
   /**
    * Protobuf type {@code services.TestReq}
@@ -6936,6 +6951,32 @@ java.lang.String defaultValue) {
       return grpcResp_ == null ? io.keploy.grpc.stubs.Service.GrpcResp.getDefaultInstance() : grpcResp_;
     }
 
+    public static final int DEDUPSPEC_FIELD_NUMBER = 9;
+    private io.keploy.grpc.stubs.Service.DedupSpec dedupSpec_;
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     * @return Whether the dedupSpec field is set.
+     */
+    @java.lang.Override
+    public boolean hasDedupSpec() {
+      return dedupSpec_ != null;
+    }
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     * @return The dedupSpec.
+     */
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.DedupSpec getDedupSpec() {
+      return dedupSpec_ == null ? io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance() : dedupSpec_;
+    }
+    /**
+     * <code>.services.DedupSpec DedupSpec = 9;</code>
+     */
+    @java.lang.Override
+    public io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder() {
+      return dedupSpec_ == null ? io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance() : dedupSpec_;
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -6974,6 +7015,9 @@ java.lang.String defaultValue) {
       if (grpcResp_ != null) {
         output.writeMessage(8, getGrpcResp());
       }
+      if (dedupSpec_ != null) {
+        output.writeMessage(9, getDedupSpec());
+      }
       getUnknownFields().writeTo(output);
     }
 
@@ -7008,6 +7052,10 @@ java.lang.String defaultValue) {
       if (grpcResp_ != null) {
         size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(8, getGrpcResp());
+      }
+      if (dedupSpec_ != null) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeMessageSize(9, getDedupSpec());
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -7046,6 +7094,11 @@ java.lang.String defaultValue) {
         if (!getGrpcResp()
             .equals(other.getGrpcResp())) return false;
       }
+      if (hasDedupSpec() != other.hasDedupSpec()) return false;
+      if (hasDedupSpec()) {
+        if (!getDedupSpec()
+            .equals(other.getDedupSpec())) return false;
+      }
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -7076,6 +7129,10 @@ java.lang.String defaultValue) {
       if (hasGrpcResp()) {
         hash = (37 * hash) + GRPCRESP_FIELD_NUMBER;
         hash = (53 * hash) + getGrpcResp().hashCode();
+      }
+      if (hasDedupSpec()) {
+        hash = (37 * hash) + DEDUPSPEC_FIELD_NUMBER;
+        hash = (53 * hash) + getDedupSpec().hashCode();
       }
       hash = (29 * hash) + getUnknownFields().hashCode();
       memoizedHashCode = hash;
@@ -7222,6 +7279,11 @@ java.lang.String defaultValue) {
           grpcRespBuilder_.dispose();
           grpcRespBuilder_ = null;
         }
+        dedupSpec_ = null;
+        if (dedupSpecBuilder_ != null) {
+          dedupSpecBuilder_.dispose();
+          dedupSpecBuilder_ = null;
+        }
         return this;
       }
 
@@ -7282,6 +7344,11 @@ java.lang.String defaultValue) {
           result.grpcResp_ = grpcRespBuilder_ == null
               ? grpcResp_
               : grpcRespBuilder_.build();
+        }
+        if (((from_bitField0_ & 0x00000100) != 0)) {
+          result.dedupSpec_ = dedupSpecBuilder_ == null
+              ? dedupSpec_
+              : dedupSpecBuilder_.build();
         }
       }
 
@@ -7365,6 +7432,9 @@ java.lang.String defaultValue) {
         if (other.hasGrpcResp()) {
           mergeGrpcResp(other.getGrpcResp());
         }
+        if (other.hasDedupSpec()) {
+          mergeDedupSpec(other.getDedupSpec());
+        }
         this.mergeUnknownFields(other.getUnknownFields());
         onChanged();
         return this;
@@ -7435,6 +7505,13 @@ java.lang.String defaultValue) {
                 bitField0_ |= 0x00000080;
                 break;
               } // case 66
+              case 74: {
+                input.readMessage(
+                    getDedupSpecFieldBuilder().getBuilder(),
+                    extensionRegistry);
+                bitField0_ |= 0x00000100;
+                break;
+              } // case 74
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -8120,6 +8197,125 @@ java.lang.String defaultValue) {
           grpcResp_ = null;
         }
         return grpcRespBuilder_;
+      }
+
+      private io.keploy.grpc.stubs.Service.DedupSpec dedupSpec_;
+      private com.google.protobuf.SingleFieldBuilderV3<
+          io.keploy.grpc.stubs.Service.DedupSpec, io.keploy.grpc.stubs.Service.DedupSpec.Builder, io.keploy.grpc.stubs.Service.DedupSpecOrBuilder> dedupSpecBuilder_;
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       * @return Whether the dedupSpec field is set.
+       */
+      public boolean hasDedupSpec() {
+        return ((bitField0_ & 0x00000100) != 0);
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       * @return The dedupSpec.
+       */
+      public io.keploy.grpc.stubs.Service.DedupSpec getDedupSpec() {
+        if (dedupSpecBuilder_ == null) {
+          return dedupSpec_ == null ? io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance() : dedupSpec_;
+        } else {
+          return dedupSpecBuilder_.getMessage();
+        }
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public Builder setDedupSpec(io.keploy.grpc.stubs.Service.DedupSpec value) {
+        if (dedupSpecBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          dedupSpec_ = value;
+        } else {
+          dedupSpecBuilder_.setMessage(value);
+        }
+        bitField0_ |= 0x00000100;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public Builder setDedupSpec(
+          io.keploy.grpc.stubs.Service.DedupSpec.Builder builderForValue) {
+        if (dedupSpecBuilder_ == null) {
+          dedupSpec_ = builderForValue.build();
+        } else {
+          dedupSpecBuilder_.setMessage(builderForValue.build());
+        }
+        bitField0_ |= 0x00000100;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public Builder mergeDedupSpec(io.keploy.grpc.stubs.Service.DedupSpec value) {
+        if (dedupSpecBuilder_ == null) {
+          if (((bitField0_ & 0x00000100) != 0) &&
+            dedupSpec_ != null &&
+            dedupSpec_ != io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance()) {
+            getDedupSpecBuilder().mergeFrom(value);
+          } else {
+            dedupSpec_ = value;
+          }
+        } else {
+          dedupSpecBuilder_.mergeFrom(value);
+        }
+        bitField0_ |= 0x00000100;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public Builder clearDedupSpec() {
+        bitField0_ = (bitField0_ & ~0x00000100);
+        dedupSpec_ = null;
+        if (dedupSpecBuilder_ != null) {
+          dedupSpecBuilder_.dispose();
+          dedupSpecBuilder_ = null;
+        }
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public io.keploy.grpc.stubs.Service.DedupSpec.Builder getDedupSpecBuilder() {
+        bitField0_ |= 0x00000100;
+        onChanged();
+        return getDedupSpecFieldBuilder().getBuilder();
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      public io.keploy.grpc.stubs.Service.DedupSpecOrBuilder getDedupSpecOrBuilder() {
+        if (dedupSpecBuilder_ != null) {
+          return dedupSpecBuilder_.getMessageOrBuilder();
+        } else {
+          return dedupSpec_ == null ?
+              io.keploy.grpc.stubs.Service.DedupSpec.getDefaultInstance() : dedupSpec_;
+        }
+      }
+      /**
+       * <code>.services.DedupSpec DedupSpec = 9;</code>
+       */
+      private com.google.protobuf.SingleFieldBuilderV3<
+          io.keploy.grpc.stubs.Service.DedupSpec, io.keploy.grpc.stubs.Service.DedupSpec.Builder, io.keploy.grpc.stubs.Service.DedupSpecOrBuilder> 
+          getDedupSpecFieldBuilder() {
+        if (dedupSpecBuilder_ == null) {
+          dedupSpecBuilder_ = new com.google.protobuf.SingleFieldBuilderV3<
+              io.keploy.grpc.stubs.Service.DedupSpec, io.keploy.grpc.stubs.Service.DedupSpec.Builder, io.keploy.grpc.stubs.Service.DedupSpecOrBuilder>(
+                  getDedupSpec(),
+                  getParentForChildren(),
+                  isClean());
+          dedupSpec_ = null;
+        }
+        return dedupSpecBuilder_;
       }
       @java.lang.Override
       public final Builder setUnknownFields(
@@ -12753,14 +12949,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=89
+     *     See service.proto;l=90
      * @return The body.
      */
     @java.lang.Deprecated java.lang.String getBody();
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=89
+     *     See service.proto;l=90
      * @return The bytes for body.
      */
     @java.lang.Deprecated com.google.protobuf.ByteString
@@ -13132,7 +13328,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=89
+     *     See service.proto;l=90
      * @return The body.
      */
     @java.lang.Override
@@ -13151,7 +13347,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 7 [deprecated = true];</code>
      * @deprecated services.HttpReq.Body is deprecated.
-     *     See service.proto;l=89
+     *     See service.proto;l=90
      * @return The bytes for body.
      */
     @java.lang.Override
@@ -14369,7 +14565,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=89
+       *     See service.proto;l=90
        * @return The body.
        */
       @java.lang.Deprecated public java.lang.String getBody() {
@@ -14387,7 +14583,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=89
+       *     See service.proto;l=90
        * @return The bytes for body.
        */
       @java.lang.Deprecated public com.google.protobuf.ByteString
@@ -14406,7 +14602,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=89
+       *     See service.proto;l=90
        * @param value The body to set.
        * @return This builder for chaining.
        */
@@ -14421,7 +14617,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=89
+       *     See service.proto;l=90
        * @return This builder for chaining.
        */
       @java.lang.Deprecated public Builder clearBody() {
@@ -14433,7 +14629,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 7 [deprecated = true];</code>
        * @deprecated services.HttpReq.Body is deprecated.
-       *     See service.proto;l=89
+       *     See service.proto;l=90
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
@@ -16533,14 +16729,14 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue);
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=109
+     *     See service.proto;l=110
      * @return The body.
      */
     @java.lang.Deprecated java.lang.String getBody();
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=109
+     *     See service.proto;l=110
      * @return The bytes for body.
      */
     @java.lang.Deprecated com.google.protobuf.ByteString
@@ -16740,7 +16936,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=109
+     *     See service.proto;l=110
      * @return The body.
      */
     @java.lang.Override
@@ -16759,7 +16955,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
     /**
      * <code>string Body = 3 [deprecated = true];</code>
      * @deprecated services.HttpResp.Body is deprecated.
-     *     See service.proto;l=109
+     *     See service.proto;l=110
      * @return The bytes for body.
      */
     @java.lang.Override
@@ -17579,7 +17775,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=109
+       *     See service.proto;l=110
        * @return The body.
        */
       @java.lang.Deprecated public java.lang.String getBody() {
@@ -17597,7 +17793,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=109
+       *     See service.proto;l=110
        * @return The bytes for body.
        */
       @java.lang.Deprecated public com.google.protobuf.ByteString
@@ -17616,7 +17812,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=109
+       *     See service.proto;l=110
        * @param value The body to set.
        * @return This builder for chaining.
        */
@@ -17631,7 +17827,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=109
+       *     See service.proto;l=110
        * @return This builder for chaining.
        */
       @java.lang.Deprecated public Builder clearBody() {
@@ -17643,7 +17839,7 @@ io.keploy.grpc.stubs.Service.StrArr defaultValue) {
       /**
        * <code>string Body = 3 [deprecated = true];</code>
        * @deprecated services.HttpResp.Body is deprecated.
-       *     See service.proto;l=109
+       *     See service.proto;l=110
        * @param value The bytes for body to set.
        * @return This builder for chaining.
        */
@@ -39776,13 +39972,14 @@ java.lang.String defaultValue) {
       "\0132\".services.TestCaseReq.ReplaceEntry\022\014\n" +
       "\004Type\030\014 \001(\t\022\"\n\007GrpcReq\030\r \001(\0132\021.services." +
       "GrpcReq\022$\n\010GrpcResp\030\016 \001(\0132\022.services.Grp" +
-      "cResp\022&\n\tDedupSpec\030\022 \001(\0132\023.services.Dedu" +
+      "cResp\022&\n\tDedupSpec\030\017 \001(\0132\023.services.Dedu" +
       "pSpec\032.\n\014ReplaceEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005va" +
-      "lue\030\002 \001(\t:\0028\001\"\261\001\n\007TestReq\022\n\n\002ID\030\001 \001(\t\022\r\n" +
+      "lue\030\002 \001(\t:\0028\001\"\331\001\n\007TestReq\022\n\n\002ID\030\001 \001(\t\022\r\n" +
       "\005AppID\030\002 \001(\t\022\r\n\005RunID\030\003 \001(\t\022 \n\004Resp\030\004 \001(" +
       "\0132\022.services.HttpResp\022\024\n\014TestCasePath\030\005 " +
       "\001(\t\022\020\n\010MockPath\030\006 \001(\t\022\014\n\004Type\030\007 \001(\t\022$\n\010G" +
-      "rpcResp\030\010 \001(\0132\022.services.GrpcResp\"\367\004\n\010Te" +
+      "rpcResp\030\010 \001(\0132\022.services.GrpcResp\022&\n\tDed" +
+      "upSpec\030\t \001(\0132\023.services.DedupSpec\"\367\004\n\010Te" +
       "stCase\022\n\n\002id\030\001 \001(\t\022\017\n\007created\030\002 \001(\003\022\017\n\007u" +
       "pdated\030\003 \001(\003\022\020\n\010captured\030\004 \001(\003\022\013\n\003CID\030\005 " +
       "\001(\t\022\r\n\005appID\030\006 \001(\t\022\013\n\003URI\030\007 \001(\t\022\"\n\007HttpR" +
@@ -39935,7 +40132,7 @@ java.lang.String defaultValue) {
     internal_static_services_TestReq_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_services_TestReq_descriptor,
-        new java.lang.String[] { "ID", "AppID", "RunID", "Resp", "TestCasePath", "MockPath", "Type", "GrpcResp", });
+        new java.lang.String[] { "ID", "AppID", "RunID", "Resp", "TestCasePath", "MockPath", "Type", "GrpcResp", "DedupSpec", });
     internal_static_services_TestCase_descriptor =
       getDescriptor().getMessageTypes().get(5);
     internal_static_services_TestCase_fieldAccessorTable = new

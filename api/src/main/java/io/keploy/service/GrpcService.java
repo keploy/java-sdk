@@ -650,6 +650,8 @@ public class GrpcService {
             AssertKTests.finalTestResult.set(false);
             return false;
         }
+        Service.DedupSpec.Builder dedupSpecBuilder = Service.DedupSpec.newBuilder();
+        System.out.println(Line_Path);
         Service.TestReq testReq = Service.TestReq.newBuilder()
                 .setID(tc.getId())
                 .setAppID(k.getCfg().getApp().getName())
@@ -658,6 +660,12 @@ public class GrpcService {
                 .setTestCasePath(k.getCfg().getApp().getTestPath())
                 .setMockPath(k.getCfg().getApp().getMockPath())
                 .setType(HTTP_EXPORT.value)
+                .setDedupSpec(dedupSpecBuilder
+                        .setBranchCovered(1).setBranchTotal(1)
+                        .setLinesCovered(Lines_covered).setLinesTotal(Lines_total)
+                        .setClassesCovered(4).setClassesTotal(5)
+                        .setMethodsCovered(6).setMethodsTotal(7)
+                        .setLinePath(Line_Path))
                 .build();
 
         Service.testResponse testResponse;
