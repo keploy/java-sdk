@@ -3,33 +3,22 @@ package io.keploy.agent;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
-import net.bytebuddy.asm.AsmVisitorWrapper;
-import net.bytebuddy.description.field.FieldDescription;
-import net.bytebuddy.description.field.FieldList;
 import net.bytebuddy.description.method.MethodDescription;
-import net.bytebuddy.description.method.MethodList;
-import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.TypeValidation;
 import net.bytebuddy.implementation.MethodDelegation;
-import net.bytebuddy.jar.asm.ClassVisitor;
-import net.bytebuddy.jar.asm.MethodVisitor;
-import net.bytebuddy.jar.asm.signature.SignatureReader;
-import net.bytebuddy.jar.asm.signature.SignatureVisitor;
-import net.bytebuddy.jar.asm.signature.SignatureWriter;
 import net.bytebuddy.matcher.ElementMatcher;
 import net.bytebuddy.pool.TypePool;
-import net.bytebuddy.utility.OpenedClassReader;
 import org.apache.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import net.bytebuddy.dynamic.DynamicType.Builder;
-
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Field;
 import java.sql.DatabaseMetaData;
-import java.util.*;
-
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
 import static net.bytebuddy.matcher.ElementMatchers.*;
 
@@ -70,8 +59,6 @@ public class KAgent {
         String jpaProperties ="org.springframework.boot.autoconfigure.orm.jpa.JpaProperties";
         String health = "org.springframework.boot.actuate.health.Health$Builder";
         String proxyDB = "com.mchange.v2.c3p0.impl.NewProxyDatabaseMetaData";
-        String redisJedisPool = "redis.clients.jedis.JedisPool";
-        String redisJedisBinary = "redis.clients.jedis.BinaryClient";
         // String mongo= "org.springframework.boot.autoconfigure.data.mongo.MongoDataProperties"; //TODO: add mongo support
 
         // String asyncApacheClient = "org.apache.http.impl.nio.client.CloseableHttpAsyncClient";
@@ -292,40 +279,7 @@ public class KAgent {
                     return builder;
                 }))
 
-                /*
-                  Intercepting getResource method of JedisPool. getResource is a method where the redis client(Jedis)
-                  returns a Jedis object and also checks the connection with the server. As connection should not be
-                  established when Keploy is in TEST_MODE this method should be intercepted and return a Jedis object
-                  without checking connection.
-                 */
-                .type(named(redisJedisPool))
-                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) )
-                    {
-                        logger.debug("mocking redis");
-                        return builder.method(named("getResource"))
-                            .intercept(Advice.to(TypePool.Default.ofSystemLoader().describe("io.keploy.advice.redis.jedis.JedisPoolResource_Advice").resolve(), ClassFileLocator.ForClassLoader.ofSystemLoader()));
-                    }
-                    logger.debug("skip mocking redis");
-                    return builder;
-                }))
 
-                /*
-                  The whole logic and connection with Redis Server boils down to one Class that is Connection. But
-                  Connection is not directly used rather used as a super class for a Class BinaryClient. This
-                  interceptor wraps the super class of BinaryClient i.e. Connection . As a final result BinaryClient
-                  will be extended to a wrapped class of Connection.
-                 */
-                .type(named(redisJedisBinary))
-                .transform(((builder, typeDescription, classLoader, module, protectionDomain) -> {
-                    if (System.getenv("SKIP_MOCK_REDIS") == null || !Boolean.parseBoolean(System.getenv("SKIP_MOCK_REDIS")) )
-                    {
-                        logger.debug("mocking redis");
-                        return getBuilderForClassWrapper(builder, "redis/clients/jedis/Connection", "io/keploy/redis/jedis/KConnection");
-                    }
-                    logger.debug("skip mocking redis");
-                    return builder;
-                }))
 
                 // Interceptor for apache async-client
                 // .type(named(asyncApacheClient))
@@ -421,100 +375,4 @@ public class KAgent {
     //         }
     //     }
     // }
-
-    // A class will be replaced by another class in run time using this builder
-    private static Builder getBuilderForClassWrapper(Builder builder, String host, String guest) {
-        return builder.visit(
-                new AsmVisitorWrapper() {
-                    @Override
-                    public int mergeWriter(int arg0) {
-                        return arg0;
-                    }
-
-                    @Override
-                    public int mergeReader(int arg0) {
-                        return arg0;
-                    }
-
-                    @Override
-                    public ClassVisitor wrap(TypeDescription instrumentedType,
-                                             ClassVisitor classVisitor,
-                                             net.bytebuddy.implementation.Implementation.Context implementationContext,
-                                             TypePool typePool,
-                                             FieldList<FieldDescription.InDefinedShape> fields,
-                                             MethodList<?> methods,
-                                             int writerFlags,
-                                             int readerFlags) {
-                        return new ClassVisitor(OpenedClassReader.ASM_API, classVisitor) {
-                            private boolean wasMarked = false;
-
-                            @Override
-                            public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
-                                if (host.equals(superName)) {
-                                    superName = guest;
-                                    if (signature != null) {
-                                        SignatureWriter sw = new SignatureWriter() {
-                                            private boolean superclass = false;
-
-                                            @Override
-                                            public void visitFormalTypeParameter(String name) {
-                                                superclass = false;
-                                                super.visitFormalTypeParameter(name);
-                                            }
-
-                                            @Override
-                                            public SignatureVisitor visitSuperclass() {
-                                                superclass = true;
-                                                return super.visitSuperclass();
-                                            }
-
-                                            @Override
-                                            public void visitEnd() {
-                                                superclass = false;
-                                                super.visitEnd();
-                                            }
-
-                                            @Override
-                                            public SignatureVisitor visitInterface() {
-                                                superclass = false;
-                                                return super.visitInterface();
-                                            }
-
-                                            @Override
-                                            public void visitClassType(String name) {
-                                                if (superclass && host.equals(name)) {
-                                                    name = guest;
-                                                }
-                                                super.visitClassType(name);
-                                            }
-                                        };
-                                        new SignatureReader(signature).accept(sw);
-                                        signature = sw.toString();
-                                    }
-                                    wasMarked = true;
-                                }
-                                super.visit(version, access, name, signature, superName, interfaces);
-                            }
-
-                            @Override
-                            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
-                                if (wasMarked && "<init>".equals(name)) {
-                                    return new MethodVisitor(OpenedClassReader.ASM_API, super.visitMethod(access, name, descriptor, signature, exceptions)) {
-                                        @Override
-                                        public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
-                                            if (host.equals(owner)) {
-                                                owner = guest;
-                                            }
-                                            super.visitMethodInsn(opcode, owner, name, descriptor, isInterface);
-                                        }
-                                    };
-                                }
-                                return super.visitMethod(access, name, descriptor, signature, exceptions);
-                            }
-                        };
-                    }
-                }
-        );
-    }
-
 }
