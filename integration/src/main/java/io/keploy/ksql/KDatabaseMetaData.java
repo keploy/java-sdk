@@ -77,7 +77,22 @@ public class KDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public String getDatabaseProductName() throws SQLException {
-        return "null";
+        String driverName = KDriver.DriverName;
+        switch (driverName) {
+            case "org.postgresql.Driver":
+                return "PostgreSQL";
+            case "com.mysql.cj.jdbc.Driver":
+                return "MySQL";
+            case "org.h2.Driver":
+                return "H2";
+            case "oracle.jdbc.driver.OracleDriver":
+            case "oracle.jdbc.OracleDriver":
+                return "Oracle";
+            case "org.mariadb.jdbc.Driver":
+                return "MariaDB";
+            default:
+                return "Unknown";
+        }
     }
 
     @Override
