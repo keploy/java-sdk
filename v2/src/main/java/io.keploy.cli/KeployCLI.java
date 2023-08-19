@@ -99,12 +99,12 @@ public class KeployCLI {
         processBuilder.redirectErrorStream(true);
         kprocess = processBuilder.start();
 
-        // When running without root user
-        String password = "keploy@123";
-        try (OutputStream os = kprocess.getOutputStream()) {
-            os.write((password + "\n").getBytes());
-            os.flush();
-        }
+//        // When running without root user
+//        String password = "keploy@123";
+//        try (OutputStream os = kprocess.getOutputStream()) {
+//            os.write((password + "\n").getBytes());
+//            os.flush();
+//        }
 
         // Read the output in real-time
 
