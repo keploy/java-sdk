@@ -43,6 +43,7 @@
         <module>common</module>
         <module>models</module>
         <module>keploy-sdk</module>
+        <module>v2</module>
     </modules>
 
     <properties>
