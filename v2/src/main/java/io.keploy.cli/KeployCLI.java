@@ -86,7 +86,8 @@ public class KeployCLI {
                 "--pid=" + pid,
                 "-p=" + testPath,
                 "-d=" + delay,
-                "--port=" + port
+                "--port=" + port,
+                "--language=java"
         };
 
 
