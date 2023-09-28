@@ -7,9 +7,13 @@ import org.apache.logging.log4j.Logger;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 
 public class KeployCLI {
@@ -292,37 +296,65 @@ public class KeployCLI {
         return content.toString();
     }
 
-
-
     public static void StopKeployServer() {
-//        kprocess.destroy();
         killProcessOnPort(serverPort);
     }
-
     public static void killProcessOnPort(int port) {
-        logger.debug("trying to kill process running on port:{}",port);
-        String command = "lsof -t -i:" + port;
-
         try {
-            Process process = Runtime.getRuntime().exec(command);
+            Process process = new ProcessBuilder("sh", "-c", "lsof -t -i:" + port).start();
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                forceKillProcessByPID(line.trim());
+            String pids = reader.readLine();
+            if (pids != null) {
+                Arrays.stream(pids.split("\n")).forEach(pidStr -> {
+                    if (!pidStr.isEmpty()) {
+                        int pid = Integer.parseInt(pidStr.trim());
+                        killProcessesAndTheirChildren(pid);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.err.println("Failed to fetch the process ID on port " + port);
+        }
+    }
+
+    public static void killProcessesAndTheirChildren(int parentPID) {
+        List<Integer> pids = new ArrayList<>();
+        findAndCollectChildProcesses(String.valueOf(parentPID), pids);
+        for (int childPID : pids) {
+            if (childPID != getCurrentPid()) {
+                try {
+                    new ProcessBuilder("sudo", "kill", "-9", String.valueOf(childPID)).start();
+                    logger.debug("Killed child process " + childPID);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    System.err.println("Failed to kill child process " + childPID);
+                }
+            }
+        }
+    }
+
+    public static void findAndCollectChildProcesses(String parentPID, List<Integer> pids) {
+        try {
+            pids.add(Integer.parseInt(parentPID));
+            Process process = new ProcessBuilder("pgrep", "-P", parentPID).start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String output = reader.readLine();
+            if (output != null) {
+                Arrays.stream(output.split("\n")).forEach(childPID -> {
+                    if (!childPID.isEmpty()) {
+                        findAndCollectChildProcesses(childPID, pids);
+                    }
+                });
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private static void forceKillProcessByPID(String pid) {
-        try {
-            String cmd = "kill -9 "+pid;
-            logger.debug("cmd to kill:{}",cmd);
-            Runtime.getRuntime().exec("kill -9 " + pid);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    private static int getCurrentPid() {
+        String processName = ManagementFactory.getRuntimeMXBean().getName();
+        return Integer.parseInt(processName.split("@")[0]);
     }
-
 }
+
