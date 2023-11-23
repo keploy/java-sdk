@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-
 public class KeployCLI {
 
     private static final String GRAPHQL_ENDPOINT = "/query";
@@ -25,9 +24,7 @@ public class KeployCLI {
 
     private static int serverPort = 6789;
 
-    private static Process kprocess;
-
-    private static Thread kLogThread;
+    private static long userCommandPid = 0;
 
     public class GraphQLResponse {
         Data data;
@@ -49,92 +46,60 @@ public class KeployCLI {
         }
     }
 
-
     public enum TestRunStatus {
         RUNNING,
         PASSED,
         FAILED
     }
 
-//    public static void main(String[] args) throws IOException, InterruptedException {
-//   }
+    public static void StartUserApplication(String runCmd) throws IOException {
+        // Split the runCmd string into command parts
+        String[] command = runCmd.split(" ");
 
-
-    // Run Keploy server
-    public static void RunKeployServer(long pid, int delay, String testPath, int port) throws InterruptedException, IOException {
-        // Registering a shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nShutdown hook executed!");
-            kprocess.destroy();
-            try {
-                Thread.sleep(1000);
-                kLogThread.join();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        }));
-
-
-//        String password = "keploy@123";  // Ensure this isn't hardcoded in production code!
-//        String commandString = "echo '" + password + "' | sudo -S /usr/local/bin/keploy serve --pid=" + pid + " -p=" + testPath + " -d=" + delay + " --port=" + port;
-//        String[] command = {
-//                commandString
-//        };
-
-        // Construct the keploy command
-        String[] command = {
-                "sudo",
-                "-S",
-                "/usr/local/bin/keploy",
-                "serve",
-                "--pid=" + pid,
-                "-p=" + testPath,
-                "-d=" + delay,
-                "--port=" + port,
-                "--language=java"
-        };
-
-
-        if (port != 0) {
-            serverPort = port;
-        }
-
-        // Start the keploy command
+        // Start the command using ProcessBuilder
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true);
-        kprocess = processBuilder.start();
+        Process process = processBuilder.start();
 
-//        // When running without root user
-//        String password = "keploy@123";
-//        try (OutputStream os = kprocess.getOutputStream()) {
-//            os.write((password + "\n").getBytes());
-//            os.flush();
-//        }
+        // Get the PID of the process
+        userCommandPid = getProcessId(process);
 
-        // Read the output in real-time
-
-        Thread logThread = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(kprocess.getInputStream()))) {
-                String line;
-                while (kprocess.isAlive() && (line = reader.readLine()) != null) {
-                    System.out.println(line);
-                }
-            } catch (IOException e) {
-                // Since the stream might get closed due to process termination,
-                // we can handle this specific error more gracefully
-                if (!"Stream closed".equals(e.getMessage())) {
-                    e.printStackTrace();
-                }
-            }
-        });
-
-
+        // Start a thread to log the output of the process
+        Thread logThread = new Thread(() -> logProcessOutput(process));
         logThread.start();
-
-        kLogThread = logThread;
-        // Wait for the command to finish and get its exit code
-//        int exitCode = process.waitFor();
     }
+
+    public static void StopUserApplication() {
+        killProcessesAndTheirChildren((int) userCommandPid);
+    }
+
+    private static long getProcessId(Process process) {
+        // Java 9 and later
+        if (process.getClass().getName().equals("java.lang.ProcessImpl")) {
+            return process.pid();
+        }
+
+        // Java 8 and earlier
+        try {
+            java.lang.reflect.Field f = process.getClass().getDeclaredField("pid");
+            f.setAccessible(true);
+            return f.getLong(process);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException("Unable to get process ID", e);
+        }
+    }
+
+    private static void logProcessOutput(Process process) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
 
     // Set the HTTP client
     private static HttpURLConnection setHttpClient() {
@@ -191,7 +156,6 @@ public class KeployCLI {
         return null;
     }
 
-
     // Fetch the status of testSet
     public static TestRunStatus FetchTestSetStatus(String testRunId) {
 
@@ -203,8 +167,7 @@ public class KeployCLI {
 
             String payload = String.format(
                     "{ \"query\": \"{ testSetStatus(testRunId: \\\"%s\\\") { status } }\" }",
-                    testRunId
-            );
+                    testRunId);
 
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
@@ -239,8 +202,7 @@ public class KeployCLI {
         return null;
     }
 
-
-    //     Run a particular testSet
+    // Run a particular testSet
     public static String RunTestSet(String testSetName) {
         try {
             HttpURLConnection conn = setHttpClient();
@@ -250,8 +212,7 @@ public class KeployCLI {
 
             String payload = String.format(
                     "{ \"query\": \"mutation { runTestSet(testSet: \\\"%s\\\") { success testRunId message } }\" }",
-                    testSetName
-            );
+                    testSetName);
 
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
@@ -279,7 +240,6 @@ public class KeployCLI {
 
     }
 
-
     private static boolean isSuccessfulResponse(HttpURLConnection conn) throws IOException {
         int responseCode = conn.getResponseCode();
         return (responseCode >= 200 && responseCode < 300);
@@ -296,9 +256,7 @@ public class KeployCLI {
         return content.toString();
     }
 
-    public static void StopKeployServer() {
-        killProcessOnPort(serverPort);
-    }
+
     public static void killProcessOnPort(int port) {
         try {
             Process process = new ProcessBuilder("sh", "-c", "lsof -t -i:" + port).start();
@@ -324,7 +282,7 @@ public class KeployCLI {
         for (int childPID : pids) {
             if (childPID != getCurrentPid()) {
                 try {
-                    new ProcessBuilder("sudo", "kill", "-9", String.valueOf(childPID)).start();
+                    new ProcessBuilder("sudo", "kill", "-15", String.valueOf(childPID)).start();
                     logger.debug("Killed child process " + childPID);
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -357,4 +315,3 @@ public class KeployCLI {
         return Integer.parseInt(processName.split("@")[0]);
     }
 }
-
