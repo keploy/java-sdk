@@ -5,16 +5,27 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+//FOR CLI CODE COVERAGE REFERENCE: https://dzone.com/articles/code-coverage-report-generator-for-java-projects-a
+
+// Jacococli & JacocoAgent version: 0.8.8
 public class KeployCLI {
 
     private static final String GRAPHQL_ENDPOINT = "/query";
@@ -25,6 +36,10 @@ public class KeployCLI {
     private static int serverPort = 6789;
 
     private static long userCommandPid = 0;
+
+    private static String jacocoCliPath = "";
+
+    private static String jacocoAgentPath = "";
 
     public class GraphQLResponse {
         Data data;
@@ -53,6 +68,9 @@ public class KeployCLI {
     }
 
     public static void StartUserApplication(String runCmd) throws IOException {
+
+        runCmd = attachJacocoAgent(runCmd);
+
         // Split the runCmd string into command parts
         String[] command = runCmd.split(" ");
 
@@ -69,8 +87,98 @@ public class KeployCLI {
         logThread.start();
     }
 
+    private static String attachJacocoAgent(String cmd) {
+        String resourcePath = "jacocoagent.jar"; // Relative path in the JAR file
+
+        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IllegalStateException("jacocoagent.jar not found in resources");
+            }
+
+            Path tempFile = Files.createTempFile("jacocoagent", ".jar");
+
+            // Using Files.copy for robust file copying
+            Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            is.close();
+            String agentString = "-javaagent:" + tempFile.toAbsolutePath()
+                    + "=address=localhost,port=36320,destfile=coverage.exec,output=tcpserver";
+
+            jacocoAgentPath = tempFile.toAbsolutePath().toString();
+            return cmd.replaceFirst("java", "java " + agentString);
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IllegalStateException("Error setting up JaCoCo agent", e);
+        }
+    }
+
+    public static void FindCoverage(String testSet) throws IOException, InterruptedException {
+        String dest = "target/" + testSet;
+        String runCmd = "java -jar " + getJacococliPath() + " dump --address localhost --port 36320 --destfile "
+                + dest + ".exec";
+
+
+        // Split the runCmd string into command parts
+        String[] command = runCmd.split(" ");
+
+        // Start the command using ProcessBuilder
+        ProcessBuilder processBuilder = new ProcessBuilder(command);
+        processBuilder.redirectErrorStream(true);
+        Process process = processBuilder.start();
+
+        // Start a thread to log the output of the process
+        Thread logThread = new Thread(() -> logProcessOutput(process));
+        logThread.start();
+    }
+
+    private static String getJacococliPath() {
+        String resourcePath = "jacococli.jar"; // Relative path in the JAR file
+
+        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IllegalStateException("jacococli.jar not found in resources");
+            }
+
+            Path tempFile = Files.createTempFile("jacococli", ".jar");
+
+            // Using Files.copy for robust file copying
+            Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            is.close();
+            jacocoCliPath = tempFile.toAbsolutePath().toString();
+            return jacocoCliPath;
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IllegalStateException("Error setting up JacocoCli", e);
+        }
+    }
+
     public static void StopUserApplication() {
+        deleteJacocoFiles();
         killProcessesAndTheirChildren((int) userCommandPid);
+    }
+
+    private static void deleteJacocoFiles() {
+        deleteFile(jacocoAgentPath);
+        deleteFile(jacocoCliPath);
+    }
+
+    private static boolean deleteFile(String filePath) {
+        File file = new File(filePath);
+
+        // Check if the file exists
+        if (!file.exists()) {
+            System.out.println("File not found: " + filePath);
+            return false;
+        }
+
+        // Attempt to delete the file
+        if (file.delete()) {
+            logger.debug("File deleted successfully:",filePath);
+            // System.out.println("File deleted successfully: " + filePath);
+            return true;
+        } else {
+            System.out.println("Failed to delete the file: " + filePath);
+            return false;
+        }
     }
 
     private static long getProcessId(Process process) {
@@ -99,7 +207,6 @@ public class KeployCLI {
             e.printStackTrace();
         }
     }
-
 
     // Set the HTTP client
     private static HttpURLConnection setHttpClient() {
@@ -255,7 +362,6 @@ public class KeployCLI {
         in.close();
         return content.toString();
     }
-
 
     public static void killProcessOnPort(int port) {
         try {
