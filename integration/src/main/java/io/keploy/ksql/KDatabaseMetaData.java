@@ -82,6 +82,7 @@ public class KDatabaseMetaData implements DatabaseMetaData {
             case "org.postgresql.Driver":
                 return "PostgreSQL";
             case "com.mysql.cj.jdbc.Driver":
+            case "com.mysql.jdbc.Driver":
                 return "MySQL";
             case "org.h2.Driver":
                 return "H2";
