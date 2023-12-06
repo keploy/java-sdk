@@ -33,6 +33,7 @@ public class RegisterDriverAdvice_Interceptor {
                     KDriver.Dialect = "org.hibernate.dialect.PostgreSQLDialect";
                     break;
                 case "com.mysql.cj.jdbc.Driver":
+                case "com.mysql.jdbc.Driver":
                     KDriver.Dialect = "org.hibernate.dialect.MySQLDialect";
                     break;
                 case "oracle.jdbc.driver.OracleDriver":
