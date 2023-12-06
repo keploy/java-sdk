@@ -77,6 +77,9 @@ public class KDriver implements Driver {
             case "com.mysql.cj.jdbc.Driver":
                 d = new com.mysql.cj.jdbc.Driver();
                 break;
+            case "com.mysql.jdbc.Driver":
+                d = new com.mysql.jdbc.Driver();
+                break;
             case "org.h2.Driver":
                 d = new org.h2.Driver();
                 break;
