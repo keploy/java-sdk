@@ -34,4 +34,16 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
+<build>
+     <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <!-- Include all resources in src/main/resources (default behavior) -->
+                <includes>
+                    <include>**/*</include>
+                </includes>
+            </resource>
+    </resources>
+</build>
+
 </project>

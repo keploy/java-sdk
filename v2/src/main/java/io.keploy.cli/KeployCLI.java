@@ -5,17 +5,27 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+//FOR CLI CODE COVERAGE REFERENCE: https://dzone.com/articles/code-coverage-report-generator-for-java-projects-a
 
+// Jacococli & JacocoAgent version: 0.8.8
 public class KeployCLI {
 
     private static final String GRAPHQL_ENDPOINT = "/query";
@@ -25,9 +35,11 @@ public class KeployCLI {
 
     private static int serverPort = 6789;
 
-    private static Process kprocess;
+    private static long userCommandPid = 0;
 
-    private static Thread kLogThread;
+    private static String jacocoCliPath = "";
+
+    private static String jacocoAgentPath = "";
 
     public class GraphQLResponse {
         Data data;
@@ -49,91 +61,151 @@ public class KeployCLI {
         }
     }
 
-
     public enum TestRunStatus {
         RUNNING,
         PASSED,
         FAILED
     }
 
-//    public static void main(String[] args) throws IOException, InterruptedException {
-//   }
+    public static void StartUserApplication(String runCmd) throws IOException {
 
+        runCmd = attachJacocoAgent(runCmd);
 
-    // Run Keploy server
-    public static void RunKeployServer(long pid, int delay, String testPath, int port) throws InterruptedException, IOException {
-        // Registering a shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nShutdown hook executed!");
-            kprocess.destroy();
-            try {
-                Thread.sleep(1000);
-                kLogThread.join();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        }));
+        // Split the runCmd string into command parts
+        String[] command = runCmd.split(" ");
 
-
-//        String password = "keploy@123";  // Ensure this isn't hardcoded in production code!
-//        String commandString = "echo '" + password + "' | sudo -S /usr/local/bin/keploy serve --pid=" + pid + " -p=" + testPath + " -d=" + delay + " --port=" + port;
-//        String[] command = {
-//                commandString
-//        };
-
-        // Construct the keploy command
-        String[] command = {
-                "sudo",
-                "-S",
-                "/usr/local/bin/keploy",
-                "serve",
-                "--pid=" + pid,
-                "-p=" + testPath,
-                "-d=" + delay,
-                "--port=" + port,
-                "--language=java"
-        };
-
-
-        if (port != 0) {
-            serverPort = port;
-        }
-
-        // Start the keploy command
+        // Start the command using ProcessBuilder
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.redirectErrorStream(true);
-        kprocess = processBuilder.start();
+        Process process = processBuilder.start();
 
-//        // When running without root user
-//        String password = "keploy@123";
-//        try (OutputStream os = kprocess.getOutputStream()) {
-//            os.write((password + "\n").getBytes());
-//            os.flush();
-//        }
+        // Get the PID of the process
+        userCommandPid = getProcessId(process);
 
-        // Read the output in real-time
-
-        Thread logThread = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(kprocess.getInputStream()))) {
-                String line;
-                while (kprocess.isAlive() && (line = reader.readLine()) != null) {
-                    System.out.println(line);
-                }
-            } catch (IOException e) {
-                // Since the stream might get closed due to process termination,
-                // we can handle this specific error more gracefully
-                if (!"Stream closed".equals(e.getMessage())) {
-                    e.printStackTrace();
-                }
-            }
-        });
-
-
+        // Start a thread to log the output of the process
+        Thread logThread = new Thread(() -> logProcessOutput(process));
         logThread.start();
+    }
 
-        kLogThread = logThread;
-        // Wait for the command to finish and get its exit code
-//        int exitCode = process.waitFor();
+    private static String attachJacocoAgent(String cmd) {
+        String resourcePath = "jacocoagent.jar"; // Relative path in the JAR file
+
+        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IllegalStateException("jacocoagent.jar not found in resources");
+            }
+
+            Path tempFile = Files.createTempFile("jacocoagent", ".jar");
+
+            // Using Files.copy for robust file copying
+            Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            is.close();
+            String agentString = "-javaagent:" + tempFile.toAbsolutePath()
+                    + "=address=localhost,port=36320,destfile=coverage.exec,output=tcpserver";
+
+            jacocoAgentPath = tempFile.toAbsolutePath().toString();
+            return cmd.replaceFirst("java", "java " + agentString);
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IllegalStateException("Error setting up JaCoCo agent", e);
+        }
+    }
+
+    public static void FindCoverage(String testSet) throws IOException, InterruptedException {
+        String dest = "target/" + testSet;
+        String runCmd = "java -jar " + getJacococliPath() + " dump --address localhost --port 36320 --destfile "
+                + dest + ".exec";
+
+
+        // Split the runCmd string into command parts
+        String[] command = runCmd.split(" ");
+
+        // Start the command using ProcessBuilder
+        ProcessBuilder processBuilder = new ProcessBuilder(command);
+        processBuilder.redirectErrorStream(true);
+        Process process = processBuilder.start();
+
+        // Start a thread to log the output of the process
+        Thread logThread = new Thread(() -> logProcessOutput(process));
+        logThread.start();
+    }
+
+    private static String getJacococliPath() {
+        String resourcePath = "jacococli.jar"; // Relative path in the JAR file
+
+        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IllegalStateException("jacococli.jar not found in resources");
+            }
+
+            Path tempFile = Files.createTempFile("jacococli", ".jar");
+
+            // Using Files.copy for robust file copying
+            Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            is.close();
+            jacocoCliPath = tempFile.toAbsolutePath().toString();
+            return jacocoCliPath;
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IllegalStateException("Error setting up JacocoCli", e);
+        }
+    }
+
+    public static void StopUserApplication() {
+        deleteJacocoFiles();
+        killProcessesAndTheirChildren((int) userCommandPid);
+    }
+
+    private static void deleteJacocoFiles() {
+        deleteFile(jacocoAgentPath);
+        deleteFile(jacocoCliPath);
+    }
+
+    private static boolean deleteFile(String filePath) {
+        File file = new File(filePath);
+
+        // Check if the file exists
+        if (!file.exists()) {
+            System.out.println("File not found: " + filePath);
+            return false;
+        }
+
+        // Attempt to delete the file
+        if (file.delete()) {
+            logger.debug("File deleted successfully:",filePath);
+            // System.out.println("File deleted successfully: " + filePath);
+            return true;
+        } else {
+            System.out.println("Failed to delete the file: " + filePath);
+            return false;
+        }
+    }
+
+    private static long getProcessId(Process process) {
+        // Java 9 and later
+        if (process.getClass().getName().equals("java.lang.ProcessImpl")) {
+            return process.pid();
+        }
+
+        // Java 8 and earlier
+        try {
+            java.lang.reflect.Field f = process.getClass().getDeclaredField("pid");
+            f.setAccessible(true);
+            return f.getLong(process);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException("Unable to get process ID", e);
+        }
+    }
+
+    private static void logProcessOutput(Process process) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     // Set the HTTP client
@@ -191,7 +263,6 @@ public class KeployCLI {
         return null;
     }
 
-
     // Fetch the status of testSet
     public static TestRunStatus FetchTestSetStatus(String testRunId) {
 
@@ -203,8 +274,7 @@ public class KeployCLI {
 
             String payload = String.format(
                     "{ \"query\": \"{ testSetStatus(testRunId: \\\"%s\\\") { status } }\" }",
-                    testRunId
-            );
+                    testRunId);
 
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
@@ -239,8 +309,7 @@ public class KeployCLI {
         return null;
     }
 
-
-    //     Run a particular testSet
+    // Run a particular testSet
     public static String RunTestSet(String testSetName) {
         try {
             HttpURLConnection conn = setHttpClient();
@@ -250,8 +319,7 @@ public class KeployCLI {
 
             String payload = String.format(
                     "{ \"query\": \"mutation { runTestSet(testSet: \\\"%s\\\") { success testRunId message } }\" }",
-                    testSetName
-            );
+                    testSetName);
 
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
@@ -279,7 +347,6 @@ public class KeployCLI {
 
     }
 
-
     private static boolean isSuccessfulResponse(HttpURLConnection conn) throws IOException {
         int responseCode = conn.getResponseCode();
         return (responseCode >= 200 && responseCode < 300);
@@ -296,9 +363,6 @@ public class KeployCLI {
         return content.toString();
     }
 
-    public static void StopKeployServer() {
-        killProcessOnPort(serverPort);
-    }
     public static void killProcessOnPort(int port) {
         try {
             Process process = new ProcessBuilder("sh", "-c", "lsof -t -i:" + port).start();
@@ -324,7 +388,7 @@ public class KeployCLI {
         for (int childPID : pids) {
             if (childPID != getCurrentPid()) {
                 try {
-                    new ProcessBuilder("sudo", "kill", "-9", String.valueOf(childPID)).start();
+                    new ProcessBuilder("sudo", "kill", "-15", String.valueOf(childPID)).start();
                     logger.debug("Killed child process " + childPID);
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -357,4 +421,3 @@ public class KeployCLI {
         return Integer.parseInt(processName.split("@")[0]);
     }
 }
-
