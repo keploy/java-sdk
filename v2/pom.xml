@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.keploy</groupId>
         <artifactId>java-sdk</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>1.3.3</version>
     </parent>
 
     <artifactId>v2</artifactId>
@@ -44,6 +44,19 @@
                 </includes>
             </resource>
     </resources>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <!-- Specify source directories -->
+                    <sourcepath>${project.basedir}/src/main/java</sourcepath>
+                </configuration>
+            </plugin>
+        </plugins>
+
 </build>
 
 </project>

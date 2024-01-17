@@ -389,6 +389,7 @@ public class KeployCLI {
             if (childPID != getCurrentPid()) {
                 try {
                     new ProcessBuilder("kill", "-15", String.valueOf(childPID)).start();
+
                     logger.debug("Killed child process " + childPID);
                 } catch (Exception e) {
                     e.printStackTrace();

@@ -121,16 +121,6 @@ public class MockLib {
         return kctx;
     }
 
-    /**
-     * Checks whether the mock path is available or not.
-     *
-     * @param kctx - Kcontext
-     * @param path - mock path
-     * @param mode - Kelpoy mode
-     * @param name -  app name
-     * @param overWrite - determines to overwrite the exiting file or not
-     * @return - Boolean which determines whether file exists in that path or not
-     */
     public static boolean StartRecordingMocks(String path, String mode, String name, Boolean overWrite) {
         Service.StartMockReq startMockReq = Service.StartMockReq.newBuilder().setMode(mode).setPath(path).setName(name).setOverWrite(overWrite).build();
         Service.StartMockResp startMockResp = blockingStub.startMocking(startMockReq);

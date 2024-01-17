@@ -5,11 +5,11 @@
     <parent>
         <artifactId>java-sdk</artifactId>
         <groupId>io.keploy</groupId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>1.3.3</version>
     </parent>
 
     <artifactId>keploy-sdk</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.3.3</version>
     <name>keploy-sdk</name>
     <!--    <description>keploy-sdk</description>-->
     <description>Client Java SDK for Keploy</description>
@@ -47,31 +47,31 @@
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>core</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.3.3</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>api</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.3.3</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>integration</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.3.3</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>models</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.3.3</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>common</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.3.3</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -149,8 +149,29 @@
                 </executions>
             </plugin>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>1.6</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.5.0</version>
                 <executions>
                     <execution>
                         <id>attach</id>
