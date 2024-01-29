@@ -60,11 +60,11 @@
             <version>2.1.214</version>
             <scope>provided</scope>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>org.mockito</groupId>-->
-<!--            <artifactId>mockito-all</artifactId>-->
-<!--            <version>1.10.19</version>-->
-<!--        </dependency>-->
+    <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>1.28</version> <!-- Use the latest version available -->
+        </dependency>
         <dependency>
             <groupId>org.mariadb.jdbc</groupId>
             <artifactId>mariadb-java-client</artifactId>
@@ -82,7 +82,6 @@
             <artifactId>okhttp</artifactId>
 <!--            <version>4.10.0</version>-->
             <version>3.14.9</version>
-            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
@@ -104,6 +103,11 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>org.jacoco</groupId>
+            <artifactId>org.jacoco.core</artifactId>
+            <version>0.8.7</version>
+        </dependency>
+        <dependency>
             <groupId>com.google.maps</groupId>
             <artifactId>google-maps-services</artifactId>
             <version>2.0.0</version>
@@ -115,15 +119,19 @@
             <version>2.11.0</version>
         </dependency>
         <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>2.8.9</version>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-client</artifactId>
+            <version>2.2.3</version>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/redis.clients/jedis -->
         <dependency>
-            <groupId>redis.clients</groupId>
-            <artifactId>jedis</artifactId>
-            <version>2.9.3</version>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-agent</artifactId>
+            <version>2.2.3</version>
+        </dependency>
+        <dependency>
+            <groupId>io.btrace</groupId>
+            <artifactId>btrace-boot</artifactId>
+            <version>2.2.3</version>
         </dependency>
     </dependencies>
 
