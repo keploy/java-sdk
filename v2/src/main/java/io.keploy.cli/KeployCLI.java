@@ -68,7 +68,7 @@ public class KeployCLI {
     }
 
     public static void StartUserApplication(String runCmd) throws IOException {
-        System.out.println("Starting user application: HHAHHA" + runCmd);
+        System.out.println("Starting user application:" + runCmd);
         runCmd = attachJacocoAgent(runCmd);
 
         // Split the runCmd string into command parts
@@ -87,6 +87,7 @@ public class KeployCLI {
         logThread.start();
     }
 
+    //ask gourav why he has done this
     private static String attachJacocoAgent(String cmd) {
         String resourcePath = "jacocoagent.jar"; // Relative path in the JAR file
 
@@ -448,7 +449,7 @@ public class KeployCLI {
 
     private static void waitForTestRunCompletion(String testRunId) {
         // Implement the logic to wait for test run completion using KeployCLI
-        long MAX_TIMEOUT = 600000; // 1m
+        long MAX_TIMEOUT = 6000000; // 1m
         long startTime = System.currentTimeMillis();
 
         try {

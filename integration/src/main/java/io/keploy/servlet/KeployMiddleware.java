@@ -45,7 +45,7 @@ public class KeployMiddleware implements Filter {
     private static final Logger logger = LogManager.getLogger(KeployMiddleware.class);
     private static final String CROSS = new String(Character.toChars(0x274C));
     public static ArrayList<String> stackTraceArr = new ArrayList<>();
-    private static boolean EnableDedup = true;
+    private static boolean EnableDedup = false;
     public static AtomicInteger metCount = new AtomicInteger(0);
     public static AtomicInteger reqCount = new AtomicInteger(0);
     public static AtomicInteger cnt = new AtomicInteger(0);
@@ -70,8 +70,6 @@ public class KeployMiddleware implements Filter {
         return (SET_BOLD_TEXT + str + SET_PLAIN_TEXT);
     }
 
- 
-
     @Override
     public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain)
             throws IOException, ServletException {
@@ -81,10 +79,13 @@ public class KeployMiddleware implements Filter {
         String keploy_test_id = request.getHeader("KEPLOY-TEST-ID");
         // logger.debug("KEPLOY-TEST-ID: {}", keploy_test_id);
         filterChain.doFilter(request, response);
-
-        if (keploy_test_id != null) {
-            System.out.println("Hi there I am here !!");
-
+        if (System.getenv("ENABLE_DEDUP") != null) {
+            String bool = System.getenv("ENABLE_DEDUP").trim();
+            EnableDedup = bool.equals("true");
+        }
+        // check if dedup is disabled then what should be the goal may be we can extract from header if dedup is enabled or not
+        if (keploy_test_id != null && EnableDedup) {
+           
             // Run getCoverage in a separate thread
 //            Thread coverageThread = new Thread(() -> {
                 try {
@@ -93,9 +94,15 @@ public class KeployMiddleware implements Filter {
                     throw new RuntimeException(e);
                 }
 //            });
-////
+
 //            coverageThread.start();
+//            try {
+//                Thread.sleep(500);
+//            } catch (InterruptedException e) {
+//                throw new RuntimeException(e);
+//            }
         }
+
     }
 
     @Override
@@ -103,18 +110,18 @@ public class KeployMiddleware implements Filter {
         InternalThreadLocalMap.destroy();
     }
 
-    public void execWriter() throws IOException {
+    public void execWriter(String keploy_test_id) throws IOException {
         File directory = new File(
-                "/Users/sarthak_1/Documents/Keploy/trash/samples-java/target");
-        File file = new File(directory, "jacoco-client" + reqCount.get() + ".exec");
+                System.getProperty("user.dir") + "/target");
+        File file = new File(directory, "jacoco-client" + keploy_test_id + ".exec");
+//        File file = new File(directory, "jacoco-client.exec");
+
         final FileOutputStream localFile = new FileOutputStream(file);
 
         final ExecutionDataWriter localWriter = new ExecutionDataWriter(
                 localFile);
 
         // Open a socket to the coverage agent:
-        // Please try to get overall coverage information by creating another instance
-        // and resetting to false
         final Socket socket = new Socket(InetAddress.getByName(ADDRESS), PORT);
         final RemoteControlWriter writer = new RemoteControlWriter(
                 socket.getOutputStream());
@@ -133,26 +140,59 @@ public class KeployMiddleware implements Filter {
         localFile.close();
     }
 
-    public void getCoverage(String keploy_test_id) throws IOException, InterruptedException {
-        System.out.println("Inside get coverage");
+    public synchronized void execWriter2(String keploy_test_id) throws IOException {
+        File directory = new File(System.getProperty("user.dir")+"/target");
+        File file = new File(directory, "jacoco-client" + keploy_test_id + ".exec");
 
-
-                try {
-                    execWriter();
-                } catch (IOException e) {
-                    // Handle or log the IOException here
-                    e.printStackTrace(); // Example: print the stack trace
-                }
+        FileOutputStream localFile = null;
+        ExecutionDataWriter localWriter = null;
+        Socket socket = null;
+        RemoteControlWriter writer = null;
+        RemoteControlReader reader = null;
 
         try {
-            execReader(keploy_test_id);
-        } catch (IOException e) {
-            // Handle or log the IOException here
-            e.printStackTrace(); // Example: print the stack trace
+            localFile = new FileOutputStream(file);
+            BufferedOutputStream bufferedLocalFile = new BufferedOutputStream(localFile);
+            localWriter = new ExecutionDataWriter(bufferedLocalFile);
+            socket = new Socket(InetAddress.getByName(ADDRESS), PORT);
+            writer = new RemoteControlWriter(socket.getOutputStream());
+            reader = new RemoteControlReader(socket.getInputStream());
+
+            reader.setSessionInfoVisitor(localWriter);
+            reader.setExecutionDataVisitor(localWriter);
+
+            // Send a dump command and read the response:
+            writer.visitDumpCommand(true, true);
+
+            if (!reader.read()) {
+                throw new IOException("Socket closed unexpectedly.");
+            }
+        } finally {
+            // Close resources in a finally block to ensure they are closed even if an exception occurs
+
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
+            }
+
+            if (localFile != null) {
+                localFile.close();
+            }
         }
-            // Call execReader directly in the current thread
+    }
 
+    public void getCoverage(String keploy_test_id) throws IOException, InterruptedException {
 
+        try {
+            execWriter(keploy_test_id);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+         try {
+             execReader(keploy_test_id);
+         } catch (IOException e) {
+             e.printStackTrace(); // Example: print the stack trace
+         }
 
     }
 
@@ -166,17 +206,18 @@ public class KeployMiddleware implements Filter {
         out.println("------------------------------------------");
         Line_Path = "";
         ExecFileLoader loader = new ExecFileLoader();
-        // ExecutionDataWriter executionDataWriter = new ExecutionDataWriter(null);
-        // ExecutionDataReader reader = new ExecutionDataReader(null);
-        // reader.read();
+
         List<Map<String, Object>> dataList = new ArrayList<>();
         // Load the coverage data file
         File coverageFile = new File(
-                "/Users/sarthak_1/Documents/Keploy/trash/samples-java/target/jacoco-client"
-                        + reqCount.get() + ".exec");
+                System.getProperty("user.dir") +
+                        "/target/jacoco-client" + keploy_test_id + ".exec");
+//                File coverageFile = new File(
+//                System.getProperty("user.dir") +
+//                        "/target/jacoco-client.exec");
         loader.load(coverageFile);
         File binDir = new File(
-                "/Users/sarthak_1/Documents/Keploy/trash/samples-java/target/classes");
+                System.getProperty("user.dir")+ "/target/classes");
         final CoverageBuilder coverageBuilder = new CoverageBuilder();
         final Analyzer analyzer = new Analyzer(loader.getExecutionDataStore(), coverageBuilder);
         analyzer.analyzeAll(binDir);
@@ -205,7 +246,7 @@ public class KeployMiddleware implements Filter {
 
         }
 
-        System.out.println("Line_Path: " + Line_Path);
+//        System.out.println("Line_Path: " + Line_Path);
 
         Map<String, Object> testData = new HashMap<>();
         testData.put("id", keploy_test_id);
@@ -249,7 +290,7 @@ public class KeployMiddleware implements Filter {
         List<Map<String, Object>> existingData = new ArrayList<>();
 
         try (InputStream input = new FileInputStream(fileName);
-                UnicodeReader reader = new UnicodeReader(input)) {
+             UnicodeReader reader = new UnicodeReader(input)) {
 
             Yaml yaml = new Yaml();
             existingData = yaml.load(reader);
