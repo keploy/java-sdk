@@ -87,7 +87,6 @@ public class KeployCLI {
         logThread.start();
     }
 
-    //ask gourav why he has done this
     private static String attachJacocoAgent(String cmd) {
         String resourcePath = "jacocoagent.jar"; // Relative path in the JAR file
 
@@ -426,11 +425,13 @@ public class KeployCLI {
             String testRunId = KeployCLI.RunTestSet(testSet);
             startUserApplication(jarPath);
             waitForTestRunCompletion(testRunId);
-           
+
             try {
                 KeployCLI.FindCoverage(testSet);
+                Thread.sleep(5000);
             } catch (Exception e) {
                 // TODO: handle exception
+                e.printStackTrace();
             }
             stopUserApplication();
         }
