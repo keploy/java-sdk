@@ -1,0 +1,17 @@
+🐰 Keploy: 2024-01-30T19:43:08Z 	INFO	cmd/test.go:264	Keploy config not found, continuing without configuration
+🐰 Keploy: 2024-01-30T19:43:08Z 	INFO	cmd/test.go:363		{"keploy test and mock path": "/Users/sarthak_1/Documents/Keploy/v2/java-sdk/keploy", "keploy testReport path": "/Users/sarthak_1/Documents/Keploy/v2/java-sdk/keploy/testReports/test-run-1"}
+🐰 Keploy: 2024-01-30T19:43:10Z 	INFO	hooks/loader.go:828	keploy initialized and probes added to the kernel.
+🐰 Keploy: 2024-01-30T19:43:10Z 	INFO	proxy/proxy.go:270	Java detected and CA already exists	{"path": "/usr/lib/jvm/java-17-openjdk-arm64/lib/security/cacerts"}
+🐰 Keploy: 2024-01-30T19:43:10Z 	INFO	proxy/proxy.go:270	Java detected and CA already exists	{"path": "/usr/lib/jvm/java-17-openjdk-arm64/lib/security/cacerts"}
+🐰 Keploy: 2024-01-30T19:43:11Z 	ERROR	proxy/proxy.go:344	Failed to update the CA store	{"error": "signal: interrupt"}
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	proxy/proxy.go:429	Keploy has hijacked the DNS resolution mechanism, your application may misbehave in keploy test mode if you have provided wrong domain name in your application code.
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	proxy/proxy.go:443	Proxy started at port:16789
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	proxy/proxy.go:600	starting DNS server at addr :16789
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	test/test.go:121	test run completed	{"passed overall": true}
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	test/test.go:124	Keploy is looking for duplicate testcases 🥳🪞
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	hooks/loader.go:460	Received signal to exit keploy program..
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	hooks/loader.go:404	keploy has initiated the shutdown of the user application.
+🐰 Keploy: 2024-01-30T19:43:11Z 	ERROR	deduplication/dedup.go:100	Error reading file	{"error": "read dedupData.yaml: is a directory"}
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	hooks/loader.go:513	eBPF resources released successfully...
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	proxy/proxy.go:1015	Dns server stopped
+🐰 Keploy: 2024-01-30T19:43:11Z 	INFO	proxy/proxy.go:1017	proxy stopped...

@@ -68,7 +68,7 @@ public class KeployCLI {
     }
 
     public static void StartUserApplication(String runCmd) throws IOException {
-
+        System.out.println("Starting user application:" + runCmd);
         runCmd = attachJacocoAgent(runCmd);
 
         // Split the runCmd string into command parts
@@ -115,7 +115,6 @@ public class KeployCLI {
         String dest = "target/" + testSet;
         String runCmd = "java -jar " + getJacococliPath() + " dump --address localhost --port 36320 --destfile "
                 + dest + ".exec";
-
 
         // Split the runCmd string into command parts
         String[] command = runCmd.split(" ");
@@ -172,7 +171,7 @@ public class KeployCLI {
 
         // Attempt to delete the file
         if (file.delete()) {
-            logger.debug("File deleted successfully:",filePath);
+            logger.debug("File deleted successfully:", filePath);
             // System.out.println("File deleted successfully: " + filePath);
             return true;
         } else {
@@ -419,5 +418,74 @@ public class KeployCLI {
     private static int getCurrentPid() {
         String processName = ManagementFactory.getRuntimeMXBean().getName();
         return Integer.parseInt(processName.split("@")[0]);
+    }
+
+    public static void runTestsAndCoverage(String jarPath, String[] testSets) {
+        for (String testSet : testSets) {
+            String testRunId = KeployCLI.RunTestSet(testSet);
+            startUserApplication(jarPath);
+            waitForTestRunCompletion(testRunId);
+
+            try {
+                KeployCLI.FindCoverage(testSet);
+                Thread.sleep(5000);
+            } catch (Exception e) {
+                // TODO: handle exception
+                e.printStackTrace();
+            }
+            stopUserApplication();
+        }
+    }
+
+    private static void startUserApplication(String jarPath) {
+        String[] command = { "java", "-jar", jarPath };
+        String userCmd = String.join(" ", command);
+        try {
+            KeployCLI.StartUserApplication(userCmd);
+            System.out.println("Application started ");
+        } catch (IOException e) {
+            System.err.println("Failed to start user application: " + e.getMessage());
+        }
+    }
+
+    private static void waitForTestRunCompletion(String testRunId) {
+        // Implement the logic to wait for test run completion using KeployCLI
+        long MAX_TIMEOUT = 6000000; // 1m
+        long startTime = System.currentTimeMillis();
+
+        try {
+            KeployCLI.TestRunStatus testRunStatus;
+
+            while (true) {
+                Thread.sleep(2000);
+                testRunStatus = KeployCLI.FetchTestSetStatus(testRunId);
+
+                if (testRunStatus == KeployCLI.TestRunStatus.RUNNING) {
+                    System.out.println("Test run still in progress");
+
+                    if (System.currentTimeMillis() - startTime > MAX_TIMEOUT) {
+                        System.out.println("Timeout reached, exiting loop");
+                        break;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if (testRunStatus == KeployCLI.TestRunStatus.FAILED
+                    || testRunStatus == KeployCLI.TestRunStatus.RUNNING) {
+                System.out.println("Test run failed");
+            } else if (testRunStatus == KeployCLI.TestRunStatus.PASSED) {
+                System.out.println("Test run passed");
+            }
+        } catch (InterruptedException e) {
+            System.err.println("Error waiting for test run completion: " + e.getMessage());
+        }
+    }
+
+    private static void stopUserApplication() {
+        KeployCLI.StopUserApplication();
     }
 }
