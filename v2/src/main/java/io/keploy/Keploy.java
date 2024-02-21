@@ -1,4 +1,4 @@
-package io.keploy.cli;
+package io.keploy;
 
 import com.google.gson.Gson;
 import org.apache.logging.log4j.LogManager;
@@ -6,8 +6,6 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -16,7 +14,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -26,12 +23,12 @@ import java.util.List;
 //FOR CLI CODE COVERAGE REFERENCE: https://dzone.com/articles/code-coverage-report-generator-for-java-projects-a
 
 // Jacococli & JacocoAgent version: 0.8.8
-public class KeployCLI {
+public class Keploy {
 
     private static final String GRAPHQL_ENDPOINT = "/query";
     private static final String HOST = "http://localhost:";
 
-    private static final Logger logger = LogManager.getLogger(KeployCLI.class);
+    private static final Logger logger = LogManager.getLogger(Keploy.class);
 
     private static int serverPort = 6789;
 
@@ -68,7 +65,7 @@ public class KeployCLI {
     }
 
     public static void StartUserApplication(String runCmd) throws IOException {
-
+        System.out.println("Starting user application:" + runCmd);
         runCmd = attachJacocoAgent(runCmd);
 
         // Split the runCmd string into command parts
@@ -90,7 +87,7 @@ public class KeployCLI {
     private static String attachJacocoAgent(String cmd) {
         String resourcePath = "jacocoagent.jar"; // Relative path in the JAR file
 
-        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+        try (InputStream is = Keploy.class.getClassLoader().getResourceAsStream(resourcePath)) {
             if (is == null) {
                 throw new IllegalStateException("jacocoagent.jar not found in resources");
             }
@@ -116,7 +113,6 @@ public class KeployCLI {
         String runCmd = "java -jar " + getJacococliPath() + " dump --address localhost --port 36320 --destfile "
                 + dest + ".exec";
 
-
         // Split the runCmd string into command parts
         String[] command = runCmd.split(" ");
 
@@ -133,7 +129,7 @@ public class KeployCLI {
     private static String getJacococliPath() {
         String resourcePath = "jacococli.jar"; // Relative path in the JAR file
 
-        try (InputStream is = KeployCLI.class.getClassLoader().getResourceAsStream(resourcePath)) {
+        try (InputStream is = Keploy.class.getClassLoader().getResourceAsStream(resourcePath)) {
             if (is == null) {
                 throw new IllegalStateException("jacococli.jar not found in resources");
             }
@@ -172,7 +168,7 @@ public class KeployCLI {
 
         // Attempt to delete the file
         if (file.delete()) {
-            logger.debug("File deleted successfully:",filePath);
+            logger.debug("File deleted successfully:", filePath);
             // System.out.println("File deleted successfully: " + filePath);
             return true;
         } else {
@@ -389,7 +385,6 @@ public class KeployCLI {
             if (childPID != getCurrentPid()) {
                 try {
                     new ProcessBuilder("kill", "-15", String.valueOf(childPID)).start();
-
                     logger.debug("Killed child process " + childPID);
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -420,5 +415,83 @@ public class KeployCLI {
     private static int getCurrentPid() {
         String processName = ManagementFactory.getRuntimeMXBean().getName();
         return Integer.parseInt(processName.split("@")[0]);
+    }
+
+    public static void runTests(String jarPath) {
+//        String jarPath = "target/springbootapp-0.0.1-SNAPSHOT.jar";
+        String[] testSets = Keploy.FetchTestSets();
+
+        if (testSets == null) {
+            System.err.println("Test sets are null ");
+            return;
+        }
+
+        System.out.println("TestSets: " + Arrays.asList(testSets));
+        for (String testSet : testSets) {
+            String testRunId = Keploy.RunTestSet(testSet);
+            startUserApplication(jarPath);
+            waitForTestRunCompletion(testRunId);
+
+            try {
+                Keploy.FindCoverage(testSet);
+                Thread.sleep(5000);
+            } catch (Exception e) {
+                // TODO: handle exception
+                e.printStackTrace();
+            }
+            stopUserApplication();
+        }
+    }
+
+    private static void startUserApplication(String jarPath) {
+        String[] command = { "java", "-jar", jarPath };
+        String userCmd = String.join(" ", command);
+        try {
+            Keploy.StartUserApplication(userCmd);
+            System.out.println("Application started ");
+        } catch (IOException e) {
+            System.err.println("Failed to start user application: " + e.getMessage());
+        }
+    }
+
+    private static void waitForTestRunCompletion(String testRunId) {
+        // Implement the logic to wait for test run completion using KeployCLI
+        long MAX_TIMEOUT = 6000000; // 1m
+        long startTime = System.currentTimeMillis();
+
+        try {
+            Keploy.TestRunStatus testRunStatus;
+
+            while (true) {
+                Thread.sleep(2000);
+                testRunStatus = Keploy.FetchTestSetStatus(testRunId);
+
+                if (testRunStatus == Keploy.TestRunStatus.RUNNING) {
+                    System.out.println("Test run still in progress");
+
+                    if (System.currentTimeMillis() - startTime > MAX_TIMEOUT) {
+                        System.out.println("Timeout reached, exiting loop");
+                        break;
+                    }
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if (testRunStatus == Keploy.TestRunStatus.FAILED
+                    || testRunStatus == Keploy.TestRunStatus.RUNNING) {
+                System.out.println("Test run failed");
+            } else if (testRunStatus == Keploy.TestRunStatus.PASSED) {
+                System.out.println("Test run passed");
+            }
+        } catch (InterruptedException e) {
+            System.err.println("Error waiting for test run completion: " + e.getMessage());
+        }
+    }
+
+    private static void stopUserApplication() {
+        Keploy.StopUserApplication();
     }
 }
