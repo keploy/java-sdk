@@ -46,6 +46,7 @@ public class KeployCLI {
 
         public class Data {
             String[] testSets;
+            Boolean stopTest;
             TestSetStatus testSetStatus;
             RunTestSetResponse runTestSet;
         }
@@ -346,6 +347,41 @@ public class KeployCLI {
 
     }
 
+    // Hit GraphQL query to stop the test
+    public static Boolean StopTest() {
+        try {
+            HttpURLConnection conn = setHttpClient();
+            if (conn == null) {
+                throw new Exception("Could not initialize HTTP connection.");
+            }
+
+            String payload = "{ \"query\": \"{ stopTest }\" }";
+
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload.getBytes());
+                os.flush();
+            }
+
+            final int responseCode = conn.getResponseCode();
+            logger.debug("status code received: {}", responseCode);
+
+            if (isSuccessfulResponse(conn)) {
+                String resBody = getSimulateResponseBody(conn);
+                logger.debug("response body received: {}", resBody);
+                // Parse the response body using Gson
+                Gson gson = new Gson();
+                GraphQLResponse response = gson.fromJson(resBody, GraphQLResponse.class);
+
+                return response.data.stopTest; // this will return the Boolean value of stopTest
+            }
+
+        } catch (Exception e) {
+            logger.error("Error stopping the test", e);
+        }
+        return null;
+    }
+
     private static boolean isSuccessfulResponse(HttpURLConnection conn) throws IOException {
         int responseCode = conn.getResponseCode();
         return (responseCode >= 200 && responseCode < 300);
@@ -434,6 +470,8 @@ public class KeployCLI {
                 e.printStackTrace();
             }
             stopUserApplication();
+            // unload the ebpf hooks from the kernel
+            StopTest();
         }
     }
 
