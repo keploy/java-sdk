@@ -24,13 +24,6 @@ public class HttpPostMultipart {
     private final OutputStream outputStream;
     private final PrintWriter writer;
 
-    /**
-     * This constructor initializes a new HTTP POST request with content type
-     * is set to multipart/form-data
-     *
-     * @param charset
-     * @throws IOException
-     */
     public HttpPostMultipart(String charset, HttpURLConnection httpConn) throws IOException {
         boundary = UUID.randomUUID().toString();
         this.charset = charset;
@@ -43,12 +36,6 @@ public class HttpPostMultipart {
         writer = new PrintWriter(new OutputStreamWriter(outputStream, charset), true);
     }
 
-    /**
-     * Adds a form field to the request
-     *
-     * @param name  field name
-     * @param value field value
-     */
     public void addFormField(String name, String value) {
         writer.append("--" + boundary).append(LINE);
         writer.append("Content-Disposition: form-data; name=\"" + name + "\"").append(LINE);
@@ -58,13 +45,7 @@ public class HttpPostMultipart {
         writer.flush();
     }
 
-    /**
-     * Adds a upload file section to the request
-     *
-     * @param fieldName
-     * @param uploadFile
-     * @throws IOException
-     */
+
     public void addFilePart(String fieldName, File uploadFile)
             throws IOException {
         String fileName = uploadFile.getName();
@@ -87,13 +68,7 @@ public class HttpPostMultipart {
         writer.flush();
     }
 
-    /**
-     * Completes the request and receives response from the server.
-     *
-     * @return String as response in case the server returned
-     * status OK, otherwise an exception is thrown.
-     * @throws IOException
-     */
+
     public void finish() throws IOException {
         String responseBody = "";
         writer.flush();
