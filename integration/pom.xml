@@ -73,7 +73,7 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>1.28</version> <!-- Use the latest version available -->
+            <version>2.0</version> <!-- Use the latest version available -->
         </dependency>
         <dependency>
             <groupId>org.mariadb.jdbc</groupId>
