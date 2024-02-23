@@ -476,9 +476,10 @@ public class Keploy {
                 e.printStackTrace();
             }
             stopUserApplication();
-            // unload the ebpf hooks from the kernel
-            StopTest();
         }
+        logger.debug("All test sets executed and stoping the ebpf hooks" );
+        // unload the ebpf hooks from the kernel
+        StopTest();
     }
 
     private static void startUserApplication(String jarPath) {
