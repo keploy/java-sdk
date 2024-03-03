@@ -35,7 +35,7 @@ public class Keploy {
     private static long userCommandPid = 0;
 
     private static String jacocoCliPath = "";
-
+ private static String currentTestRunId;
     private static String jacocoAgentPath = "";
 
     public class GraphQLResponse {
@@ -454,7 +454,6 @@ public class Keploy {
     }
 
     public static void runTests(String jarPath) {
-//        String jarPath = "target/springbootapp-0.0.1-SNAPSHOT.jar";
         String[] testSets = Keploy.FetchTestSets();
 
         if (testSets == null) {
@@ -465,6 +464,7 @@ public class Keploy {
         System.out.println("TestSets: " + Arrays.asList(testSets));
         for (String testSet : testSets) {
             String testRunId = Keploy.RunTestSet(testSet);
+            currentTestRunId = testRunId; // set the current test run ID
             startUserApplication(jarPath);
             waitForTestRunCompletion(testRunId);
 
@@ -477,9 +477,24 @@ public class Keploy {
             }
             stopUserApplication();
         }
-        logger.debug("All test sets executed and stoping the ebpf hooks" );
+        logger.debug("All test sets executed and stopping the ebpf hooks" );
         // unload the ebpf hooks from the kernel
         StopTest();
+
+        // Check the test run status after all tests are executed
+        checkTestRunStatus();
+    }
+
+
+    private static void checkTestRunStatus() {
+        // Implement the logic to check test run status here
+        // For example:
+        // Fetch test run status using the current test run ID
+        TestRunStatus status = FetchTestSetStatus(currentTestRunId);
+        // Throw an exception if the status is FAILED
+        if (status == TestRunStatus.FAILED) {
+            throw new RuntimeException("Test run failed");
+        }
     }
 
     private static void startUserApplication(String jarPath) {
@@ -506,10 +521,10 @@ public class Keploy {
                 testRunStatus = Keploy.FetchTestSetStatus(testRunId);
 
                 if (testRunStatus == Keploy.TestRunStatus.RUNNING) {
-                    System.out.println("Test run still in progress");
+                    // System.out.println("Test run still in progress");
 
                     if (System.currentTimeMillis() - startTime > MAX_TIMEOUT) {
-                        System.out.println("Timeout reached, exiting loop");
+                        logger.error("Test run timed out,exiting the test run");
                         break;
                     }
 
@@ -521,12 +536,12 @@ public class Keploy {
 
             if (testRunStatus == Keploy.TestRunStatus.FAILED
                     || testRunStatus == Keploy.TestRunStatus.RUNNING) {
-                System.out.println("Test run failed");
+                logger.info("Test run failed");
             } else if (testRunStatus == Keploy.TestRunStatus.PASSED) {
-                System.out.println("Test run passed");
+                logger.info("Test run passed");
             }
         } catch (InterruptedException e) {
-            System.err.println("Error waiting for test run completion: " + e.getMessage());
+            logger.error("Error waiting for test run completion: " + e.getMessage());
         }
     }
 
