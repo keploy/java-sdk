@@ -545,7 +545,7 @@ public class Keploy {
                 logger.info("Test run failed");
                 isFailed = true;
                 failedTestSets.add(currentTestRunId);
-                System.out.println("HAHAHAHAHAH " + currentTestRunId);
+    
             } else if (testRunStatus == Keploy.TestRunStatus.PASSED) {
                 logger.info("Test run passed");
             }
