@@ -308,7 +308,6 @@ public class Keploy {
 
         // Attempt to delete the file
         if (file.delete()) {
-            logger.debug("File deleted successfully:", filePath);
             return true;
         } else {
             System.out.println("Failed to delete the file: " + filePath);
@@ -481,7 +480,8 @@ public class Keploy {
         }
     }
 
-    public static void runTests(String runCmd, RunOptions runOptions) {
+    public static void runTests(String jarPath, RunOptions runOptions) {
+        String runCmd = "java -jar "+ jarPath;
         if (runOptions.getPort() != 0) {
             serverPort = runOptions.getPort();
         }
@@ -548,11 +548,11 @@ public class Keploy {
         }
     }
 
-    public static Thread startKeploy(String runCmd, int delay, boolean debug, int port) {
+    public static void startKeploy(String runCmd, int delay, boolean debug, int port) {
         Runnable task = () -> runKeploy(runCmd, delay, debug, port);
         Thread thread = new Thread(task);
         thread.start();
-        return thread;
+        return ;
     }
 
     public static void runKeploy(String runCmd, int delay, boolean debug, int port) {
@@ -804,12 +804,8 @@ public class Keploy {
     }
 
     private static String checkReportFile(String reportPath, int timeout) {
-        logger.debug("Checking report file at: " + reportPath);
-        System.out.println("Checking report file at: " + reportPath);
-
         long startTime = System.currentTimeMillis();
         while (System.currentTimeMillis() - startTime < timeout * 1000L) {
-            System.out.println("Checking Path: " + reportPath);
             File reportFile = new File(reportPath);
             if (reportFile.exists()) {
                 return null;
