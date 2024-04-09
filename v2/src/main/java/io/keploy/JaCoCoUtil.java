@@ -14,7 +14,9 @@ public class JaCoCoUtil {
     public static void downloadAndExtractJaCoCoBinaries(String version, String resourceDir) throws Exception {
         Path cliPath = Paths.get(resourceDir, "jacococli.jar");
         Path agentPath = Paths.get(resourceDir, "jacocoagent.jar");
+        System.out.println("File not found: " + cliPath);
         if (Files.exists(cliPath) && Files.exists(agentPath)) {
+            System.out.println("JaCoCo binaries already exist.");
             return;
         }
 
@@ -45,6 +47,7 @@ public class JaCoCoUtil {
     }
 
     public static void main(String[] args) {
+        System.out.println("initiated jacoco binary download");
         if (args.length != 2) {
             throw new IllegalArgumentException("Expected two arguments: version and resourceDir");
         }
