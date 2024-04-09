@@ -23,9 +23,11 @@ public class JaCoCoUtil {
         }
 
         String downloadUrl = "https://github.com/jacoco/jacoco/releases/download/v" + version + "/jacoco-" + version + ".zip";
+        System.out.println("Download url: " + downloadUrl);
 
         try (InputStream inputStream = new URL(downloadUrl).openStream();
              ZipInputStream zipInputStream = new ZipInputStream(inputStream)) {
+                System.out.println("Entered open string ");
 
             ZipEntry entry;
             while ((entry = zipInputStream.getNextEntry()) != null) {
@@ -47,6 +49,8 @@ public class JaCoCoUtil {
         }
 
         if (!Files.exists(cliPath) || !Files.exists(agentPath)) {
+            System.out.println("cant ffind files " + cliPath + "  " + agentPath);
+
             throw new IllegalStateException("Failed to find JaCoCo binaries in the distribution.");
         }
 
