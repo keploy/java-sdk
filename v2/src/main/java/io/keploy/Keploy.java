@@ -487,12 +487,12 @@ public class Keploy {
     }
 
     public static void runTests(String jarPath, RunOptions runOptions) {
-        String runCmd = "java -jar "+ jarPath;
+        String runCmd = "java -jar " + jarPath;
         if (runOptions.getPort() != 0) {
             serverPort = runOptions.getPort();
         }
-        runCmd = attachJacocoAgent(runCmd);
         try {
+            runCmd = attachJacocoAgent(runCmd);
             startKeploy(runCmd, runOptions.getDelay(), runOptions.isDebug(), serverPort);
             Thread.sleep(5000);
             String[] testSets = Keploy.FetchTestSets();
@@ -548,8 +548,6 @@ public class Keploy {
             stopKeploy();
             // delete jacoco files
             deleteJacocoFiles();
-            System.out.println("TestSets: " + Arrays.asList(testSets));
-
         } catch (Exception e) {
             logger.error("Error occurred while fetching test sets: " + e.getMessage(), e);
         }

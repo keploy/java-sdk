@@ -63,8 +63,27 @@
                     <target>9</target>
                 </configuration>
             </plugin>
+            <plugin>
+              <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.0.0</version> <!-- Use the latest version -->
+                    <executions>
+                      <execution>
+                          <phase>process-classes</phase> <!-- Or another appropriate lifecycle phase -->
+                            <goals>
+                              <goal>java</goal>
+                            </goals>
+                      <configuration>
+                        <mainClass>io.keploy.JaCoCoUtil</mainClass>
+                        <arguments>
+                          <argument>0.8.12</argument> <!-- JaCoCo version -->
+                          <argument>${project.basedir}/src/main/resources</argument> <!-- Relative path -->
+                        </arguments>
+                      </configuration>
+                    </execution>
+                  </executions>
+              </plugin>
         </plugins>
-
 </build>
 
 </project>
