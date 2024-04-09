@@ -18,6 +18,11 @@
             <artifactId>json</artifactId>
             <version>20230618</version>
         </dependency>
+             <dependency>
+            <groupId>io.keploy</groupId>
+            <artifactId>common</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+        </dependency>
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
@@ -25,6 +30,12 @@
             <scope>compile</scope>
         </dependency>
 
+    
+      <dependency>
+        <groupId>org.jacoco</groupId>
+        <artifactId>org.jacoco.core</artifactId>
+        <version>0.8.7</version>
+      </dependency>
     </dependencies>
 
 
