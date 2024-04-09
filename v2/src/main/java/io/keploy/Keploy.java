@@ -22,7 +22,7 @@ import java.util.Map;
 
 //FOR CLI CODE COVERAGE REFERENCE: https://dzone.com/articles/code-coverage-report-generator-for-java-projects-a
 
-// Jacococli & JacocoAgent version: 0.8.8
+// Jacococli & JacocoAgent version: 0.8.12
 public class Keploy {
     public static class RunOptions {
         private int delay;
@@ -134,7 +134,7 @@ public class Keploy {
             String[] testSets;
             Boolean stopTest;
             TestSetStatus testSetStatus;
-            Boolean runTestSet; 
+            Boolean runTestSet;
             StartHooksData startHooks;
             Boolean startApp;
             Boolean stopHooks;
@@ -200,6 +200,7 @@ public class Keploy {
                     + "=address=localhost,port=36320,destfile=coverage.exec,output=tcpserver";
 
             jacocoAgentPath = tempFile.toAbsolutePath().toString();
+
             return cmd.replaceFirst("java", "java " + agentString);
         } catch (IOException e) {
             e.printStackTrace();
@@ -208,12 +209,20 @@ public class Keploy {
     }
 
     public static void FindCoverage(String testSet) throws IOException, InterruptedException {
-        String dest = "target/" + testSet;
-        String runCmd = "java -jar " + getJacococliPath() + " dump --address localhost --port 36320 --destfile "
-                + dest + ".exec";
-
-        // Split the runCmd string into command parts
-        String[] command = runCmd.split(" ");
+        String dest = "target/" + testSet + ".exec";
+        String jacocoCliPath = getJacococliPath();
+        List<String> command = Arrays.asList(
+            "java",
+            "-jar",
+            jacocoCliPath,
+            "dump",
+            "--address",
+            "localhost",
+            "--port",
+            "36320",
+            "--destfile",
+            dest
+        );
 
         // Start the command using ProcessBuilder
         ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -285,9 +294,6 @@ public class Keploy {
             logger.error("Error stopping user application: " + e.getMessage(), e);
             return "Error stopping user application: " + e.getMessage();
         }
-
-        // Additional logic to kill processes and delete JaCoCo files
-        deleteJacocoFiles();
 
         return null;
     }
@@ -481,12 +487,13 @@ public class Keploy {
     }
 
     public static void runTests(String jarPath, RunOptions runOptions) {
-        String runCmd = "java -jar "+ jarPath;
+
+        String runCmd = "java -jar " + jarPath;
         if (runOptions.getPort() != 0) {
             serverPort = runOptions.getPort();
         }
-        runCmd = attachJacocoAgent(runCmd);
         try {
+            runCmd = attachJacocoAgent(runCmd);
             startKeploy(runCmd, runOptions.getDelay(), runOptions.isDebug(), serverPort);
             Thread.sleep(5000);
             String[] testSets = Keploy.FetchTestSets();
@@ -540,9 +547,8 @@ public class Keploy {
             }
             // unload the ebpf hooks from the kernel
             stopKeploy();
-
-            System.out.println("TestSets: " + Arrays.asList(testSets));
-
+            // delete jacoco files
+            deleteJacocoFiles();
         } catch (Exception e) {
             logger.error("Error occurred while fetching test sets: " + e.getMessage(), e);
         }
