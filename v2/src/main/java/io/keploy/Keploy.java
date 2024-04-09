@@ -487,7 +487,6 @@ public class Keploy {
     }
 
     public static void runTests(String jarPath, RunOptions runOptions) {
-
         String runCmd = "java -jar " + jarPath;
         if (runOptions.getPort() != 0) {
             serverPort = runOptions.getPort();
