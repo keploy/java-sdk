@@ -18,6 +18,7 @@ public class JaCoCoUtil {
         Files.createDirectories(agentPath.getParent());
 
         if (Files.exists(cliPath) && Files.exists(agentPath)) {
+            System.out.println("JaCoCo binaries already exist.");
             return;
         }
 
@@ -52,6 +53,7 @@ public class JaCoCoUtil {
     }
 
     public static void main(String[] args) {
+        System.out.println("initiated jacoco binary download");
         if (args.length != 2) {
             throw new IllegalArgumentException("Expected two arguments: version and resourceDir");
         }
