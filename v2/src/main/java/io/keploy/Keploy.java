@@ -29,7 +29,7 @@ public class Keploy {
         private boolean debug;
         private int port;
         private String path;
-        private String userCmd;
+        private String appCmd;
 
         public RunOptions() {
             this(10, false, 6789, ".");
@@ -74,12 +74,12 @@ public class Keploy {
             this.debug = debug;
         }
 
-        public void setUserCmd(String userCmd) {
-            this.userCmd = userCmd;
+        public void setappCmd(String appCmd) {
+            this.appCmd = appCmd;
         }
 
-        public String getUserCmd() {
-            return this.userCmd;
+        public String getappCmd() {
+            return this.appCmd;
         }
 
         public int getPort() {
