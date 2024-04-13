@@ -29,6 +29,7 @@ public class Keploy {
         private boolean debug;
         private int port;
         private String path;
+        private String appCmd;
 
         public RunOptions() {
             this(10, false, 6789, ".");
@@ -71,6 +72,14 @@ public class Keploy {
 
         public void setDebug(boolean debug) {
             this.debug = debug;
+        }
+
+        public void setappCmd(String appCmd) {
+            this.appCmd = appCmd;
+        }
+
+        public String getappCmd() {
+            return this.appCmd;
         }
 
         public int getPort() {
@@ -487,7 +496,6 @@ public class Keploy {
     }
 
     public static void runTests(String jarPath, RunOptions runOptions) {
-
         String runCmd = "java -jar " + jarPath;
         if (runOptions.getPort() != 0) {
             serverPort = runOptions.getPort();
@@ -546,12 +554,12 @@ public class Keploy {
                 }
             }
             // unload the ebpf hooks from the kernel
-            stopKeploy();
             // delete jacoco files
-            deleteJacocoFiles();
         } catch (Exception e) {
             logger.error("Error occurred while fetching test sets: " + e.getMessage(), e);
         }
+        stopKeploy();
+        deleteJacocoFiles();
     }
 
     public static void startKeploy(String runCmd, int delay, boolean debug, int port) {
@@ -735,8 +743,6 @@ public class Keploy {
                 testRunStatus = Keploy.FetchTestSetStatus(testRunId, testSet);
 
                 if (testRunStatus == Keploy.TestRunStatus.RUNNING) {
-                    System.out.println("Test run still in progress");
-
                     if (System.currentTimeMillis() - startTime > MAX_TIMEOUT) {
                         System.out.println("Timeout reached, exiting loop");
                         break;
