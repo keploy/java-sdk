@@ -221,17 +221,16 @@ public class Keploy {
         String dest = "target/" + testSet + ".exec";
         String jacocoCliPath = getJacococliPath();
         List<String> command = Arrays.asList(
-            "java",
-            "-jar",
-            jacocoCliPath,
-            "dump",
-            "--address",
-            "localhost",
-            "--port",
-            "36320",
-            "--destfile",
-            dest
-        );
+                "java",
+                "-jar",
+                jacocoCliPath,
+                "dump",
+                "--address",
+                "localhost",
+                "--port",
+                "36320",
+                "--destfile",
+                dest);
 
         // Start the command using ProcessBuilder
         ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -552,6 +551,11 @@ public class Keploy {
                 if (appErr != null) {
                     throw new AssertionError("error stopping user application: " + appErr);
                 }
+
+                Boolean updateReportResult = udpateReportWithCoverage(testRunId, testSet);
+                if (!updateReportResult) {
+                    throw new AssertionError("error updating report with coverage data");
+                }
             }
             // unload the ebpf hooks from the kernel
             // delete jacoco files
@@ -566,7 +570,7 @@ public class Keploy {
         Runnable task = () -> runKeploy(runCmd, delay, debug, port);
         Thread thread = new Thread(task);
         thread.start();
-        return ;
+        return;
     }
 
     public static void runKeploy(String runCmd, int delay, boolean debug, int port) {
@@ -802,6 +806,48 @@ public class Keploy {
         } catch (Exception e) {
             logger.error("Error running test set: " + e.getMessage(), e);
             return new RunTestSetResult(false, "Error running test set: " + e.getMessage());
+        }
+    }
+
+    public static Boolean udpateReportWithCoverage(String testRunId, String testSetId) {
+        HttpURLConnection conn = setHttpClient();
+        if (conn == null) {
+            logger.error("Could not initialize HTTP connection.");
+            return false;
+        }
+
+        String payload = "{\"query\": \"mutation UpdateReportWithCov { UpdateReportWithCov(testRunId: \\\"%s\\\", testSetId: \\\"%s\\\", language: \"java\") }\"}";
+
+        try {
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload.getBytes());
+                os.flush();
+            }
+
+            int responseCode = conn.getResponseCode();
+            logger.debug("Status code received: " + responseCode);
+
+            if (responseCode >= 200 && responseCode < 300) {
+                String resBody = getResponseBody(conn);
+                logger.debug("Response body received: " + resBody);
+
+                // Parse the response body using Gson
+                Gson gson = new Gson();
+                GraphQLResponse response = gson.fromJson(resBody, GraphQLResponse.class);
+
+                if (response.data == null) {
+                    return false;
+                }
+
+                return true;
+            } else {
+                logger.error("Failed to update report with coverage data. Status code: " + responseCode);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("Error updating report with coverage data: " + e.getMessage(), e);
+            return false;
         }
     }
 
