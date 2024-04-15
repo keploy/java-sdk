@@ -816,7 +816,9 @@ public class Keploy {
             return false;
         }
 
-        String payload = "{\"query\": \"mutation UpdateReportWithCov { UpdateReportWithCov(testRunId: \\\"%s\\\", testSetId: \\\"%s\\\", language: \"java\") }\"}";
+        String payload = String.format(
+                "{\"query\": \"mutation updateReportWithCov{ updateReportWithCov(testRunId: \\\"%s\\\", testSetId: \\\"%s\\\", language: \\\"java\\\") }\"}",
+                testRunId, testSetId);
 
         try {
             conn.setDoOutput(true);
