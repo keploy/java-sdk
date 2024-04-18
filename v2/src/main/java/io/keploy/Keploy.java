@@ -33,7 +33,7 @@ public class Keploy {
         private int closeDelay;
 
         public RunOptions() {
-            this(10, false, 6789, ".",0);
+            this(10, false, 6789, ".", 0);
         }
 
         public RunOptions(int delay, boolean debug, int port, String path,int closeDelay) {
@@ -569,7 +569,7 @@ public class Keploy {
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-                System.out.println("sleeping for 7 more seconds to get async call coverages");
+
                 String appErr = stopUserApplication(appId);
 
                 if (appErr != null) {
