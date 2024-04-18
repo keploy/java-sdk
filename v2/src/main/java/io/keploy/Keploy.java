@@ -30,12 +30,13 @@ public class Keploy {
         private int port;
         private String path;
         private String appCmd;
+        private int closeDelay;
 
         public RunOptions() {
-            this(10, false, 6789, ".");
+            this(10, false, 6789, ".",0);
         }
 
-        public RunOptions(int delay, boolean debug, int port, String path) {
+        public RunOptions(int delay, boolean debug, int port, String path,int closeDelay) {
             if (delay < 0) {
                 throw new IllegalArgumentException("Delay must be a positive integer.");
             }
@@ -52,6 +53,11 @@ public class Keploy {
                 throw new IllegalArgumentException("Port must be a positive integer.");
             }
             this.port = port;
+
+            if (closeDelay < 0) {
+                throw new IllegalArgumentException("CloseDelay must be a positive integer.");
+            }
+            this.closeDelay = closeDelay;
         }
 
         // Getters and setters
@@ -64,6 +70,17 @@ public class Keploy {
                 throw new IllegalArgumentException("Delay must be a positive integer.");
             }
             this.delay = delay;
+        }
+
+        public int getCloseDelay() {
+            return closeDelay;
+        }
+
+        public void setCloseDelay(int closeDelay) {
+            if (closeDelay < 0) {
+                throw new IllegalArgumentException("CloseDelay must be a positive integer.");
+            }
+            this.closeDelay = closeDelay;
         }
 
         public boolean isDebug() {
@@ -539,6 +556,12 @@ public class Keploy {
                 waitForTestRunCompletion(testRunId, testSet, appId);
 
                 try {
+                    if (runOptions.getCloseDelay() > 0){
+                        logger.info("waiting for {} seconds before closing the application in order to get coverage of async calls", runOptions.getCloseDelay());
+                        //wait for closeDelay in order to get coverage of async calls as well
+                        Thread.sleep(runOptions.getCloseDelay() * 1000);
+                    }
+                    
                     Keploy.FindCoverage(testSet);
 
                     Thread.sleep(5000);
@@ -546,7 +569,7 @@ public class Keploy {
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-
+                System.out.println("sleeping for 7 more seconds to get async call coverages");
                 String appErr = stopUserApplication(appId);
 
                 if (appErr != null) {
