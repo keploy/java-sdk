@@ -27,11 +27,11 @@ jobs:
 #           echo ${{ secrets.GPG_PASSPHRASE }}
 #           echo ${{ secrets.GPG_PRIVATE_KEY }}
 
-      - name: Import GPG Key
-        uses: crazy-max/ghaction-import-gpg@v4
-        with:
-          # gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      # - name: Import GPG Key
+      #   uses: crazy-max/ghaction-import-gpg@v4
+      #   with:
+      #     gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      #     passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
 
       # - name: Set Maven Version
