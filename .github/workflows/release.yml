@@ -18,13 +18,22 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # - name: Decode GPG Key
-      #   run: |
-      #     echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode > ${{ github.workspace }}/gpg_key.asc
-
-      
-      # - name: Display encoded key format (Debugging only - do not use in production)
-      #   run: cat ${{ github.workspace }}/gpg_key.asc
+      # This step creates the Maven settings.xml with the server credentials
+      - name: Setup Maven settings
+        run: |
+          mkdir -p ~/.m2
+          echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                https://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <servers>
+              <server>
+                <id>ossrh</id>
+                <username>${{ secrets.MAVEN_USERNAME }}</username>
+                <password>${{ secrets.MAVEN_PASSWORD }}</password>
+              </server>
+            </servers>
+          </settings>' > ~/.m2/settings.xml
 
       - name: Import GPG Key
         uses: crazy-max/ghaction-import-gpg@v4
