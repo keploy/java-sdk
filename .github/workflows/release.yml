@@ -19,18 +19,18 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-# echo secrets 
-      - name: Echo secrets
-        run: |
-          echo ${{ secrets.MAVEN_USERNAME }}
-          echo ${{ secrets.MAVEN_PASSWORD }}
-          echo ${{ secrets.GPG_PASSPHRASE }}
-          echo ${{ secrets.GPG_PRIVATE_KEY }}
+# # echo secrets 
+#       - name: Echo secrets
+#         run: |
+#           echo ${{ secrets.MAVEN_USERNAME }}
+#           echo ${{ secrets.MAVEN_PASSWORD }}
+#           echo ${{ secrets.GPG_PASSPHRASE }}
+#           echo ${{ secrets.GPG_PRIVATE_KEY }}
 
       - name: Import GPG Key
         uses: crazy-max/ghaction-import-gpg@v4
         with:
-          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
 
