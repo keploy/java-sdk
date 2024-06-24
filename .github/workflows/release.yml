@@ -22,18 +22,35 @@ jobs:
       - name: Setup Maven settings
         run: |
           mkdir -p ~/.m2
-          echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-            xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
-                                https://maven.apache.org/xsd/settings-1.0.0.xsd">
-            <servers>
-              <server>
-                <id>ossrh</id>
-                <username>${{ secrets.MAVEN_USERNAME }}</username>
-                <password>${{ secrets.MAVEN_PASSWORD }}</password>
-              </server>
-            </servers>
-          </settings>' > ~/.m2/settings.xml
+          echo '<?xml version="1.0" encoding="UTF-8"?>
+
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+          <pluginGroups>
+          </pluginGroups>
+          <proxies>
+          </proxies>
+          <servers>
+          <server>
+          <id>ossrh</id>
+          <username>sarthak1608</username>
+          <password>Keploy@java123</password>
+          </server>
+          </servers>
+          <mirrors>
+          <mirror>
+          <id>maven-default-http-blocker</id>
+          <mirrorOf>external:http:*</mirrorOf>
+          <name>Pseudo repository to mirror external repositories initially using HTTP.</name>
+          <url>http://0.0.0.0/</url>
+          <blocked>true</blocked>
+          </mirror>
+          </mirrors>
+          <profiles>
+          </profiles>
+          </settings>
+          ' > ~/.m2/settings.xml
 
       - name: Import GPG Key
         uses: crazy-max/ghaction-import-gpg@v4
