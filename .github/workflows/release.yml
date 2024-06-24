@@ -23,8 +23,8 @@ jobs:
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode > ${{ github.workspace }}/gpg_key.asc
 
       
-      # - name: Display encoded key format (Debugging only - do not use in production)
-      #   run: cat ${{ github.workspace }}/gpg_key.asc
+      - name: Display encoded key format (Debugging only - do not use in production)
+        run: cat ${{ github.workspace }}/gpg_key.asc
 
       - name: Import GPG Key
         uses: crazy-max/ghaction-import-gpg@v4
