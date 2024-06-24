@@ -20,7 +20,7 @@ jobs:
 
       - name: Decode GPG Key
         run: |
-        echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode | tr -d '\n' > ${{ github.workspace }}/gpg_key.asc
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode | tr -d '\n' > ${{ github.workspace }}/gpg_key.asc
 
       
       # - name: Display encoded key format (Debugging only - do not use in production)
