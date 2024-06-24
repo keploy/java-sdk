@@ -18,18 +18,18 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Decode GPG Key
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode > ${{ github.workspace }}/gpg_key.asc
+      # - name: Decode GPG Key
+      #   run: |
+      #     echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode > ${{ github.workspace }}/gpg_key.asc
 
       
-      - name: Display encoded key format (Debugging only - do not use in production)
-        run: cat ${{ github.workspace }}/gpg_key.asc
+      # - name: Display encoded key format (Debugging only - do not use in production)
+      #   run: cat ${{ github.workspace }}/gpg_key.asc
 
       - name: Import GPG Key
         uses: crazy-max/ghaction-import-gpg@v4
         with:
-          gpg_private_key: ${{ github.workspace }}/gpg_key.asc
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
           delete_private_key: true
 
