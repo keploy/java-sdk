@@ -2,7 +2,7 @@ name: Release Java SDK to Maven Central
 
 on:
   pull_request:
-    branches: ['release-test']
+    branches: ['main']
 
 
 jobs:
