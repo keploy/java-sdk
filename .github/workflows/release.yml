@@ -60,7 +60,7 @@ jobs:
           delete_private_key: true
 
       - name: Deploy to Maven Central
-        run: mvn clean deploy -P release
+        run: mvn clean deploy -P release -X --settings ~/.m2/settings.xml
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
