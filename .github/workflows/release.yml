@@ -34,8 +34,8 @@ jobs:
           <servers>
           <server>
           <id>ossrh</id>
-          <username>sarthak@keploy.io</username>
-          <password>Keploy@java123</password>
+          <username>${{ secrets.MAVEN_USERNAME }}</username>
+          <password>${{ secrets.MAVEN_PASSWORD }}</password>
           </server>
           </servers>
           <mirrors>

@@ -5,7 +5,7 @@
     <parent>
         <artifactId>java-sdk</artifactId>
         <groupId>io.keploy</groupId>
-        <version>1.4.3</version>
+        <version>1.4.5</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -14,13 +14,13 @@
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>core</artifactId>
-            <version>1.4.3</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>api</artifactId>
-            <version>1.4.3</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -36,13 +36,13 @@
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>common</artifactId>
-            <version>1.4.3</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.keploy</groupId>
             <artifactId>models</artifactId>
-            <version>1.4.3</version>
+            <version>1.4.5</version>
             <scope>compile</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp -->
