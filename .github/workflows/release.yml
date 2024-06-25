@@ -1,8 +1,8 @@
 name: Release Java SDK to Maven Central
 
 on:
-  pull_request:
-    branches: ['main']
+  release:
+    types: [created]
 
 jobs:
   release:
@@ -18,12 +18,17 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # This step creates the Maven settings.xml with the server credentials
+      - name: Extract release version
+        id: get_version
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Set project version
+        run: mvn versions:set -DnewVersion=${RELEASE_VERSION} -DgenerateBackupPoms=false
+
       - name: Setup Maven settings
         run: |
           mkdir -p ~/.m2
           echo '<?xml version="1.0" encoding="UTF-8"?>
-
           <settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
@@ -32,20 +37,20 @@ jobs:
           <proxies>
           </proxies>
           <servers>
-          <server>
-          <id>ossrh</id>
-          <username>${{ secrets.MAVEN_USERNAME }}</username>
-          <password>${{ secrets.MAVEN_PASSWORD }}</password>
-          </server>
+            <server>
+              <id>ossrh</id>
+              <username>${{ secrets.MAVEN_USERNAME }}</username>
+              <password>${{ secrets.MAVEN_PASSWORD }}</password>
+            </server>
           </servers>
           <mirrors>
-          <mirror>
-          <id>maven-default-http-blocker</id>
-          <mirrorOf>external:http:*</mirrorOf>
-          <name>Pseudo repository to mirror external repositories initially using HTTP.</name>
-          <url>http://0.0.0.0/</url>
-          <blocked>true</blocked>
-          </mirror>
+            <mirror>
+              <id>maven-default-http-blocker</id>
+              <mirrorOf>external:http:*</mirrorOf>
+              <name>Pseudo repository to mirror external repositories initially using HTTP.</name>
+              <url>http://0.0.0.0/</url>
+              <blocked>true</blocked>
+            </mirror>
           </mirrors>
           <profiles>
           </profiles>
