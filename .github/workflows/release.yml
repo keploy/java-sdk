@@ -34,7 +34,7 @@ jobs:
           <servers>
           <server>
           <id>ossrh</id>
-          <username>sarthak1608</username>
+          <username>sarthak@keploy.io</username>
           <password>Keploy@java123</password>
           </server>
           </servers>
