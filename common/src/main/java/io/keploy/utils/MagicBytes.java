@@ -9,12 +9,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Magic bytes can be checked at : https://en.wikipedia.org/wiki/List_of_file_signatures
- * And converted to integer hex params using JS in the browser console, for example :
- * "78 01 73 0D 62 ?? 60".split(" ").map(str => str == "??" ? "MagicBytes.ANY" : "0x"+str).join(", ")
- * prints => "0x78, 0x01, 0x73, 0x0D, 0x62, MagicBytes.ANY, 0x60"
- */
 public enum MagicBytes {
     // Executables
     EXE(Header.builder()
