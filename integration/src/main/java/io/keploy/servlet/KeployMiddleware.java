@@ -77,6 +77,7 @@ public class KeployMiddleware implements Filter {
         HttpServletResponse response = (HttpServletResponse) servletResponse;
 
         String keploy_test_id = request.getHeader("KEPLOY-TEST-ID");
+        String keploy_test_set_id = request.getHeader("KEPLOY-TEST-SET-ID");
         // logger.debug("KEPLOY-TEST-ID: {}", keploy_test_id);
         filterChain.doFilter(request, response);
         if (System.getenv("ENABLE_DEDUP") != null) {
@@ -89,7 +90,7 @@ public class KeployMiddleware implements Filter {
             // Run getCoverage in a separate thread
 //            Thread coverageThread = new Thread(() -> {
             try {
-                getCoverage(keploy_test_id);
+                getCoverage(keploy_test_id, keploy_test_set_id);
             } catch (InterruptedException | IOException e) {
                 throw new RuntimeException(e);
             }
@@ -180,7 +181,7 @@ public class KeployMiddleware implements Filter {
         }
     }
 
-    public void getCoverage(String keploy_test_id) throws IOException, InterruptedException {
+    public void getCoverage(String keploy_test_id, String keploy_test_set_id) throws IOException, InterruptedException {
 
         try {
             execWriter(keploy_test_id);
@@ -189,7 +190,7 @@ public class KeployMiddleware implements Filter {
         }
 
         try {
-            execReader(keploy_test_id);
+            execReader(keploy_test_id, keploy_test_set_id);
         } catch (IOException e) {
             e.printStackTrace(); // Example: print the stack trace
         }
@@ -200,7 +201,7 @@ public class KeployMiddleware implements Filter {
         executorService.shutdown();
     }
 
-    private void execReader(String keploy_test_id) throws IOException {
+    private void execReader(String keploy_test_id, String keploy_test_set_id) throws IOException {
         // Together with the original class definition we can calculate coverage
         // information:
         out.println("------------------------------------------");
@@ -249,7 +250,7 @@ public class KeployMiddleware implements Filter {
 //        System.out.println("Line_Path: " + Line_Path);
 
         Map<String, Object> testData = new HashMap<>();
-        testData.put("id", keploy_test_id);
+        testData.put("id", keploy_test_set_id+ "/" + keploy_test_id);
         // Map<String, Object> test1 = createTestData("test-1",testData);
         testData.put("executedLinesByFile", executedLinesByFile);
 
