@@ -43,32 +43,31 @@
     </scm>
 
     <dependencies>
-        <dependency>
-            <groupId>io.keploy</groupId>
-            <artifactId>integration</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
-        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/net.bytebuddy/byte-buddy -->
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
-            <version>1.12.14</version>
+            <version>1.16.1</version>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/jakarta.servlet/jakarta.servlet-api -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <version>6.1.0</version>
+<!--            <scope>provided</scope>-->
+        </dependency>
+
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy-agent</artifactId>
-            <version>1.12.14</version>
+            <version>1.16.1</version>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpcore</artifactId>
             <version>4.4.13</version>
             <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <!--            <version>4.10.0</version>-->
-            <version>3.14.9</version>
         </dependency>
 
     </dependencies>
@@ -108,7 +107,7 @@
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
+            </plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><configuration><source>16</source><target>16</target></configuration></plugin>
         </plugins>
     </build>
 </project>
