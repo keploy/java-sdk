@@ -31,6 +31,10 @@ public class Utility {
         return fileName;
     }
 
+    public static void method(){
+        System.out.println("TestFunc TestFunc");
+    }
+
     public static String lastFileNameFromDirectory(String path) {
         path = path.trim();
         File dir = new File(path);
