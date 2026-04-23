@@ -133,6 +133,9 @@ public final class KeployDedupAgent {
 
             try (AFUNIXServerSocket serverSocket = AFUNIXServerSocket.newInstance()) {
                 serverSocket.bind(AFUNIXSocketAddress.of(socketFile), SOCKET_BACKLOG);
+                if (!socketFile.setReadable(true, false) || !socketFile.setWritable(true, false)) {
+                    LOGGER.debug("failed to relax Keploy control socket permissions: {}", CONTROL_SOCKET_PATH);
+                }
                 socket = serverSocket;
                 while (running.get()) {
                     try {
@@ -188,6 +191,7 @@ public final class KeployDedupAgent {
                 if ("START".equals(action)) {
                     currentTestId = testId;
                     collector.reset();
+                    writeAck(outputStream);
                     return;
                 }
                 if ("END".equals(action)) {
@@ -252,14 +256,14 @@ public final class KeployDedupAgent {
 
         void reset() {
             try {
-                dump(true);
+                dump(false, true);
             } catch (IOException e) {
                 LOGGER.debug("failed to reset JaCoCo coverage counters", e);
             }
         }
 
         Map<String, List<Integer>> collect() throws IOException {
-            byte[] executionData = dump(true);
+            byte[] executionData = dump(true, true);
             if (executionData.length == 0) {
                 return Collections.emptyMap();
             }
@@ -270,7 +274,12 @@ public final class KeployDedupAgent {
             CoverageBuilder coverageBuilder = new CoverageBuilder();
             Analyzer analyzer = new Analyzer(loader.getExecutionDataStore(), coverageBuilder);
             for (ClassResource classResource : getClassResources()) {
-                analyzer.analyzeClass(classResource.bytes, classResource.location);
+                try {
+                    analyzer.analyzeClass(classResource.bytes, classResource.location);
+                } catch (IOException | RuntimeException e) {
+                    LOGGER.debug("failed to analyze Java class for Keploy dynamic dedup: {}",
+                            classResource.location, e);
+                }
             }
 
             Map<String, Set<Integer>> linesByFile = new LinkedHashMap<>();
@@ -294,7 +303,7 @@ public final class KeployDedupAgent {
             return sortedLines(linesByFile);
         }
 
-        private byte[] dump(boolean reset) throws IOException {
+        private byte[] dump(boolean dump, boolean reset) throws IOException {
             ByteArrayOutputStream output = new ByteArrayOutputStream(32 * 1024);
             ExecutionDataWriter localWriter = new ExecutionDataWriter(output);
 
@@ -305,7 +314,7 @@ public final class KeployDedupAgent {
                 RemoteControlReader reader = new RemoteControlReader(jacocoSocket.getInputStream());
                 reader.setSessionInfoVisitor(localWriter);
                 reader.setExecutionDataVisitor(localWriter);
-                writer.visitDumpCommand(true, reset);
+                writer.visitDumpCommand(dump, reset);
                 if (!reader.read()) {
                     throw new IOException("JaCoCo remote socket closed before coverage data was returned");
                 }
