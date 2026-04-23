@@ -1,5 +1,6 @@
 package io.keploy.agent;
 
+import io.keploy.dedup.KeployDedupAgent;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
@@ -55,6 +56,7 @@ public class KAgent {
 
         logger.debug("inside premain method");
         logger.debug("KeployMode:{}", System.getenv("KEPLOY_MODE"));
+        KeployDedupAgent.start();
 
         if (System.getenv("KEPLOY_MODE") == null || Objects.equals(System.getenv("KEPLOY_MODE"), "off")) {
             return;
