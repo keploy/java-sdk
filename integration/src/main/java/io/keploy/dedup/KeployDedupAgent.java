@@ -191,7 +191,6 @@ public final class KeployDedupAgent {
                 if ("START".equals(action)) {
                     currentTestId = testId;
                     collector.reset();
-                    writeAck(outputStream);
                     return;
                 }
                 if ("END".equals(action)) {
