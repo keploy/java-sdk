@@ -141,7 +141,7 @@ public final class KeployDedupAgent {
         try {
             return Integer.parseInt(configured);
         } catch (NumberFormatException e) {
-            log(Level.WARNING, "Invalid JaCoCo port '" + configured + "', using " + DEFAULT_JACOCO_PORT, e);
+            log(Level.SEVERE, "Invalid JaCoCo port '" + configured + "', using " + DEFAULT_JACOCO_PORT, e);
             return DEFAULT_JACOCO_PORT;
         }
     }
@@ -228,13 +228,13 @@ public final class KeployDedupAgent {
                         });
                     } catch (IOException e) {
                         if (running.get()) {
-                            log(Level.WARNING, "Failed to accept Java dedup coverage command", e);
+                            log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
                         }
                     }
                 }
             } catch (Throwable t) {
                 STARTED.set(false);
-                log(Level.WARNING, "Java dedup control socket server is unavailable", t);
+                log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
             } finally {
                 workers.shutdownNow();
                 deleteSocketFile(controlSocket);
@@ -258,7 +258,7 @@ public final class KeployDedupAgent {
 
                 dispatch(command, commandSocket.getOutputStream());
             } catch (IOException e) {
-                log(Level.WARNING, "Failed to handle Java dedup coverage command", e);
+                log(Level.SEVERE, "Failed to handle Java dedup coverage command", e);
             }
         }
 
@@ -272,7 +272,7 @@ public final class KeployDedupAgent {
 
                 if (command.action == CommandAction.END) {
                     if (!command.testId.equals(activeTestId)) {
-                        log(Level.WARNING,
+                        log(Level.SEVERE,
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
                                         + command.testId,
                                 null);
@@ -287,7 +287,7 @@ public final class KeployDedupAgent {
                         }
                         publisher.publish(command.testId, executedLinesByFile);
                     } catch (Exception e) {
-                        log(Level.WARNING, "Failed to collect Java coverage for " + command.testId, e);
+                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                     } finally {
                         activeTestId = "";
                         writeAck(outputStream);
@@ -337,7 +337,7 @@ public final class KeployDedupAgent {
         private static CoverageCommand parse(String raw) {
             String[] parts = raw.split(" ", 2);
             if (parts.length != 2 || parts[1].trim().isEmpty()) {
-                log(Level.WARNING, "Invalid Java dedup command: " + raw, null);
+                log(Level.FINE, "Invalid Java dedup command: " + raw, null);
                 return null;
             }
 
@@ -348,7 +348,7 @@ public final class KeployDedupAgent {
                 return new CoverageCommand(CommandAction.END, parts[1].trim());
             }
 
-            log(Level.WARNING, "Unknown Java dedup command: " + raw, null);
+            log(Level.FINE, "Unknown Java dedup command: " + raw, null);
             return null;
         }
     }
