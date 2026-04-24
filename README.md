@@ -1,10 +1,10 @@
 # Keploy Java Coverage Agent
 
-This repository provides Java dynamic dedup support for Keploy Enterprise.
+This repository contains the Java dynamic dedup coverage agent for Keploy Enterprise.
 
-Its current purpose is narrow: collect per-testcase Java coverage during Keploy replay and send that coverage back to Enterprise so duplicate testcases can be identified and removed.
+It collects per-testcase Java coverage during Keploy replay and sends that coverage back to Enterprise so duplicate testcases can be identified and removed.
 
-The old record/test SDK flow described in previous versions of this repository is no longer the intended surface. Java dedup is the supported path here.
+The repository contains only the dedup-focused `keploy-sdk` module.
 
 Supported runtimes in CI today are Java 8, 17, and 21.
 
@@ -63,6 +63,14 @@ For servlet-based applications, register the filter early in `web.xml`:
 
 The middleware starts the Java dedup control server automatically.
 
+For Jakarta Servlet stacks, non-servlet frameworks, or any application where the `javax.servlet` filter is not available, start the agent directly during application startup:
+
+```java
+import io.keploy.dedup.KeployDedupAgent;
+
+KeployDedupAgent.start();
+```
+
 ### 3. Run the App with JaCoCo TCP Server Mode
 
 The dedup agent reads coverage from JaCoCo over TCP, so the application must run with the JaCoCo Java agent in `tcpserver` mode:
@@ -114,6 +122,7 @@ Without a shared `/tmp`, dedup will not work inside containers because Enterpris
 - `KEPLOY_JACOCO_HOST`: JaCoCo TCP host. Default: `127.0.0.1`
 - `KEPLOY_JACOCO_PORT`: JaCoCo TCP port. Default: `36320`
 - `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class or jar locations to analyze for executed lines
+- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans classpath directories and jars if no class roots are found. Default: `false`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
 
 ## Sample

@@ -1,1 +1,0 @@
-Module for GRPC or anyother Client to send data to the keploy server.
