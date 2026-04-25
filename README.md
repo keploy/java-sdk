@@ -71,24 +71,32 @@ import io.keploy.dedup.KeployDedupAgent;
 KeployDedupAgent.start();
 ```
 
-### 3. Run the App with JaCoCo TCP Server Mode
+### 3. Run the App with the JaCoCo Java Agent
 
-The dedup agent reads coverage from JaCoCo over TCP, so the application must run with the JaCoCo Java agent in `tcpserver` mode:
+The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so all you need is to attach the JaCoCo Java agent — no TCP server flags, no port choices:
 
 ```bash
-java -javaagent:/path/to/jacocoagent.jar=address=127.0.0.1,port=36320,destfile=/tmp/jacoco-keploy.exec,output=tcpserver \
+java -javaagent:/path/to/jacocoagent.jar -jar your-app.jar
+```
+
+If the in-process API is unavailable (for example because the JaCoCo agent is loaded into an isolated classloader), the SDK transparently falls back to JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in `tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
+
+```bash
+java -javaagent:/path/to/jacocoagent.jar=address=127.0.0.1,port=36320,output=tcpserver \
   -jar your-app.jar
 ```
 
 ### 4. Replay with Keploy Enterprise
 
-Run replay with dynamic dedup enabled and pass through the JaCoCo port:
+Run replay with dynamic dedup enabled:
 
 ```bash
-keploy test -c "java -javaagent:/path/to/jacocoagent.jar=address=127.0.0.1,port=36320,destfile=/tmp/jacoco-keploy.exec,output=tcpserver -jar your-app.jar" \
+keploy test -c "java -javaagent:/path/to/jacocoagent.jar -jar your-app.jar" \
   --dedup \
-  --pass-through-ports 36320
+  --language java
 ```
+
+When using the TCP fallback, also pass `--pass-through-ports <jacoco-port>` so Keploy does not try to mock the JaCoCo control connection.
 
 After replay, run:
 
@@ -108,7 +116,7 @@ Java dedup works in native, Docker, and restricted Docker environments as long a
 
 - host `/tmp` is bind-mounted into the container as `/tmp`
 - `/tmp` remains writable so the Unix sockets can be created
-- the JaCoCo TCP port is reachable from the Java process
+- if the SDK falls back to TCP, the JaCoCo TCP port is reachable from the Java process
 
 The `/tmp` bind mount is required because Keploy Enterprise and the Java SDK communicate over these Unix sockets:
 
@@ -119,8 +127,8 @@ Without a shared `/tmp`, dedup will not work inside containers because Enterpris
 
 ## Configuration
 
-- `KEPLOY_JACOCO_HOST`: JaCoCo TCP host. Default: `127.0.0.1`
-- `KEPLOY_JACOCO_PORT`: JaCoCo TCP port. Default: `36320`
+- `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
+- `KEPLOY_JACOCO_PORT`: JaCoCo TCP port used when the in-process runtime API is unavailable. Default: `36320`
 - `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class or jar locations to analyze for executed lines
 - `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans classpath directories and jars if no class roots are found. Default: `false`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`

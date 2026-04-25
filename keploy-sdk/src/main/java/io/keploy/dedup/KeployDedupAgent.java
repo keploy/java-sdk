@@ -24,6 +24,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -483,6 +485,8 @@ public final class KeployDedupAgent {
 
         private final String host;
         private final int port;
+        private volatile InProcessAgent inProcessAgent;
+        private volatile boolean inProcessUnavailable;
 
         private JacocoClient(String host, int port) {
             this.host = host;
@@ -490,6 +494,55 @@ public final class KeployDedupAgent {
         }
 
         private byte[] dump(boolean dump, boolean reset) throws IOException {
+            InProcessAgent agent = inProcessAgent();
+            if (agent != null) {
+                try {
+                    if (!dump) {
+                        if (reset) {
+                            agent.reset();
+                        }
+                        return new byte[0];
+                    }
+                    return agent.getExecutionData(reset);
+                } catch (Throwable t) {
+                    inProcessUnavailable = true;
+                    inProcessAgent = null;
+                    log(Level.FINE, "In-process JaCoCo dump failed, falling back to TCP", t);
+                }
+            }
+
+            return dumpOverTcp(dump, reset);
+        }
+
+        private InProcessAgent inProcessAgent() {
+            if (inProcessUnavailable) {
+                return null;
+            }
+            InProcessAgent cached = inProcessAgent;
+            if (cached != null) {
+                return cached;
+            }
+            synchronized (this) {
+                if (inProcessUnavailable) {
+                    return null;
+                }
+                if (inProcessAgent != null) {
+                    return inProcessAgent;
+                }
+                try {
+                    inProcessAgent = InProcessAgent.locate();
+                } catch (Throwable t) {
+                    inProcessUnavailable = true;
+                    log(Level.FINE,
+                            "JaCoCo in-process agent unavailable, will use TCP fallback at "
+                                    + host + ":" + port,
+                            t);
+                }
+                return inProcessAgent;
+            }
+        }
+
+        private byte[] dumpOverTcp(boolean dump, boolean reset) throws IOException {
             ByteArrayOutputStream output = new ByteArrayOutputStream(32 * 1024);
             ExecutionDataWriter writer = new ExecutionDataWriter(output);
 
@@ -509,6 +562,60 @@ public final class KeployDedupAgent {
             }
 
             return output.toByteArray();
+        }
+    }
+
+    private static final class InProcessAgent {
+
+        private final Object agent;
+        private final Method getExecutionData;
+        private final Method reset;
+
+        private InProcessAgent(Object agent, Method getExecutionData, Method reset) {
+            this.agent = agent;
+            this.getExecutionData = getExecutionData;
+            this.reset = reset;
+        }
+
+        static InProcessAgent locate() throws ReflectiveOperationException {
+            Class<?> rtClass = Class.forName("org.jacoco.agent.rt.RT");
+            Object resolved = rtClass.getMethod("getAgent").invoke(null);
+            if (resolved == null) {
+                return null;
+            }
+            Method getExecutionData = resolved.getClass().getMethod("getExecutionData", boolean.class);
+            Method reset = resolved.getClass().getMethod("reset");
+            getExecutionData.setAccessible(true);
+            reset.setAccessible(true);
+            return new InProcessAgent(resolved, getExecutionData, reset);
+        }
+
+        byte[] getExecutionData(boolean resetCounters) throws IOException {
+            try {
+                return (byte[]) getExecutionData.invoke(agent, resetCounters);
+            } catch (InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause instanceof IOException) {
+                    throw (IOException) cause;
+                }
+                throw new IOException("Failed to read in-process JaCoCo coverage", cause);
+            } catch (ReflectiveOperationException e) {
+                throw new IOException("Failed to read in-process JaCoCo coverage", e);
+            }
+        }
+
+        void reset() throws IOException {
+            try {
+                reset.invoke(agent);
+            } catch (InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause instanceof IOException) {
+                    throw (IOException) cause;
+                }
+                throw new IOException("Failed to reset in-process JaCoCo coverage", cause);
+            } catch (ReflectiveOperationException e) {
+                throw new IOException("Failed to reset in-process JaCoCo coverage", e);
+            }
         }
     }
 
