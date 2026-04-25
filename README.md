@@ -73,7 +73,10 @@ KeployDedupAgent.start();
 
 ### 3. Run the App with the JaCoCo Java Agent
 
-The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so all you need is to attach the JaCoCo Java agent — no TCP server flags, no port choices:
+The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so attaching the JaCoCo Java agent is the only runtime requirement in the common cases below:
+
+- Maven/Gradle dev runs where application classes are under `target/classes` or `build/classes/java/main`
+- packaged `java -jar` runs where the application classes live inside the executable jar
 
 ```bash
 java -javaagent:/path/to/jacocoagent.jar -jar your-app.jar
@@ -112,13 +115,9 @@ keploy dedup --rm
 
 ## Docker and Restricted Docker
 
-Java dedup works in native, Docker, and restricted Docker environments as long as the following conditions are met:
+Java dedup works in native, Docker, and restricted Docker environments as long as `/tmp` is shared and writable between Keploy Enterprise and the Java process. In Docker Compose flows, Enterprise can inject that shared `/tmp` mount when it rewrites the Compose file for replay.
 
-- host `/tmp` is bind-mounted into the container as `/tmp`
-- `/tmp` remains writable so the Unix sockets can be created
-- if the SDK falls back to TCP, the JaCoCo TCP port is reachable from the Java process
-
-The `/tmp` bind mount is required because Keploy Enterprise and the Java SDK communicate over these Unix sockets:
+Keploy Enterprise and the Java SDK communicate over these Unix sockets:
 
 - `/tmp/coverage_control.sock`
 - `/tmp/coverage_data.sock`
@@ -129,8 +128,8 @@ Without a shared `/tmp`, dedup will not work inside containers because Enterpris
 
 - `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
 - `KEPLOY_JACOCO_PORT`: JaCoCo TCP port used when the in-process runtime API is unavailable. Default: `36320`
-- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class or jar locations to analyze for executed lines
-- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans classpath directories and jars if no class roots are found. Default: `false`
+- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class or jar locations to analyze for executed lines when your build output lives outside the standard locations
+- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath if standard class roots and the executable jar do not provide application classes. Default: `false`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
 
 ## Sample

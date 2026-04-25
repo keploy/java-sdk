@@ -41,9 +41,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -197,7 +194,6 @@ public final class KeployDedupAgent {
 
         private final CoverageCollector collector;
         private final CoveragePublisher publisher;
-        private final ExecutorService workers;
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Object testCaseLock = new Object();
         private volatile AFUNIXServerSocket serverSocket;
@@ -206,7 +202,6 @@ public final class KeployDedupAgent {
         CommandServer(CoverageCollector collector, CoveragePublisher publisher) {
             this.collector = collector;
             this.publisher = publisher;
-            this.workers = Executors.newCachedThreadPool(new NamedDaemonFactory("keploy-java-dedup-worker"));
         }
 
         @Override
@@ -221,13 +216,7 @@ public final class KeployDedupAgent {
 
                 while (running.get()) {
                     try {
-                        final Socket socket = localServer.accept();
-                        workers.execute(new Runnable() {
-                            @Override
-                            public void run() {
-                                handle(socket);
-                            }
-                        });
+                        handle(localServer.accept());
                     } catch (IOException e) {
                         if (running.get()) {
                             log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
@@ -238,7 +227,6 @@ public final class KeployDedupAgent {
                 STARTED.set(false);
                 log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
             } finally {
-                workers.shutdownNow();
                 deleteSocketFile(controlSocket);
             }
         }
@@ -269,6 +257,7 @@ public final class KeployDedupAgent {
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
                     collector.reset();
+                    writeAck(outputStream);
                     return;
                 }
 
@@ -317,7 +306,6 @@ public final class KeployDedupAgent {
                     log(Level.FINE, "Failed to close Java dedup control socket", e);
                 }
             }
-            workers.shutdownNow();
         }
     }
 
@@ -578,16 +566,52 @@ public final class KeployDedupAgent {
         }
 
         static InProcessAgent locate() throws ReflectiveOperationException {
-            Class<?> rtClass = Class.forName("org.jacoco.agent.rt.RT");
+            ReflectiveOperationException firstFailure = null;
+            for (ClassLoader loader : candidateLoaders()) {
+                try {
+                    InProcessAgent agent = locateWithLoader(loader);
+                    if (agent != null) {
+                        return agent;
+                    }
+                } catch (ReflectiveOperationException e) {
+                    if (firstFailure == null) {
+                        firstFailure = e;
+                    }
+                }
+            }
+
+            if (firstFailure != null) {
+                throw firstFailure;
+            }
+            throw new ClassNotFoundException("org.jacoco.agent.rt.RT");
+        }
+
+        private static InProcessAgent locateWithLoader(ClassLoader loader) throws ReflectiveOperationException {
+            Class<?> rtClass = Class.forName("org.jacoco.agent.rt.RT", true, loader);
             Object resolved = rtClass.getMethod("getAgent").invoke(null);
             if (resolved == null) {
                 return null;
             }
+
             Method getExecutionData = resolved.getClass().getMethod("getExecutionData", boolean.class);
             Method reset = resolved.getClass().getMethod("reset");
             getExecutionData.setAccessible(true);
             reset.setAccessible(true);
             return new InProcessAgent(resolved, getExecutionData, reset);
+        }
+
+        private static List<ClassLoader> candidateLoaders() {
+            List<ClassLoader> loaders = new ArrayList<>(3);
+            addLoader(loaders, ClassLoader.getSystemClassLoader());
+            addLoader(loaders, Thread.currentThread().getContextClassLoader());
+            addLoader(loaders, KeployDedupAgent.class.getClassLoader());
+            return loaders;
+        }
+
+        private static void addLoader(List<ClassLoader> loaders, ClassLoader candidate) {
+            if (candidate != null && !loaders.contains(candidate)) {
+                loaders.add(candidate);
+            }
         }
 
         byte[] getExecutionData(boolean resetCounters) throws IOException {
@@ -643,6 +667,9 @@ public final class KeployDedupAgent {
         private List<ClassEntry> loadEntries() {
             LinkedHashMap<String, ClassEntry> collected = new LinkedHashMap<>();
             scanRoots(applicationRoots(), collected);
+            if (collected.isEmpty()) {
+                scanRoots(executableArchiveRoots(), collected);
+            }
             if (collected.isEmpty() && isClasspathFallbackEnabled()) {
                 scanRoots(classpathRoots(), collected);
             }
@@ -677,6 +704,25 @@ public final class KeployDedupAgent {
         private boolean isClasspathFallbackEnabled() {
             return isTruthy(envOrProperty("KEPLOY_JAVA_CLASSPATH_FALLBACK",
                     "keploy.java.classpath.fallback", "false"));
+        }
+
+        private List<File> executableArchiveRoots() {
+            LinkedHashSet<File> roots = new LinkedHashSet<>();
+            String classpath = System.getProperty("java.class.path", "");
+            if (classpath.trim().isEmpty()) {
+                return new ArrayList<>(roots);
+            }
+
+            String[] parts = classpath.split(Pattern.quote(File.pathSeparator));
+            if (parts.length != 1) {
+                return new ArrayList<>(roots);
+            }
+
+            File file = new File(parts[0].trim());
+            if (file.isFile() && file.getName().endsWith(".jar")) {
+                roots.add(file);
+            }
+            return new ArrayList<>(roots);
         }
 
         private String[] configuredRoots(String configured) {
@@ -841,21 +887,4 @@ public final class KeployDedupAgent {
         }
     }
 
-    private static final class NamedDaemonFactory implements ThreadFactory {
-
-        private final String prefix;
-        private int counter;
-
-        private NamedDaemonFactory(String prefix) {
-            this.prefix = prefix;
-        }
-
-        @Override
-        public synchronized Thread newThread(Runnable runnable) {
-            counter++;
-            Thread thread = new Thread(runnable, prefix + "-" + counter);
-            thread.setDaemon(true);
-            return thread;
-        }
-    }
 }
