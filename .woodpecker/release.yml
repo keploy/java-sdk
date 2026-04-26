@@ -1,0 +1,48 @@
+when:
+  - event: tag
+    ref: refs/tags/v*
+
+labels:
+  platform: linux/amd64
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+      depth: 1
+
+steps:
+  release:
+    image: maven:3.9-eclipse-temurin-17
+    environment:
+      MAVEN_GPG_PRIVATE_KEY:
+        from_secret: maven_gpg_private_key
+      MAVEN_GPG_PASSPHRASE:
+        from_secret: maven_gpg_passphrase
+      OSSRH_USERNAME:
+        from_secret: ossrh_username
+      OSSRH_PASSWORD:
+        from_secret: ossrh_password
+    commands:
+      - apt-get update -qq && apt-get install -y -qq gnupg
+      - |
+        echo "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback \
+          --passphrase "$MAVEN_GPG_PASSPHRASE" --import
+      - mkdir -p ~/.m2
+      - |
+        cat > ~/.m2/settings.xml <<'XML'
+        <settings>
+          <servers>
+            <server>
+              <id>ossrh</id>
+              <username>${env.OSSRH_USERNAME}</username>
+              <password>${env.OSSRH_PASSWORD}</password>
+            </server>
+          </servers>
+        </settings>
+        XML
+      - VERSION="${CI_COMMIT_TAG#v}"
+      - echo "Releasing version $VERSION"
+      - mvn -B versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+      - mvn -B -P release clean deploy -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
