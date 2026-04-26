@@ -120,6 +120,11 @@ public final class KeployDedupAgent {
                 || isTruthy(System.getProperty("keploy.java.dedup.disabled"));
     }
 
+    private static boolean diagnosticsEnabled() {
+        return isTruthy(System.getenv("KEPLOY_JAVA_DEDUP_DIAGNOSTICS"))
+                || isTruthy(System.getProperty("keploy.java.dedup.diagnostics"));
+    }
+
     private static boolean isTruthy(String value) {
         if (value == null) {
             return false;
@@ -190,6 +195,12 @@ public final class KeployDedupAgent {
         LOGGER.log(level, message, error);
     }
 
+    private static void diagnostic(String message) {
+        String formatted = "Java dedup diagnostics: " + message;
+        System.err.println(formatted);
+        LOGGER.log(Level.INFO, formatted);
+    }
+
     private static final class CommandServer implements Runnable, Closeable {
 
         private final CoverageCollector collector;
@@ -242,7 +253,6 @@ public final class KeployDedupAgent {
 
                 CoverageCommand command = CoverageCommand.parse(line.trim());
                 if (command == null) {
-                    writeAck(commandSocket.getOutputStream());
                     return;
                 }
 
@@ -252,7 +262,7 @@ public final class KeployDedupAgent {
             }
         }
 
-        private void dispatch(CoverageCommand command, OutputStream outputStream) throws IOException {
+        private void dispatch(CoverageCommand command, OutputStream outputStream) {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
@@ -286,13 +296,15 @@ public final class KeployDedupAgent {
                     return;
                 }
             }
-
-            writeAck(outputStream);
         }
 
-        private void writeAck(OutputStream outputStream) throws IOException {
-            outputStream.write("ACK\n".getBytes(StandardCharsets.UTF_8));
-            outputStream.flush();
+        private void writeAck(OutputStream outputStream) {
+            try {
+                outputStream.write("ACK\n".getBytes(StandardCharsets.UTF_8));
+                outputStream.flush();
+            } catch (IOException e) {
+                log(Level.FINE, "Java dedup control client disconnected before ACK was delivered", e);
+            }
         }
 
         @Override
@@ -364,6 +376,9 @@ public final class KeployDedupAgent {
         private Map<String, List<Integer>> capture() throws IOException {
             byte[] dump = jacocoClient.dump(true, true);
             if (dump.length == 0) {
+                if (diagnosticsEnabled()) {
+                    diagnostic("JaCoCo dump returned 0 bytes");
+                }
                 return Collections.emptyMap();
             }
 
@@ -372,12 +387,23 @@ public final class KeployDedupAgent {
             ExecutionDataStore executionDataStore = loader.getExecutionDataStore();
             Set<String> hitClasses = hitClassNames(executionDataStore);
             if (hitClasses.isEmpty()) {
+                if (diagnosticsEnabled()) {
+                    diagnostic("execution data had no hit classes");
+                }
                 return Collections.emptyMap();
+            }
+
+            List<ClassEntry> indexedEntries = coverageIndex.entries();
+            if (diagnosticsEnabled()) {
+                diagnostic("hitClasses=" + hitClasses.size()
+                                + ", indexedEntries=" + indexedEntries.size()
+                                + ", sampleHits=" + summarizeStrings(hitClasses, 5)
+                                + ", sampleEntries=" + summarizeClassEntries(indexedEntries, 5));
             }
 
             CoverageBuilder coverageBuilder = new CoverageBuilder();
             Analyzer analyzer = new Analyzer(executionDataStore, coverageBuilder);
-            for (ClassEntry classEntry : coverageIndex.entries()) {
+            for (ClassEntry classEntry : indexedEntries) {
                 if (!hitClasses.contains(classEntry.className)) {
                     continue;
                 }
@@ -386,6 +412,10 @@ public final class KeployDedupAgent {
                 } catch (IOException | RuntimeException e) {
                     log(Level.FINE, "Skipping unreadable Java class " + classEntry.location, e);
                 }
+            }
+
+            if (diagnosticsEnabled()) {
+                diagnostic("analyzedClasses=" + coverageBuilder.getClasses().size());
             }
 
             Map<String, Set<Integer>> raw = new LinkedHashMap<>();
@@ -408,6 +438,11 @@ public final class KeployDedupAgent {
                 merged.addAll(executedLines);
             }
 
+            if (diagnosticsEnabled()) {
+                diagnostic("filesWithCoverage=" + raw.size()
+                        + ", sampleFiles=" + summarizeStrings(raw.keySet(), 5));
+            }
+
             return toSortedMap(raw);
         }
 
@@ -419,6 +454,28 @@ public final class KeployDedupAgent {
                 }
             }
             return names;
+        }
+
+        private String summarizeStrings(Iterable<String> values, int limit) {
+            List<String> sample = new ArrayList<>();
+            for (String value : values) {
+                sample.add(value);
+                if (sample.size() >= limit) {
+                    break;
+                }
+            }
+            return sample.toString();
+        }
+
+        private String summarizeClassEntries(List<ClassEntry> values, int limit) {
+            List<String> sample = new ArrayList<>();
+            for (ClassEntry value : values) {
+                sample.add(value.className);
+                if (sample.size() >= limit) {
+                    break;
+                }
+            }
+            return sample.toString();
         }
 
         private List<Integer> executedLines(IClassCoverage classCoverage) {
@@ -567,6 +624,15 @@ public final class KeployDedupAgent {
 
         static InProcessAgent locate() throws ReflectiveOperationException {
             ReflectiveOperationException firstFailure = null;
+            try {
+                InProcessAgent bootstrapAgent = locateWithLoader(null);
+                if (bootstrapAgent != null) {
+                    return bootstrapAgent;
+                }
+            } catch (ReflectiveOperationException e) {
+                firstFailure = e;
+            }
+
             for (ClassLoader loader : candidateLoaders()) {
                 try {
                     InProcessAgent agent = locateWithLoader(loader);
@@ -588,6 +654,14 @@ public final class KeployDedupAgent {
 
         private static InProcessAgent locateWithLoader(ClassLoader loader) throws ReflectiveOperationException {
             Class<?> rtClass = Class.forName("org.jacoco.agent.rt.RT", true, loader);
+            if (diagnosticsEnabled()) {
+                Object source = rtClass.getProtectionDomain() == null
+                        || rtClass.getProtectionDomain().getCodeSource() == null
+                        ? "bootstrap"
+                        : rtClass.getProtectionDomain().getCodeSource().getLocation();
+                String loaderName = loader == null ? "bootstrap" : loader.toString();
+                diagnostic("resolved JaCoCo RT with loader=" + loaderName + ", source=" + source);
+            }
             Object resolved = rtClass.getMethod("getAgent").invoke(null);
             if (resolved == null) {
                 return null;
