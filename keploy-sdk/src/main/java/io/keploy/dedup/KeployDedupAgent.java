@@ -740,12 +740,26 @@ public final class KeployDedupAgent {
 
         private List<ClassEntry> loadEntries() {
             LinkedHashMap<String, ClassEntry> collected = new LinkedHashMap<>();
-            scanRoots(applicationRoots(), collected);
+            List<File> applicationRoots = applicationRoots();
+            List<File> executableArchiveRoots = Collections.emptyList();
+            List<File> classpathRoots = Collections.emptyList();
+
+            scanRoots(applicationRoots, collected);
             if (collected.isEmpty()) {
-                scanRoots(executableArchiveRoots(), collected);
+                executableArchiveRoots = executableArchiveRoots();
+                scanRoots(executableArchiveRoots, collected);
             }
             if (collected.isEmpty() && isClasspathFallbackEnabled()) {
-                scanRoots(classpathRoots(), collected);
+                classpathRoots = classpathRoots();
+                scanRoots(classpathRoots, collected);
+            }
+            if (collected.isEmpty() && diagnosticsEnabled()) {
+                diagnostic("no application classes indexed"
+                        + ", applicationRoots=" + summarizeFiles(applicationRoots, 5)
+                        + ", executableArchiveRoots=" + summarizeFiles(executableArchiveRoots, 5)
+                        + ", classpathFallbackRoots=" + summarizeFiles(classpathRoots, 5)
+                        + ", java.class.path=" + System.getProperty("java.class.path", "")
+                        + ", sun.java.command=" + System.getProperty("sun.java.command", ""));
             }
 
             List<ClassEntry> sorted = new ArrayList<>(collected.values());
@@ -756,6 +770,17 @@ public final class KeployDedupAgent {
                 }
             });
             return sorted;
+        }
+
+        private String summarizeFiles(Iterable<File> values, int limit) {
+            List<String> sample = new ArrayList<>();
+            for (File value : values) {
+                sample.add(value.getPath());
+                if (sample.size() >= limit) {
+                    break;
+                }
+            }
+            return sample.toString();
         }
 
         private List<File> applicationRoots() {
@@ -782,21 +807,61 @@ public final class KeployDedupAgent {
 
         private List<File> executableArchiveRoots() {
             LinkedHashSet<File> roots = new LinkedHashSet<>();
+
+            addJarRoot(roots, firstCommandToken(System.getProperty("sun.java.command", "")));
+
             String classpath = System.getProperty("java.class.path", "");
             if (classpath.trim().isEmpty()) {
                 return new ArrayList<>(roots);
             }
 
             String[] parts = classpath.split(Pattern.quote(File.pathSeparator));
-            if (parts.length != 1) {
-                return new ArrayList<>(roots);
+            if (parts.length == 1) {
+                addJarRoot(roots, parts[0]);
+            }
+            return new ArrayList<>(roots);
+        }
+
+        private void addJarRoot(Set<File> roots, String rawPath) {
+            if (rawPath == null) {
+                return;
             }
 
-            File file = new File(parts[0].trim());
+            String path = rawPath.trim();
+            if (path.isEmpty()) {
+                return;
+            }
+
+            File file = new File(path);
+            if (!file.isAbsolute()) {
+                file = new File(System.getProperty("user.dir"), path);
+            }
             if (file.isFile() && file.getName().endsWith(".jar")) {
                 roots.add(file);
             }
-            return new ArrayList<>(roots);
+        }
+
+        private String firstCommandToken(String command) {
+            if (command == null) {
+                return "";
+            }
+
+            String trimmed = command.trim();
+            if (trimmed.isEmpty()) {
+                return "";
+            }
+
+            char first = trimmed.charAt(0);
+            if (first == '"' || first == '\'') {
+                int end = trimmed.indexOf(first, 1);
+                return end > 0 ? trimmed.substring(1, end) : trimmed.substring(1);
+            }
+
+            int end = 0;
+            while (end < trimmed.length() && !Character.isWhitespace(trimmed.charAt(end))) {
+                end++;
+            }
+            return trimmed.substring(0, end);
         }
 
         private String[] configuredRoots(String configured) {
