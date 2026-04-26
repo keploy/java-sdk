@@ -31,7 +31,7 @@ Add `keploy-sdk` to your application:
 <dependency>
   <groupId>io.keploy</groupId>
   <artifactId>keploy-sdk</artifactId>
-  <version>N.N.N</version>
+  <version>2.0.0</version>
 </dependency>
 ```
 
