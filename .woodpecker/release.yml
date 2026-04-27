@@ -1,6 +1,6 @@
 when:
   - event: tag
-    ref: refs/tags/v*
+    ref: refs/tags/v*.*.*
 
 labels:
   platform: linux/amd64
@@ -10,7 +10,7 @@ clone:
     image: woodpeckerci/plugin-git
     settings:
       lfs: false
-      depth: 1
+      depth: 0
 
 steps:
   release:
