@@ -18,8 +18,7 @@ steps:
     environment:
       MAVEN_GPG_PRIVATE_KEY:
         from_secret: maven_gpg_private_key
-      MAVEN_GPG_PASSPHRASE:
-        from_secret: maven_gpg_passphrase
+      GPG_KEY_ID: 8541784E4EC36FB8
       CENTRAL_USERNAME:
         from_secret: central_username
       CENTRAL_PASSWORD:
@@ -27,8 +26,7 @@ steps:
     commands:
       - apt-get update -qq && apt-get install -y -qq gnupg
       - |
-        echo "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback \
-          --passphrase "$MAVEN_GPG_PASSPHRASE" --import
+        echo "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --import
       - mkdir -p ~/.m2
       - |
         cat > ~/.m2/settings.xml <<XML
@@ -45,4 +43,4 @@ steps:
       - VERSION="$(printf '%s' "$CI_COMMIT_TAG" | sed 's/^v//')"
       - echo "Releasing version $VERSION"
       - mvn -B versions:set -DnewVersion="$VERSION" -DprocessAllModules=true -DgenerateBackupPoms=false
-      - mvn -B -P release clean deploy -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
+      - mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID"
