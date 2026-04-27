@@ -18,6 +18,8 @@ steps:
     environment:
       MAVEN_GPG_PRIVATE_KEY:
         from_secret: maven_gpg_private_key
+      MAVEN_GPG_PASSPHRASE:
+        from_secret: maven_gpg_passphrase
       GPG_KEY_ID: 8541784E4EC36FB8
       CENTRAL_USERNAME:
         from_secret: central_username
