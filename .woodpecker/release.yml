@@ -26,7 +26,8 @@ steps:
     commands:
       - apt-get update -qq && apt-get install -y -qq gnupg
       - |
-        echo "$MAVEN_GPG_PRIVATE_KEY" | gpg --batch --import
+        printf '%s' "$MAVEN_GPG_PRIVATE_KEY" | sed 's/\\n/\n/g' | gpg --batch --import
+        gpg --batch --list-secret-keys --keyid-format LONG "$GPG_KEY_ID"
       - mkdir -p ~/.m2
       - |
         cat > ~/.m2/settings.xml <<XML
