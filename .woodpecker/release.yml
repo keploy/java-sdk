@@ -50,4 +50,4 @@ steps:
       - VERSION="$(printf '%s' "$CI_COMMIT_TAG" | sed 's/^v//')"
       - echo "Releasing version $VERSION"
       - mvn -B versions:set -DnewVersion="$VERSION" -DprocessAllModules=true -DgenerateBackupPoms=false
-      - mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID"
+      - mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID" -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE" -Dgpg.useagent=false
