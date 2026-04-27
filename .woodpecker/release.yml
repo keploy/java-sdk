@@ -31,18 +31,18 @@ steps:
           --passphrase "$MAVEN_GPG_PASSPHRASE" --import
       - mkdir -p ~/.m2
       - |
-        cat > ~/.m2/settings.xml <<'XML'
+        cat > ~/.m2/settings.xml <<XML
         <settings>
           <servers>
             <server>
               <id>central</id>
-              <username>${env.CENTRAL_USERNAME}</username>
-              <password>${env.CENTRAL_PASSWORD}</password>
+              <username>$CENTRAL_USERNAME</username>
+              <password>$CENTRAL_PASSWORD</password>
             </server>
           </servers>
         </settings>
         XML
-      - VERSION="${CI_COMMIT_TAG#v}"
+      - VERSION="$(printf '%s' "$CI_COMMIT_TAG" | sed 's/^v//')"
       - echo "Releasing version $VERSION"
       - mvn -B versions:set -DnewVersion="$VERSION" -DprocessAllModules=true -DgenerateBackupPoms=false
       - mvn -B -P release clean deploy -DskipTests -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
