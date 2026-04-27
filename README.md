@@ -1,292 +1,141 @@
-[![contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen?logo=github)](CODE_OF_CONDUCT.md)
-[![Slack](.github/slack.svg)](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA)
-[![License](.github/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Maven Central](https://img.shields.io/maven-central/v/io.keploy/keploy-sdk.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22)
+# Keploy Java Coverage Agent
 
-[//]: # ([![Maven Central]&#40;https://img.shields.io/maven-central/v/io.keploy/keploy-sdk/1.2.6.svg?label=Maven%20Central&#41;]&#40;https://search.maven.org/search?q=g:%22io.keploy%22%20AND%20a:%22keploy-sdk%22%20AND%20v:%221.2.6%22&#41;)
+This repository contains the Java dynamic dedup coverage agent for Keploy Enterprise.
 
-# Keploy
+It collects per-testcase Java coverage during Keploy replay and sends that coverage back to Enterprise so duplicate testcases can be identified and removed.
 
-[Keploy](https://keploy.io) is a no-code testing platform that generates tests from API calls.
+The repository contains only the dedup-focused `keploy-sdk` module.
 
-This is the client SDK for Keploy API testing platform. There are 2 modes:
+Supported runtimes in CI today are Java 8, 17, and 21.
 
-1. **Record mode**
-    1. Record requests, response and all external calls and sends to Keploy server.
-    2. It runs the request on the API again to identify noisy fields.
-    3. Sends the noisy fields to the keploy server to be saved along with the testcase.
-2. **Test mode**
-    1. Fetches testcases for the app from keploy server.
-    2. Calls the API with same request payload in testcase.
-    3. Validates the respones and uploads results to the keploy server
+## How It Works
 
-The Keploy Java SDK helps you to integrate keploy with java applications. (For other languages,
-see [KEPLOY SDKs](https://docs.keploy.io/application-development))
+Keploy Enterprise drives dynamic dedup per testcase.
 
-## Contents
+1. Enterprise sends `START <test-set>/<test-id>` on `/tmp/coverage_control.sock`.
+2. The Java agent resets JaCoCo coverage counters for that testcase.
+3. Enterprise replays the testcase.
+4. Enterprise sends `END <test-set>/<test-id>` on `/tmp/coverage_control.sock`.
+5. The Java agent dumps JaCoCo execution data, resolves executed Java lines, and sends them as JSON on `/tmp/coverage_data.sock`.
+6. Enterprise writes the result to `dedupData.yaml` and uses it to identify duplicates.
 
-1. [Requirements](#requirements)
-2. [Build configuration](#build-configuration)
-3. [Usage](#usage)
-4. [Community support](#community-support)
-5. [Documentation(WIP)](#documentationwip)
+Coverage is collected at per-testcase granularity, not process granularity.
 
-## Requirements
+## How to Use
 
-- Java 1.8+
+### 1. Add the SDK
 
-## Build configuration
+Add `keploy-sdk` to your application:
 
-[Find the latest release](https://search.maven.org/artifact/io.keploy/keploy-sdk) of the Keploy Java SDK at maven
-central.
-
-Add *keploy-sdk* as a dependency to your *pom.xml*:
-
-    <dependency>
-      <groupId>io.keploy</groupId>
-      <artifactId>keploy-sdk</artifactId>
-      <version>N.N.N</version> (eg: 1.2.9)
-    </dependency>
-
-or to *build.gradle*:
-
-    implementation 'io.keploy:keploy-sdk:N.N.N' (eg: 1.2.9)
-
-### KEPLOY_MODE
-
-There are 3 modes:
-
-- **Record**: Sets to record mode.
-- **Test**: Sets to test mode.
-- **Off**: Turns off all the functionality provided by the API
-
-**Note:** `KEPLOY_MODE` value is case sensitive.
-
-
-## Usage
-
-- **Start keploy server [refer](https://github.com/keploy/keploy#start-keploy-server)**
-
-- **For Spring based application**
-    - Add `@Import(KeployMiddleware.class)` below `@SpringBootApplication`  in your main class.
-- **For Java EE application**
-    - Specify the below filter above all other filters and servlets in the **web.xml** file.
-      ```xml
-        <filter>
-            <filter-name>middleware</filter-name>
-            <filter-class>io.keploy.servlet.KeployMiddleware</filter-class>
-        </filter>
-        <filter-mapping>
-            <filter-name>middleware</filter-name>
-            <url-pattern>/*</url-pattern>
-        </filter-mapping>
-      ```
-
-- **Run along with agent to mock external calls of your API 🤩🔥**
-
-    - Download the latest - Download the latest agent jar
-      from [here](https://repo1.maven.org/maven2/io/keploy/agent/1.2.9/)  (eg: 1.2.9)
-
-    - Prefix `-javaagent:` with absolute classpath of agent jar (
-      eg: `-javaagent:<your full path to agent jar>/agent-1.2.9.jar`).
-
-        1. **Using Intellij:** Go to Edit Configuration-> add VM options -> paste _java agent_ edited above.
-
-        2. **Using command line:**
-            - First add below plugins in your *pom.xml* file.
-             ```xml
-                  <plugin>
-                      <groupId>org.apache.maven.plugins</groupId>
-                      <artifactId>maven-dependency-plugin</artifactId>
-                      <version>3.1.1</version>
-                      <executions>
-                          <execution>
-                              <id>copy-dependencies</id>
-                              <phase>package</phase>
-                              <goals>
-                                 <goal>copy-dependencies</goal>
-                              </goals>
-                          </execution>
-                      </executions>
-                 </plugin>
-            
-                 <plugin>
-                     <groupId>org.apache.maven.plugins</groupId>
-                     <artifactId>maven-jar-plugin</artifactId>
-                     <version>3.2.2</version>
-                     <configuration>
-                         <archive>
-                           <manifest>
-                              <addClasspath>true</addClasspath>
-                              <classpathPrefix>dependency/</classpathPrefix>
-                              <mainClass>{your main class}</mainClass>
-                           </manifest>
-                         </archive>
-                     </configuration>
-                 </plugin>
-             ```
-            - And then run this
-              command:`java -javaagent:<your full path to agent jar>/agent-1.2.9.jar -jar <your full path to application jar>.jar`
-              . This command will attach agent jar and also run the application. You need to set some required env
-              variables written below in order to generate test cases. So, run this command after setting the env
-              variables.
-
-
-- **Configure Environment Variables**
-    - `APP_NAME`           (default APP_NAME = myApp)
-    - `APP_PORT`           (default APP_PORT = 8080)
-    - `DELAY`              (default DELAY = 5)(It is the estimate application startup time (in sec))
-    - `KEPLOY_URL`         (default KEPLOY_URL = http://localhost:6789/api)
-    - `KEPLOY_MODE`        (default KEPLOY_MODE = off)
-    - `KEPLOY_TEST_PATH`         (default **/src/test/e2e/keploy-tests** directory of your application)
-    - `KEPLOY_MOCK_PATH`         (default **/src/test/e2e/mocks** directory of your application)
-    - `KEPLOY_ASSET_PATH`        (default **/src/test/e2e/assets** directory of your application)
-    - `DENOISE`            (default DENOISE = false)
-      **Note:** By enabling denoise, it will filter out noisy fields for the testcase.
-    - `RUN_TEST_BEFORE_RECORD` (default RUN_TEST_BEFORE_RECORD = false)
-      **Note:** It is used to maintain the same database state when mocking is disabled.
-    - `ACCEPT_URL_REGEX_LIST`  (default ACCEPT_URL_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the urls which are required to be recorded and by default it is empty list. **e.g.,ACCEPT_URL_REGEX_LIST=^/api**
-    - `ACCEPT_HEADER_REGEX_LIST`  (default ACCEPT_HEADER_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the headers which are required to be recorded and by default it is empty list. **e.g.,ACCEPT_HEADER_REGEX_LIST=token:bearer tgffd,content-type\s\*:\s\*application\\\/json**
-    - `REJECT_URL_REGEX_LIST`  (default REJECT_URL_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the urls which are not required to be recorded and by default it is empty list. **e.g.,REJECT_URL_REGEX_LIST=^/assets**
-    - `REJECT_HEADER_REGEX_LIST`  (default REJECT_HEADER_REGEX_LIST = [])
-      **Note:** A list of regex which is used to filter out the headers which are not required to be recorded and by default it is empty list. **e.g.,REJECT_HEADER_REGEX_LIST=token:token tgffd,content-length:\s\*:\s\*"100"**
-    - `SKIP_MOCK_OKHTTP`     for okhttp service to be mocked or not (default SKIP_MOCK_OKHTTP = false)
-    - `SKIP_MOCK_APACHE`     for apache service to be mocked or not (default SKIP_MOCK_APACHE = false)
-    - `SKIP_MOCK_GOOGLE_MAPS`  for google_maps service to be mocked or not (default SKIP_MOCK_GOOGLE_MAPS = false)
-    - `SKIP_MOCK_SQL`   	for sql service to be mocked or not (default SKIP_MOCK_SQL = false)
-    - `SKIP_MOCK_REDIS`          for redis service to be mocked or not (default SKIP_MOCK_REDIS = false)
-
-
-- **Generate testcases**
-    - To generate/capture TestCases set and run your application.
-        1. Set `KEPLOY_MODE = record` (default "off")
-        2. Run your application.
-        3. Make some API calls.
-
-- **Run the testcases**
-    - **Note:** Before running tests stop the sample application.
-
-        - Set `KEPLOY_MODE = test` (default "off")
-            - **Using IDE:**  _(for local use-case we prefer running tests via IDE)_
-                1. Run your application.
-                2. You can also run the application with coverage to see the test coverage.
-
-            - If you want to run keploy tests along with other unit testcases. You will be required to set the `javaagent` again in your test profile just like below.
-
-               ![run_configuration](./src/main/resources/Run_Configuration.png "Run_Configuration")
-             
-               1. Add below code in your testfile and run it with or without coverage.
-
-                  ```java
-                     @Test
-                     public void TestKeploy() throws InterruptedException {
-
-                         CountDownLatch countDownLatch = HaltThread.getInstance().getCountDownLatch();
-                         Mode.setTestMode();
-
-                         new Thread(() -> {
-                             <Your Application Class>.main(new String[]{""});
-                             countDownLatch.countDown();
-                         }).start();
-
-                         countDownLatch.await();
-                         assertTrue(AssertKTests.result(), "Keploy Test Result");
-                     }
-                  ```
-                
-              2. **Using command line**
-                 - Add maven-surefire-plugin to your *pom.xml*. In `<argLine> </argLine>` don't add jacoco agent if you don't want coverage report.
-
-                   ```xml 
-                     <plugin>
-                         <groupId>org.apache.maven.plugins</groupId>
-                         <artifactId>maven-surefire-plugin</artifactId>
-                         <version>2.22.2</version>
-                         <configuration>
-  
-                     <!-- <skipTests>true</skipTests> -->
-                         <argLine>
-                            -javaagent:<your full path to agent jar>.jar
-                            -javaagent:${settings.localRepository}/org/jacoco/org.jacoco.agent/0.8.7/org.jacoco.agent-0.8.7-runtime.jar=destfile=target/jacoco.exec-->
-                         </argLine>
-  
-                             <systemPropertyVariables>
-                                 <jacoco-agent.destfile>target/jacoco.exec
-                                 </jacoco-agent.destfile>
-                             </systemPropertyVariables>
-                         </configuration>
-                     </plugin>
-                   ```  
-                 - If you want coverage report also add Jacoco plugin to your *pom.xml*.
-                      ```xml
-                           <plugin>
-                              <groupId>org.jacoco</groupId>
-                              <artifactId>jacoco-maven-plugin</artifactId>
-                              <version>0.8.5</version>
-                              <executions>
-                                  <execution>
-                                      <id>prepare-agent</id>
-                                      <goals>
-                                          <goal>prepare-agent</goal>
-                                      </goals>
-                                  </execution>
-                                  <execution>
-                                      <id>report</id>
-                                      <phase>prepare-package</phase>
-                                      <goals>
-                                          <goal>report</goal>
-                                      </goals>
-                                  </execution>
-                                  <execution>
-                                      <id>post-unit-test</id>
-                                      <phase>test</phase>
-                                      <goals>
-                                          <goal>report</goal>
-                                      </goals>
-                                      <configuration>
-                                          <!-- Sets the path to the file which contains the execution data. -->
-
-                                          <dataFile>target/jacoco.exec</dataFile>
-                                          <!-- Sets the output directory for the code coverage report. -->
-                                          <outputDirectory>target/my-reports</outputDirectory>
-                                      </configuration>
-                                  </execution>
-                              </executions>
-                          </plugin>
-                      ```
-                 - Run your tests using command : `mvn test`.
-
-## Want stubs for unit test cases as well?
-- Java-sdk also supports mocking feature for unit testcase, where you write your own unit test cases and use keploy generated mocks as stubs.
-
-### Usage
-- Set `javaagent` in your unit test file configuration.
-- You just need to set the name of the mock as shown below.
-```java
-    @Test
-    public void testHttpCall() throws Exception {
-        new MockLib("okhttpCall"); //setting name of the mock 
-        ``` your unit test case code goes here ```
-    }
+```xml
+<dependency>
+  <groupId>io.keploy</groupId>
+  <artifactId>keploy-sdk</artifactId>
+  <version>2.0.0</version>
+</dependency>
 ```
-- You can also provide location where your mocks can be stored using `KEPLOY_MOCK_PATH`. (default **/src/test/e2e/mocks** directory of your application)
 
+### 2. Activate the Agent
 
-- **Generate mocks**
-   1. Record mocks by setting `KEPLOY_MODE=record` and run your test file.
-   2. You will be able to see _editable_ and _readable_ mocks at your provided location.
-- **Run your unit testcases**
-   1. Just set `KEPLOY_MODE=test`, run your test file and you are good to go. 
+For Spring Boot, import the middleware in your application:
 
-#### 🤩 See, you didn't even need to create a stub for your unit test cases, it's all generated using the java-sdk mock library. 
+```java
+import io.keploy.servlet.KeployMiddleware;
+import org.springframework.context.annotation.Import;
 
-## Community support
+@Import(KeployMiddleware.class)
+public class Application {
+}
+```
 
-We'd love to collaborate with you to make Keploy great. To get started:
+For servlet-based applications, register the filter early in `web.xml`:
 
-* [Slack](https://join.slack.com/t/keploy/shared_invite/zt-12rfbvc01-o54cOG0X1G6eVJTuI_orSA) - Discussions with the
-  community and the team.
-* [GitHub](https://github.com/keploy/java-sdk/issues) - For bug reports and feature requests.
+```xml
+<filter>
+  <filter-name>middleware</filter-name>
+  <filter-class>io.keploy.servlet.KeployMiddleware</filter-class>
+</filter>
+<filter-mapping>
+  <filter-name>middleware</filter-name>
+  <url-pattern>/*</url-pattern>
+</filter-mapping>
+```
+
+The middleware starts the Java dedup control server automatically.
+
+For Jakarta Servlet stacks, non-servlet frameworks, or any application where the `javax.servlet` filter is not available, start the agent directly during application startup:
+
+```java
+import io.keploy.dedup.KeployDedupAgent;
+
+KeployDedupAgent.start();
+```
+
+### 3. Run the App with the JaCoCo Java Agent
+
+The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so attaching the JaCoCo Java agent is the only runtime requirement in the common cases below:
+
+- Maven/Gradle dev runs where application classes are under `target/classes` or `build/classes/java/main`
+- packaged `java -jar` runs where the application classes live inside the executable jar
+
+```bash
+java -javaagent:/path/to/jacocoagent.jar -jar your-app.jar
+```
+
+If the in-process API is unavailable (for example because the JaCoCo agent is loaded into an isolated classloader), the SDK transparently falls back to JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in `tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
+
+```bash
+java -javaagent:/path/to/jacocoagent.jar=address=127.0.0.1,port=36320,output=tcpserver \
+  -jar your-app.jar
+```
+
+### 4. Replay with Keploy Enterprise
+
+Run replay with dynamic dedup enabled:
+
+```bash
+keploy test -c "java -javaagent:/path/to/jacocoagent.jar -jar your-app.jar" \
+  --dedup \
+  --language java
+```
+
+When using the TCP fallback, also pass `--pass-through-ports <jacoco-port>` so Keploy does not try to mock the JaCoCo control connection.
+
+After replay, run:
+
+```bash
+keploy dedup
+```
+
+To remove duplicates:
+
+```bash
+keploy dedup --rm
+```
+
+## Docker and Restricted Docker
+
+Java dedup works in native, Docker, and restricted Docker environments as long as `/tmp` is shared and writable between Keploy Enterprise and the Java process. In Docker Compose flows, Enterprise can inject that shared `/tmp` mount when it rewrites the Compose file for replay.
+
+Keploy Enterprise and the Java SDK communicate over these Unix sockets:
+
+- `/tmp/coverage_control.sock`
+- `/tmp/coverage_data.sock`
+
+Without a shared `/tmp`, dedup will not work inside containers because Enterprise and the Java process will be writing to different socket paths.
+
+## Configuration
+
+- `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
+- `KEPLOY_JACOCO_PORT`: JaCoCo TCP port used when the in-process runtime API is unavailable. Default: `36320`
+- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class or jar locations to analyze for executed lines when your build output lives outside the standard locations
+- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath if standard class roots and the executable jar do not provide application classes. Default: `false`
+- `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
+
+## Sample
+
+For a working reference, see the Java dedup sample in `keploy/samples-java`:
+
+- `samples-java/java-dedup`
+
+That sample is used in CI to validate Java dynamic dedup for JDK 8, 17, and 21 across native, Docker, and restricted Docker runs.
