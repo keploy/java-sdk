@@ -23,7 +23,7 @@ steps:
       CENTRAL_USERNAME:
         from_secret: central_username
       CENTRAL_PASSWORD:
-        from_secret: central_password
+        from_secret: "central password"
     commands:
       - apt-get update -qq && apt-get install -y -qq gnupg
       - |
