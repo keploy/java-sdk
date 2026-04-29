@@ -18,13 +18,16 @@ steps:
     image: maven:3.9-eclipse-temurin-8
     commands:
       - mvn -B -DskipTests clean verify
+      - ./scripts/smoke-javaagent.sh
 
   build-jdk-17:
     image: maven:3.9-eclipse-temurin-17
     commands:
       - mvn -B -DskipTests clean verify
+      - ./scripts/smoke-javaagent.sh
 
   build-jdk-21:
     image: maven:3.9-eclipse-temurin-21
     commands:
       - mvn -B -DskipTests clean verify
+      - ./scripts/smoke-javaagent.sh
