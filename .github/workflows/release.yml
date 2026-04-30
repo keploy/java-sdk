@@ -1,0 +1,97 @@
+name: Release
+
+# Triggers on a v*.*.* tag push and creates a GitHub Release with the
+# Keploy Java agent jar attached as a downloadable asset. Maven Central
+# publishing happens in parallel via the Woodpecker pipeline at
+# .woodpecker/release.yml — this workflow does not touch Central.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Set release version in poms
+        run: >-
+          mvn -B -ntp versions:set
+          -DnewVersion=${{ steps.ver.outputs.version }}
+          -DprocessAllModules=true
+          -DgenerateBackupPoms=false
+
+      - name: Build agent jar with sources and javadoc
+        # `release` profile attaches the source jar; the inner pom always
+        # attaches the javadoc jar. -Dgpg.skip=true keeps the signing step
+        # in the release profile inert (signing happens on Woodpecker
+        # where the GPG key is wired up).
+        run: mvn -B -ntp -P release -DskipTests -Dgpg.skip=true clean verify
+
+      - name: Smoke test java agent
+        run: ./scripts/smoke-javaagent.sh
+
+      - name: Stage release assets
+        run: |
+          set -euxo pipefail
+          version="${{ steps.ver.outputs.version }}"
+          mkdir -p release-assets
+          cp "keploy-sdk/target/keploy-sdk-${version}.jar" "release-assets/keploy-sdk-${version}.jar"
+          cp "keploy-sdk/target/keploy-sdk-${version}.jar" "release-assets/keploy-sdk.jar"
+          if [[ -f "keploy-sdk/target/keploy-sdk-${version}-sources.jar" ]]; then
+            cp "keploy-sdk/target/keploy-sdk-${version}-sources.jar" "release-assets/"
+          fi
+          if [[ -f "keploy-sdk/target/keploy-sdk-${version}-javadoc.jar" ]]; then
+            cp "keploy-sdk/target/keploy-sdk-${version}-javadoc.jar" "release-assets/"
+          fi
+          cp "keploy-sdk/pom.xml" "release-assets/keploy-sdk-${version}.pom"
+          ls -la release-assets/
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euxo pipefail
+          # Pre-release flag: anything with a hyphen suffix (e.g. v2.0.6-rc1)
+          prerelease_flag=()
+          if [[ "$TAG" == *-* ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+          # Idempotent publish: if a previous run already created the
+          # release record, --clobber overwrites partial assets so a
+          # rerun ends in the same state either way.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — uploading assets with --clobber"
+            gh release upload "$TAG" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              release-assets/*
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Java SDK $TAG" \
+              --target "${{ github.sha }}" \
+              --generate-notes \
+              "${prerelease_flag[@]}" \
+              release-assets/*
+          fi
