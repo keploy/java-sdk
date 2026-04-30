@@ -44,7 +44,7 @@ Download the `keploy-sdk` jar and keep it outside your application dependencies.
           <artifactItem>
             <groupId>io.keploy</groupId>
             <artifactId>keploy-sdk</artifactId>
-            <version>2.0.1</version>
+            <version>2.0.0</version>
             <outputDirectory>${project.build.directory}</outputDirectory>
             <destFileName>keploy-sdk.jar</destFileName>
           </artifactItem>
