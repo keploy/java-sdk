@@ -52,11 +52,43 @@ steps:
       - VERSION="$(printf '%s' "$CI_COMMIT_TAG" | sed 's/^v//')"
       - echo "Releasing version $VERSION"
       - mvn -B versions:set -DnewVersion="$VERSION" -DprocessAllModules=true -DgenerateBackupPoms=false
-      - mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID" -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE" -Dgpg.useagent=false
       - |
+        release_log="$(mktemp)"
+        mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID" -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE" -Dgpg.useagent=false | tee "$release_log"
+
+        deployment_id="$(sed -n 's/.*deploymentId: \([0-9a-fA-F-]\{36\}\).*/\1/p' "$release_log" | tail -n 1)"
+        rm -f "$release_log"
+        if [ -z "$deployment_id" ]; then
+          echo "Could not find Sonatype Central deployment id in Maven output"
+          exit 1
+        fi
+
+        token="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\n')"
+        status_url="https://central.sonatype.com/api/v1/publisher/status?id=${deployment_id}"
+        publish_url="https://central.sonatype.com/api/v1/publisher/deployment/${deployment_id}"
         artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
-        echo "Waiting for $artifact_url"
+        echo "Publishing Sonatype Central deployment $deployment_id"
+
         for attempt in $(seq 1 60); do
+          status="$(curl -fsS -X POST -H "Authorization: Bearer $token" "$status_url" || true)"
+          state="$(printf '%s' "$status" | sed -n 's/.*"deploymentState"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+
+          case "$state" in
+            VALIDATED)
+              curl -fsS -X POST -H "Authorization: Bearer $token" "$publish_url" >/dev/null
+              ;;
+            PENDING|VALIDATING|PUBLISHING|PUBLISHED)
+              ;;
+            FAILED)
+              echo "$status"
+              exit 1
+              ;;
+            *)
+              echo "Unexpected Sonatype Central deployment state: ${state:-unknown}"
+              echo "$status"
+              ;;
+          esac
+
           if curl -fsI "$artifact_url" >/dev/null; then
             echo "Released artifact is available on Maven Central"
             exit 0
