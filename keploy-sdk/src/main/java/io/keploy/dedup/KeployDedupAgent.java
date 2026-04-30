@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.instrument.Instrumentation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
@@ -39,6 +40,7 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -65,9 +67,30 @@ public final class KeployDedupAgent {
     private static final int SOCKET_BACKLOG = 50;
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+    private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
     private static volatile CommandServer commandServer;
 
     private KeployDedupAgent() {
+    }
+
+    /**
+     * JVM entrypoint used when the SDK is attached with {@code -javaagent}.
+     *
+     * @param agentArgs optional Java agent arguments
+     * @param instrumentation JVM instrumentation handle
+     */
+    public static void premain(String agentArgs, Instrumentation instrumentation) {
+        start();
+    }
+
+    /**
+     * JVM entrypoint used when the SDK is attached to an already running JVM.
+     *
+     * @param agentArgs optional Java agent arguments
+     * @param instrumentation JVM instrumentation handle
+     */
+    public static void agentmain(String agentArgs, Instrumentation instrumentation) {
+        start();
     }
 
     /**
@@ -91,6 +114,7 @@ public final class KeployDedupAgent {
         thread.setDaemon(true);
         commandServer = server;
         thread.start();
+        registerShutdownHook();
         return true;
     }
 
@@ -118,6 +142,22 @@ public final class KeployDedupAgent {
     private static boolean isDisabled() {
         return isTruthy(System.getenv("KEPLOY_JAVA_DEDUP_DISABLED"))
                 || isTruthy(System.getProperty("keploy.java.dedup.disabled"));
+    }
+
+    private static void registerShutdownHook() {
+        if (!SHUTDOWN_HOOK_REGISTERED.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    KeployDedupAgent.stop();
+                }
+            }, "keploy-java-dedup-shutdown"));
+        } catch (IllegalStateException ignored) {
+            // The VM is already shutting down; the process exit will reclaim resources.
+        }
     }
 
     private static boolean diagnosticsEnabled() {
@@ -802,13 +842,13 @@ public final class KeployDedupAgent {
 
         private boolean isClasspathFallbackEnabled() {
             return isTruthy(envOrProperty("KEPLOY_JAVA_CLASSPATH_FALLBACK",
-                    "keploy.java.classpath.fallback", "false"));
+                    "keploy.java.classpath.fallback", "true"));
         }
 
         private List<File> executableArchiveRoots() {
             LinkedHashSet<File> roots = new LinkedHashSet<>();
 
-            addJarRoot(roots, firstCommandToken(System.getProperty("sun.java.command", "")));
+            addArchiveRoot(roots, firstCommandToken(System.getProperty("sun.java.command", "")));
 
             String classpath = System.getProperty("java.class.path", "");
             if (classpath.trim().isEmpty()) {
@@ -817,12 +857,12 @@ public final class KeployDedupAgent {
 
             String[] parts = classpath.split(Pattern.quote(File.pathSeparator));
             if (parts.length == 1) {
-                addJarRoot(roots, parts[0]);
+                addArchiveRoot(roots, parts[0]);
             }
             return new ArrayList<>(roots);
         }
 
-        private void addJarRoot(Set<File> roots, String rawPath) {
+        private void addArchiveRoot(Set<File> roots, String rawPath) {
             if (rawPath == null) {
                 return;
             }
@@ -836,9 +876,17 @@ public final class KeployDedupAgent {
             if (!file.isAbsolute()) {
                 file = new File(System.getProperty("user.dir"), path);
             }
-            if (file.isFile() && file.getName().endsWith(".jar")) {
+            if (file.isFile() && isArchive(file)) {
                 roots.add(file);
             }
+        }
+
+        private boolean isArchive(File file) {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            return name.endsWith(".jar")
+                    || name.endsWith(".war")
+                    || name.endsWith(".ear")
+                    || name.endsWith(".zip");
         }
 
         private String firstCommandToken(String command) {
@@ -879,7 +927,7 @@ public final class KeployDedupAgent {
                 for (String part : parts) {
                     if (!part.trim().isEmpty()) {
                         File file = new File(part.trim());
-                        if (file.isDirectory() || file.getName().endsWith(".jar")) {
+                        if (file.isDirectory() || isArchive(file)) {
                             roots.add(file);
                         }
                     }
@@ -895,7 +943,7 @@ public final class KeployDedupAgent {
                 }
                 if (root.isDirectory()) {
                     scanDirectory(root, output);
-                } else if (root.isFile() && root.getName().endsWith(".jar")) {
+                } else if (root.isFile() && isArchive(root)) {
                     scanJar(root, output);
                 }
             }
@@ -972,6 +1020,12 @@ public final class KeployDedupAgent {
         private boolean shouldSkipClass(String name) {
             return name.endsWith("module-info.class")
                     || name.endsWith("package-info.class")
+                    || name.startsWith("io/keploy/dedup/")
+                    || name.startsWith("io/keploy/servlet/")
+                    || name.startsWith("org/jacoco/")
+                    || name.startsWith("org/objectweb/asm/")
+                    || name.startsWith("org/newsclub/net/unix/")
+                    || name.startsWith("com/google/gson/")
                     || name.contains("$Mockito")
                     || name.contains("Test.class");
         }
