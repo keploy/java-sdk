@@ -54,7 +54,13 @@ steps:
       - mvn -B versions:set -DnewVersion="$VERSION" -DprocessAllModules=true -DgenerateBackupPoms=false
       - mvn -B -P release clean deploy -DskipTests -Dgpg.keyname="$GPG_KEY_ID" -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE" -Dgpg.useagent=false
       - |
-        artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
+        # Use $VERSION without braces — Woodpecker's YAML-level templater
+        # rewrites ${VAR} at config-load time and replaces unknown names
+        # with the empty string, but $VAR (no braces) passes through to
+        # the shell intact. Using ${VERSION} here previously produced
+        # https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk//keploy-sdk-.jar
+        # which 404s forever and failed the wait step on every release.
+        artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/$VERSION/keploy-sdk-$VERSION.jar"
         echo "Waiting for $artifact_url"
         for attempt in $(seq 1 60); do
           if curl -fsI "$artifact_url" >/dev/null; then
