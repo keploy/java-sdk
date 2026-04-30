@@ -6,7 +6,7 @@
 
     <groupId>io.keploy</groupId>
     <artifactId>java-sdk</artifactId>
-    <version>2.0.4</version>
+    <version>2.0.5</version>
     <packaging>pom</packaging>
 
     <name>Keploy Java Coverage Agent</name>
@@ -109,6 +109,7 @@
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
                             <waitUntil>published</waitUntil>
+                            <waitMaxTime>7200</waitMaxTime>
                         </configuration>
                     </plugin>
                 </plugins>
