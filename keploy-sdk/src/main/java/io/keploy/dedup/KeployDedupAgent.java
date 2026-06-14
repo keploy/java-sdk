@@ -68,7 +68,9 @@ public final class KeployDedupAgent {
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
-    private static volatile CommandServer commandServer;
+    // The active transport worker: a CommandServer (unix, local/docker) or a
+    // CoverageTcpClient (TCP, k8s). Both are Closeable so stop() is transport-agnostic.
+    private static volatile Closeable coverageWorker;
 
     private KeployDedupAgent() {
     }
@@ -109,10 +111,43 @@ public final class KeployDedupAgent {
         CoverageCollector collector = new CoverageCollector(
                 new JacocoClient(resolveHost(), resolvePort()),
                 new CoverageIndex());
-        CommandServer server = new CommandServer(collector, new CoveragePublisher(new File(DATA_SOCKET_PATH)));
-        Thread thread = new Thread(server, "keploy-java-dedup-control");
+
+        Runnable worker;
+        String threadName;
+        String endpoint = resolveEndpoint();
+        if (endpoint != null) {
+            // k8s: the collector lives in a different pod, so there is no shared
+            // /tmp. Dial the collector's TCP endpoint and run the same protocol.
+            int idx = endpoint.lastIndexOf(':');
+            if (idx <= 0 || idx == endpoint.length() - 1) {
+                STARTED.set(false);
+                log(Level.SEVERE, "Invalid KEPLOY_COVERAGE_ENDPOINT '" + endpoint + "', expected host:port", null);
+                return false;
+            }
+            String host = endpoint.substring(0, idx);
+            int port;
+            try {
+                port = Integer.parseInt(endpoint.substring(idx + 1).trim());
+            } catch (NumberFormatException e) {
+                STARTED.set(false);
+                log(Level.SEVERE, "Invalid port in KEPLOY_COVERAGE_ENDPOINT '" + endpoint + "'", e);
+                return false;
+            }
+            CoverageTcpClient client = new CoverageTcpClient(collector, host, port);
+            worker = client;
+            coverageWorker = client;
+            threadName = "keploy-java-dedup-tcp";
+        } else {
+            // local/docker: SDK owns the unix control socket and pushes coverage
+            // back over the unix data socket on a pod-shared /tmp.
+            CommandServer server = new CommandServer(collector, new CoveragePublisher(new File(DATA_SOCKET_PATH)));
+            worker = server;
+            coverageWorker = server;
+            threadName = "keploy-java-dedup-control";
+        }
+
+        Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
-        commandServer = server;
         thread.start();
         registerShutdownHook();
         return true;
@@ -131,11 +166,15 @@ public final class KeployDedupAgent {
      * Stops the background control socket listener.
      */
     public static void stop() {
-        CommandServer server = commandServer;
-        if (server != null) {
-            server.close();
+        Closeable worker = coverageWorker;
+        if (worker != null) {
+            try {
+                worker.close();
+            } catch (IOException e) {
+                log(Level.FINE, "Failed to close Java dedup coverage worker", e);
+            }
         }
-        commandServer = null;
+        coverageWorker = null;
         STARTED.set(false);
     }
 
@@ -188,6 +227,16 @@ public final class KeployDedupAgent {
             log(Level.SEVERE, "Invalid JaCoCo port '" + configured + "', using " + DEFAULT_JACOCO_PORT, e);
             return DEFAULT_JACOCO_PORT;
         }
+    }
+
+    /**
+     * Returns the collector's TCP endpoint ("host:port") for k8s mode, or {@code null}
+     * to use the unix-socket transport (local/docker). The collector advertises this
+     * to the SDK via KEPLOY_COVERAGE_ENDPOINT when app and collector are in different pods.
+     */
+    private static String resolveEndpoint() {
+        String value = envOrProperty("KEPLOY_COVERAGE_ENDPOINT", "keploy.coverage.endpoint", "");
+        return value.trim().isEmpty() ? null : value.trim();
     }
 
     private static String envOrProperty(String envKey, String propertyKey, String defaultValue) {
@@ -356,6 +405,143 @@ public final class KeployDedupAgent {
                     localServer.close();
                 } catch (IOException e) {
                     log(Level.FINE, "Failed to close Java dedup control socket", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * TCP transport (k8s): the SDK dials the collector and keeps one bidirectional
+     * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
+     * but inverts the roles — here the SDK is the client. Wire protocol:
+     * <pre>
+     *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
+     *   SDK -&gt; collector : "ACK"                        (after START reset)
+     *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
+     * </pre>
+     * The collector starts listening only when replay begins, so the connect loop
+     * retries until it is reachable.
+     */
+    private static final class CoverageTcpClient implements Runnable, Closeable {
+
+        private static final long RECONNECT_DELAY_MILLIS = 1000;
+
+        private final CoverageCollector collector;
+        private final String host;
+        private final int port;
+        private final AtomicBoolean running = new AtomicBoolean(true);
+        private final Object testCaseLock = new Object();
+        private volatile Socket socket;
+        private String activeTestId = "";
+
+        CoverageTcpClient(CoverageCollector collector, String host, int port) {
+            this.collector = collector;
+            this.host = host;
+            this.port = port;
+        }
+
+        @Override
+        public void run() {
+            while (running.get()) {
+                try {
+                    connectAndServe();
+                } catch (IOException e) {
+                    if (running.get()) {
+                        log(Level.FINE, "Java dedup TCP connection to " + host + ":" + port
+                                + " unavailable, retrying", e);
+                    }
+                }
+                if (running.get()) {
+                    try {
+                        Thread.sleep(RECONNECT_DELAY_MILLIS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void connectAndServe() throws IOException {
+            Socket open = new Socket();
+            // Bounded connect, but NO read timeout: the connection is long-lived and
+            // idles between tests waiting for the next START/END command.
+            open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
+            socket = open;
+            try (Socket active = open;
+                 BufferedReader reader = new BufferedReader(
+                         new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
+                OutputStream out = active.getOutputStream();
+                String line;
+                while (running.get() && (line = reader.readLine()) != null) {
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty()) {
+                        continue;
+                    }
+                    CoverageCommand command = CoverageCommand.parse(trimmed);
+                    if (command == null) {
+                        continue;
+                    }
+                    dispatch(command, out);
+                }
+            } finally {
+                socket = null;
+            }
+        }
+
+        private void dispatch(CoverageCommand command, OutputStream out) throws IOException {
+            synchronized (testCaseLock) {
+                if (command.action == CommandAction.START) {
+                    activeTestId = command.testId;
+                    collector.reset();
+                    writeLine(out, "ACK");
+                    return;
+                }
+
+                if (command.action == CommandAction.END) {
+                    if (!command.testId.equals(activeTestId)) {
+                        log(Level.SEVERE,
+                                "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
+                                        + command.testId,
+                                null);
+                        writeLine(out, "ACK");
+                        return;
+                    }
+
+                    try {
+                        Map<String, List<Integer>> executedLinesByFile = collector.capture();
+                        if (executedLinesByFile.isEmpty()) {
+                            log(Level.FINE, "No Java coverage lines collected for " + command.testId, null);
+                        } else {
+                            // COV must precede ACK: the collector reads lines sequentially,
+                            // so the payload is recorded before the ACK releases the caller.
+                            writeLine(out, "COV " + GSON.toJson(
+                                    new DedupPayload(command.testId, executedLinesByFile)));
+                        }
+                    } catch (Exception e) {
+                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                    } finally {
+                        activeTestId = "";
+                        writeLine(out, "ACK");
+                    }
+                }
+            }
+        }
+
+        private void writeLine(OutputStream out, String message) throws IOException {
+            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
+
+        @Override
+        public void close() {
+            running.set(false);
+            Socket open = socket;
+            if (open != null) {
+                try {
+                    open.close();
+                } catch (IOException e) {
+                    log(Level.FINE, "Failed to close Java dedup TCP socket", e);
                 }
             }
         }
