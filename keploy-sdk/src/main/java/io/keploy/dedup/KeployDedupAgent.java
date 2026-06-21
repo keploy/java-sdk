@@ -137,6 +137,7 @@ public final class KeployDedupAgent {
             worker = client;
             coverageWorker = client;
             threadName = "keploy-java-dedup-tcp";
+            log(Level.INFO, "Keploy dedup: TCP transport enabled, will dial collector at " + host + ":" + port, null);
         } else {
             // local/docker: SDK owns the unix control socket and pushes coverage
             // back over the unix data socket on a pod-shared /tmp.
@@ -355,6 +356,9 @@ public final class KeployDedupAgent {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
+                    // Warm up app classes once before the first measured window so
+                    // one-time <clinit> lines aren't charged to the first test.
+                    collector.warmup();
                     collector.reset();
                     writeAck(outputStream);
                     return;
@@ -447,8 +451,8 @@ public final class KeployDedupAgent {
                     connectAndServe();
                 } catch (IOException e) {
                     if (running.get()) {
-                        log(Level.FINE, "Java dedup TCP connection to " + host + ":" + port
-                                + " unavailable, retrying", e);
+                        log(Level.INFO, "Keploy dedup: TCP connect to " + host + ":" + port
+                                + " failed (" + e.getClass().getSimpleName() + ": " + e.getMessage() + "), retrying", null);
                     }
                 }
                 if (running.get()) {
@@ -468,6 +472,7 @@ public final class KeployDedupAgent {
             // idles between tests waiting for the next START/END command.
             open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
             socket = open;
+            log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
@@ -493,6 +498,9 @@ public final class KeployDedupAgent {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
+                    // Warm up app classes once before the first measured window so
+                    // one-time <clinit> lines aren't charged to the first test.
+                    collector.warmup();
                     collector.reset();
                     writeLine(out, "ACK");
                     return;
@@ -585,6 +593,7 @@ public final class KeployDedupAgent {
 
         private final JacocoClient jacocoClient;
         private final CoverageIndex coverageIndex;
+        private final AtomicBoolean warmed = new AtomicBoolean(false);
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
             this.jacocoClient = jacocoClient;
@@ -597,6 +606,73 @@ public final class KeployDedupAgent {
             } catch (IOException e) {
                 log(Level.FINE, "Failed to reset JaCoCo counters", e);
             }
+        }
+
+        /**
+         * Eagerly initialize every indexed application class so their static
+         * initializers (&lt;clinit&gt;) run ONCE here, before the first test's
+         * coverage window. The very first request to a fresh JVM otherwise pays
+         * the one-time class-init cost, and JaCoCo charges those &lt;clinit&gt;
+         * lines to whichever test ran first — making the duplicate set
+         * non-deterministic run-to-run. Running them now (then letting the START
+         * reset clear the counters) means every test sees only the lines its own
+         * request executes. Called once, on the first START, when the app is
+         * fully started. Best-effort: per-class failures are ignored (the class
+         * just falls back to lazy init). Disable with
+         * KEPLOY_JAVA_DEDUP_WARMUP_DISABLED=true if a static initializer has
+         * harmful side effects.
+         */
+        private void warmup() {
+            if (isWarmupDisabled() || !warmed.compareAndSet(false, true)) {
+                return;
+            }
+            ClassLoader[] loaders = warmupLoaders();
+            int initialized = 0;
+            int failed = 0;
+            for (ClassEntry entry : coverageIndex.entries()) {
+                if (initializeClass(entry.className.replace('/', '.'), loaders)) {
+                    initialized++;
+                } else {
+                    failed++;
+                }
+            }
+            log(Level.INFO, "Keploy dedup: warmed up application classes (initialized="
+                    + initialized + ", skipped=" + failed + ")", null);
+        }
+
+        private boolean isWarmupDisabled() {
+            return isTruthy(envOrProperty("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED",
+                    "keploy.java.dedup.warmup.disabled", ""));
+        }
+
+        private ClassLoader[] warmupLoaders() {
+            List<ClassLoader> loaders = new ArrayList<>(3);
+            ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+            if (ctx != null) {
+                loaders.add(ctx);
+            }
+            ClassLoader sys = ClassLoader.getSystemClassLoader();
+            if (sys != null && !loaders.contains(sys)) {
+                loaders.add(sys);
+            }
+            ClassLoader own = KeployDedupAgent.class.getClassLoader();
+            if (own != null && !loaders.contains(own)) {
+                loaders.add(own);
+            }
+            return loaders.toArray(new ClassLoader[0]);
+        }
+
+        private boolean initializeClass(String binaryName, ClassLoader[] loaders) {
+            for (ClassLoader loader : loaders) {
+                try {
+                    Class.forName(binaryName, true, loader);
+                    return true;
+                } catch (Throwable ignored) {
+                    // Try the next loader; a class that no loader can initialize
+                    // (or whose <clinit> throws) is simply left to lazy init.
+                }
+            }
+            return false;
         }
 
         private Map<String, List<Integer>> capture() throws IOException {
