@@ -48,7 +48,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Collects per-testcase JaCoCo coverage and streams executed lines back to Keploy Enterprise.
+ * Collects per-testcase JaCoCo coverage and streams the executed probe set per
+ * class ({className -&gt; [probeIdx]}) back to Keploy Enterprise.
  */
 public final class KeployDedupAgent {
 
@@ -433,6 +434,9 @@ public final class KeployDedupAgent {
         private final Object testCaseLock = new Object();
         private volatile Socket socket;
         private String activeTestId = "";
+        // Connect retries spin ~1/s until the collector is reachable; log the first
+        // failure at INFO and the rest at FINE so we don't spam k8s app logs.
+        private boolean connectFailureLogged = false;
 
         CoverageTcpClient(CoverageCollector collector, String host, int port) {
             this.collector = collector;
@@ -447,7 +451,9 @@ public final class KeployDedupAgent {
                     connectAndServe();
                 } catch (IOException e) {
                     if (running.get()) {
-                        log(Level.INFO, "Keploy dedup: TCP connect to " + host + ":" + port
+                        Level level = connectFailureLogged ? Level.FINE : Level.INFO;
+                        connectFailureLogged = true;
+                        log(level, "Keploy dedup: TCP connect to " + host + ":" + port
                                 + " failed (" + e.getClass().getSimpleName() + ": " + e.getMessage() + "), retrying", null);
                     }
                 }
@@ -468,6 +474,7 @@ public final class KeployDedupAgent {
             // idles between tests waiting for the next START/END command.
             open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
             socket = open;
+            connectFailureLogged = false;
             log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
@@ -513,15 +520,16 @@ public final class KeployDedupAgent {
                     }
 
                     try {
-                        Map<String, List<Integer>> executedLinesByFile = collector.capture();
-                        if (executedLinesByFile.isEmpty()) {
-                            log(Level.FINE, "No Java coverage lines collected for " + command.testId, null);
-                        } else {
-                            // COV must precede ACK: the collector reads lines sequentially,
-                            // so the payload is recorded before the ACK releases the caller.
-                            writeLine(out, "COV " + GSON.toJson(
-                                    new DedupPayload(command.testId, executedLinesByFile)));
+                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
+                        if (executedProbesByClass.isEmpty()) {
+                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                         }
+                        // Always emit COV before ACK — even when empty — so the
+                        // line-oriented collector reads exactly one COV per END (the
+                        // unix transport likewise always publishes). The payload is
+                        // recorded before the ACK releases the caller.
+                        writeLine(out, "COV " + GSON.toJson(
+                                new DedupPayload(command.testId, executedProbesByClass)));
                     } catch (Exception e) {
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                     } finally {
