@@ -1,10 +1,6 @@
 package io.keploy.dedup;
 
 import com.google.gson.Gson;
-import org.jacoco.core.analysis.Analyzer;
-import org.jacoco.core.analysis.CoverageBuilder;
-import org.jacoco.core.analysis.IClassCoverage;
-import org.jacoco.core.analysis.ICounter;
 import org.jacoco.core.data.ExecutionData;
 import org.jacoco.core.data.ExecutionDataStore;
 import org.jacoco.core.data.ExecutionDataWriter;
@@ -687,73 +683,59 @@ public final class KeployDedupAgent {
             ExecFileLoader loader = new ExecFileLoader();
             loader.load(new ByteArrayInputStream(dump));
             ExecutionDataStore executionDataStore = loader.getExecutionDataStore();
-            Set<String> hitClasses = hitClassNames(executionDataStore);
-            if (hitClasses.isEmpty()) {
+
+            // BRANCH coverage: fingerprint by the set of executed JaCoCo PROBES per
+            // class, NOT just executed lines. Each branch is instrumented as a
+            // distinct probe, so the executed-probe set distinguishes WHICH branch a
+            // test took (true vs false) — line status, and even branch counts, report
+            // identically for the true-path and false-path test. The probe set also
+            // subsumes line coverage (lines map to probes). Probe indices are stable
+            // for a given class bytecode, so the set is comparable across the run.
+            // Keyed by VM class name (canonical "com/foo/Bar"; no file-path
+            // normalization needed). CoverageIndex is used only to restrict to the
+            // app's own classes so JDK/library probes don't pollute the fingerprint.
+            Set<String> appClasses = indexedClassNames();
+            if (appClasses.isEmpty()) {
                 if (diagnosticsEnabled()) {
-                    diagnostic("execution data had no hit classes");
+                    diagnostic("coverage index has no app classes");
                 }
                 return Collections.emptyMap();
             }
 
-            List<ClassEntry> indexedEntries = coverageIndex.entries();
-            if (diagnosticsEnabled()) {
-                diagnostic("hitClasses=" + hitClasses.size()
-                                + ", indexedEntries=" + indexedEntries.size()
-                                + ", sampleHits=" + summarizeStrings(hitClasses, 5)
-                                + ", sampleEntries=" + summarizeClassEntries(indexedEntries, 5));
-            }
-
-            CoverageBuilder coverageBuilder = new CoverageBuilder();
-            Analyzer analyzer = new Analyzer(executionDataStore, coverageBuilder);
-            for (ClassEntry classEntry : indexedEntries) {
-                if (!hitClasses.contains(classEntry.className)) {
-                    continue;
-                }
-                try {
-                    analyzer.analyzeClass(classEntry.bytes, classEntry.location);
-                } catch (IOException | RuntimeException e) {
-                    log(Level.FINE, "Skipping unreadable Java class " + classEntry.location, e);
-                }
-            }
-
-            if (diagnosticsEnabled()) {
-                diagnostic("analyzedClasses=" + coverageBuilder.getClasses().size());
-            }
-
             Map<String, Set<Integer>> raw = new LinkedHashMap<>();
-            for (IClassCoverage classCoverage : coverageBuilder.getClasses()) {
-                if (!classCoverage.containsCode()) {
+            for (ExecutionData executionData : executionDataStore.getContents()) {
+                if (!executionData.hasHits()) {
                     continue;
                 }
-
-                List<Integer> executedLines = executedLines(classCoverage);
-                if (executedLines.isEmpty()) {
+                if (!appClasses.contains(executionData.getName())) {
                     continue;
                 }
-
-                String sourcePath = resolveSourcePath(classCoverage);
-                Set<Integer> merged = raw.get(sourcePath);
-                if (merged == null) {
-                    merged = new LinkedHashSet<>();
-                    raw.put(sourcePath, merged);
+                boolean[] probes = executionData.getProbes();
+                Set<Integer> fired = new LinkedHashSet<>();
+                for (int i = 0; i < probes.length; i++) {
+                    if (probes[i]) {
+                        fired.add(i);
+                    }
                 }
-                merged.addAll(executedLines);
+                if (!fired.isEmpty()) {
+                    raw.put(executionData.getName(), fired);
+                }
             }
 
             if (diagnosticsEnabled()) {
-                diagnostic("filesWithCoverage=" + raw.size()
-                        + ", sampleFiles=" + summarizeStrings(raw.keySet(), 5));
+                diagnostic("classesWithProbes=" + raw.size()
+                        + ", sampleClasses=" + summarizeStrings(raw.keySet(), 5));
             }
 
             return toSortedMap(raw);
         }
 
-        private Set<String> hitClassNames(ExecutionDataStore executionDataStore) {
+        // indexedClassNames returns the VM names of the app's own classes (from the
+        // CoverageIndex) so probe collection can skip JDK/library classes.
+        private Set<String> indexedClassNames() {
             Set<String> names = new LinkedHashSet<>();
-            for (ExecutionData executionData : executionDataStore.getContents()) {
-                if (executionData.hasHits()) {
-                    names.add(executionData.getName());
-                }
+            for (ClassEntry entry : coverageIndex.entries()) {
+                names.add(entry.className);
             }
             return names;
         }
@@ -767,51 +749,6 @@ public final class KeployDedupAgent {
                 }
             }
             return sample.toString();
-        }
-
-        private String summarizeClassEntries(List<ClassEntry> values, int limit) {
-            List<String> sample = new ArrayList<>();
-            for (ClassEntry value : values) {
-                sample.add(value.className);
-                if (sample.size() >= limit) {
-                    break;
-                }
-            }
-            return sample.toString();
-        }
-
-        private List<Integer> executedLines(IClassCoverage classCoverage) {
-            int firstLine = classCoverage.getFirstLine();
-            int lastLine = classCoverage.getLastLine();
-            if (firstLine < 0 || lastLine < firstLine) {
-                return Collections.emptyList();
-            }
-
-            List<Integer> lines = new ArrayList<>();
-            for (int line = firstLine; line <= lastLine; line++) {
-                int status = classCoverage.getLine(line).getStatus();
-                if (status != ICounter.EMPTY && status != ICounter.NOT_COVERED) {
-                    lines.add(line);
-                }
-            }
-            return lines;
-        }
-
-        private String resolveSourcePath(IClassCoverage classCoverage) {
-            String sourceFile = classCoverage.getSourceFileName();
-            if (sourceFile == null || sourceFile.trim().isEmpty()) {
-                return normalizePath(classCoverage.getName() + ".java");
-            }
-
-            String packageName = classCoverage.getPackageName();
-            String relativePath = packageName == null || packageName.isEmpty()
-                    ? sourceFile
-                    : packageName + "/" + sourceFile;
-            File localSource = new File(System.getProperty("user.dir"), "src/main/java/" + relativePath);
-            if (localSource.exists()) {
-                return normalizePath(localSource.getAbsolutePath());
-            }
-            return normalizePath(relativePath);
         }
 
         private Map<String, List<Integer>> toSortedMap(Map<String, Set<Integer>> raw) {
