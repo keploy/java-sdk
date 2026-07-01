@@ -273,6 +273,7 @@ public final class KeployDedupAgent {
         try {
             URL u = new URL(baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag));
             HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+            relaxTlsIfHttps(conn);
             conn.setRequestMethod("HEAD");
             conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
             conn.setReadTimeout(SOCKET_TIMEOUT_MILLIS);
@@ -291,6 +292,7 @@ public final class KeployDedupAgent {
         String boundary = "keployBytecodeBoundary" + Integer.toHexString(System.identityHashCode(zipBytes));
         URL u = new URL(baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag));
         HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+        relaxTlsIfHttps(conn);
         conn.setDoOutput(true);
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
@@ -317,6 +319,43 @@ public final class KeployDedupAgent {
 
     private static void writeAscii(OutputStream out, String s) throws IOException {
         out.write(s.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    // relaxTlsIfHttps makes the bytecode upload tolerate k8s-proxy's self-signed
+    // in-cluster cert. The upload is a best-effort, cluster-internal data-plane
+    // call (like the raw-TCP coverage collector), so trust-all here is acceptable
+    // and avoids depending on the app JVM's truststore chaining to the proxy CA.
+    private static volatile javax.net.ssl.SSLSocketFactory trustAllFactory;
+
+    private static void relaxTlsIfHttps(HttpURLConnection conn) {
+        if (!(conn instanceof javax.net.ssl.HttpsURLConnection)) {
+            return;
+        }
+        try {
+            if (trustAllFactory == null) {
+                javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance("TLS");
+                ctx.init(null, new javax.net.ssl.TrustManager[]{new javax.net.ssl.X509TrustManager() {
+                    @Override
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {
+                    }
+
+                    @Override
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {
+                    }
+
+                    @Override
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return new java.security.cert.X509Certificate[0];
+                    }
+                }}, null);
+                trustAllFactory = ctx.getSocketFactory();
+            }
+            javax.net.ssl.HttpsURLConnection https = (javax.net.ssl.HttpsURLConnection) conn;
+            https.setSSLSocketFactory(trustAllFactory);
+            https.setHostnameVerifier((hostname, session) -> true);
+        } catch (Exception e) {
+            // Leave the default factory; the upload is best-effort.
+        }
     }
 
     private static String urlEncode(String s) {
