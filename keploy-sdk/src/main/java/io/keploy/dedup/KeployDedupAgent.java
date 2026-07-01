@@ -23,9 +23,12 @@ import java.io.OutputStream;
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +45,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -252,6 +257,76 @@ public final class KeployDedupAgent {
         return path.replace(File.separatorChar, '/');
     }
 
+    // Build-constant coverage metadata for one class, serialized into the
+    // manifest the offline CoverageReporter consumes. id = CRC64 class id
+    // (unsigned-hex), probeCount = JaCoCo probe array length.
+    private static final class ManifestEntry {
+        private String id;
+        private int probeCount;
+    }
+
+    // bytecodeAlreadyStored HEAD-checks whether k8s-proxy already holds the
+    // bytecode blob for this build tag, so each ephemeral replay pod uploads
+    // at most once per build. Best-effort: any error => treat as absent and
+    // attempt the upload (the server dedupes idempotently by buildTag anyway).
+    private static boolean bytecodeAlreadyStored(String baseUrl, String buildTag) {
+        try {
+            URL u = new URL(baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag));
+            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+            conn.setRequestMethod("HEAD");
+            conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
+            conn.setReadTimeout(SOCKET_TIMEOUT_MILLIS);
+            int code = conn.getResponseCode();
+            conn.disconnect();
+            return code == HttpURLConnection.HTTP_OK;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // postBytecode uploads the manifest JSON + classes zip as a multipart form
+    // to k8s-proxy's bytecode endpoint, tagged with the build tag.
+    private static void postBytecode(String baseUrl, String buildTag, String manifestJson, byte[] zipBytes)
+            throws IOException {
+        String boundary = "keployBytecodeBoundary" + Integer.toHexString(System.identityHashCode(zipBytes));
+        URL u = new URL(baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag));
+        HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
+        conn.setReadTimeout(30000);
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        try (OutputStream out = conn.getOutputStream()) {
+            writeAscii(out, "--" + boundary + "\r\n");
+            writeAscii(out, "Content-Disposition: form-data; name=\"manifest\"; filename=\"manifest.json\"\r\n");
+            writeAscii(out, "Content-Type: application/json\r\n\r\n");
+            out.write(manifestJson.getBytes(StandardCharsets.UTF_8));
+            writeAscii(out, "\r\n--" + boundary + "\r\n");
+            writeAscii(out, "Content-Disposition: form-data; name=\"classes\"; filename=\"classes.zip\"\r\n");
+            writeAscii(out, "Content-Type: application/zip\r\n\r\n");
+            out.write(zipBytes);
+            writeAscii(out, "\r\n--" + boundary + "--\r\n");
+            out.flush();
+        }
+        int code = conn.getResponseCode();
+        conn.disconnect();
+        if (code / 100 != 2) {
+            throw new IOException("bytecode upload returned HTTP " + code);
+        }
+    }
+
+    private static void writeAscii(OutputStream out, String s) throws IOException {
+        out.write(s.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static String urlEncode(String s) {
+        try {
+            return URLEncoder.encode(s, StandardCharsets.UTF_8.name());
+        } catch (Exception e) {
+            return s;
+        }
+    }
+
     private static void deleteSocketFile(File file) {
         if (file.exists() && !file.delete()) {
             log(Level.FINE, "Failed to delete socket file " + file.getAbsolutePath(), null);
@@ -356,6 +431,9 @@ public final class KeployDedupAgent {
                     // Warm up app classes once before the first measured window so
                     // one-time <clinit> lines aren't charged to the first test.
                     collector.warmup();
+                    // Best-effort, async, once-per-build: ship bytecode + manifest so
+                    // k8s-proxy can compute line/branch coverage offline (Option B).
+                    collector.exportBuildArtifactsOnce();
                     collector.reset();
                     writeAck(outputStream);
                     return;
@@ -504,6 +582,9 @@ public final class KeployDedupAgent {
                     // Warm up app classes once before the first measured window so
                     // one-time <clinit> lines aren't charged to the first test.
                     collector.warmup();
+                    // Best-effort, async, once-per-build: ship bytecode + manifest so
+                    // k8s-proxy can compute line/branch coverage offline (Option B).
+                    collector.exportBuildArtifactsOnce();
                     collector.reset();
                     writeLine(out, "ACK");
                     return;
@@ -598,6 +679,8 @@ public final class KeployDedupAgent {
         private final JacocoClient jacocoClient;
         private final CoverageIndex coverageIndex;
         private final AtomicBoolean warmed = new AtomicBoolean(false);
+        // Once-per-JVM guard for the build-artifact (bytecode+manifest) upload.
+        private static final AtomicBoolean ARTIFACTS_EXPORTED = new AtomicBoolean(false);
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
             this.jacocoClient = jacocoClient;
@@ -770,6 +853,91 @@ public final class KeployDedupAgent {
                 sorted.put(file, lines);
             }
             return sorted;
+        }
+
+        // exportBuildArtifactsOnce uploads (ONCE per JVM/build) the app's class
+        // bytecode + a {className -> (classId, probeCount)} manifest to k8s-proxy,
+        // so the offline CoverageReporter can later reconstruct line/branch
+        // coverage from the persisted dedup-fingerprint probe union (Option B).
+        // Best-effort and fully async: coverage reporting must never affect the
+        // app or the per-test dedup path. Gated by KEPLOY_BYTECODE_UPLOAD_URL +
+        // KEPLOY_BUILD_TAG (both injected by the webhook); absent => no-op, so
+        // existing dedup-only deployments are unchanged. Triggered after warmup()
+        // so every app class is loaded and appears in the manifest.
+        void exportBuildArtifactsOnce() {
+            final String url = envOrProperty("KEPLOY_BYTECODE_UPLOAD_URL", "keploy.bytecode.upload.url", "");
+            final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
+            if (url.isEmpty() || buildTag.isEmpty()) {
+                return;
+            }
+            if (!ARTIFACTS_EXPORTED.compareAndSet(false, true)) {
+                return;
+            }
+            Thread t = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (bytecodeAlreadyStored(url, buildTag)) {
+                            log(Level.FINE, "Keploy dedup: bytecode already stored for buildTag " + buildTag, null);
+                            return;
+                        }
+                        Map<String, ManifestEntry> manifest = buildBuildManifest();
+                        if (manifest.isEmpty()) {
+                            // No app classes visible yet — allow a later START to retry.
+                            ARTIFACTS_EXPORTED.set(false);
+                            return;
+                        }
+                        byte[] zip = zipIndexedClasses();
+                        postBytecode(url, buildTag, GSON.toJson(manifest), zip);
+                        log(Level.INFO, "Keploy dedup: uploaded bytecode+manifest for buildTag "
+                                + buildTag + " (" + manifest.size() + " classes)", null);
+                    } catch (Throwable e) {
+                        log(Level.FINE, "Keploy dedup: bytecode export failed (non-fatal)", null);
+                    }
+                }
+            }, "keploy-dedup-bytecode-export");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        // buildBuildManifest reads a non-resetting JaCoCo dump and records each
+        // app class's runtime classId (== the CRC64 the offline Analyzer computes
+        // for the same bytecode) and probe count. These are build-constant, so a
+        // single post-warmup dump captures the whole manifest — and it means the
+        // reporter never needs JaCoCo internal APIs to derive id/probeCount.
+        private Map<String, ManifestEntry> buildBuildManifest() throws IOException {
+            Map<String, ManifestEntry> manifest = new LinkedHashMap<>();
+            byte[] dump = jacocoClient.dump(true, false);
+            if (dump.length == 0) {
+                return manifest;
+            }
+            ExecFileLoader loader = new ExecFileLoader();
+            loader.load(new ByteArrayInputStream(dump));
+            Set<String> appClasses = indexedClassNames();
+            for (ExecutionData data : loader.getExecutionDataStore().getContents()) {
+                if (!appClasses.contains(data.getName())) {
+                    continue;
+                }
+                ManifestEntry entry = new ManifestEntry();
+                entry.id = Long.toHexString(data.getId());
+                entry.probeCount = data.getProbes().length;
+                manifest.put(data.getName(), entry);
+            }
+            return manifest;
+        }
+
+        // zipIndexedClasses packs every indexed app .class (already in memory as
+        // ClassEntry.bytes) into a zip keyed by "<vmClassName>.class".
+        private byte[] zipIndexedClasses() throws IOException {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(256 * 1024);
+            try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                for (ClassEntry entry : coverageIndex.entries()) {
+                    zos.putNextEntry(new ZipEntry(entry.className + ".class"));
+                    zos.write(entry.bytes);
+                    zos.closeEntry();
+                }
+            }
+            return baos.toByteArray();
         }
     }
 
