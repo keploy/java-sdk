@@ -23,12 +23,9 @@ import java.io.OutputStream;
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -120,6 +117,10 @@ public final class KeployDedupAgent {
         if (endpoint != null) {
             // k8s: the collector lives in a different pod, so there is no shared
             // /tmp. Dial the collector's TCP endpoint and run the same protocol.
+            // NOTE: host:port is split on the LAST ':', which assumes an IPv4 or
+            // DNS host (the only forms the proxy advertises, e.g.
+            // "k8s-proxy.keploy.svc.cluster.local.:36340"). A bare or bracketed
+            // IPv6 literal would mis-split; add bracket handling if that ever ships.
             int idx = endpoint.lastIndexOf(':');
             if (idx <= 0 || idx == endpoint.length() - 1) {
                 STARTED.set(false);
@@ -265,133 +266,6 @@ public final class KeployDedupAgent {
         private int probeCount;
     }
 
-    // bytecodeAlreadyStored HEAD-checks whether k8s-proxy already holds the
-    // bytecode blob for this build tag, so each ephemeral replay pod uploads
-    // at most once per build. Best-effort: any error => treat as absent and
-    // attempt the upload (the server dedupes idempotently by buildTag anyway).
-    private static boolean bytecodeAlreadyStored(String baseUrl, String buildTag) {
-        String target = baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag);
-        try {
-            log(Level.INFO, "Keploy dedup: exists-check HEAD " + target, null);
-            URL u = new URL(target);
-            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
-            relaxTlsIfHttps(conn);
-            conn.setRequestMethod("HEAD");
-            conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
-            conn.setReadTimeout(SOCKET_TIMEOUT_MILLIS);
-            int code = conn.getResponseCode();
-            conn.disconnect();
-            log(Level.INFO, "Keploy dedup: exists-check HEAD -> HTTP " + code, null);
-            return code == HttpURLConnection.HTTP_OK;
-        } catch (Exception e) {
-            log(Level.WARNING, "Keploy dedup: exists-check HEAD failed (treating as absent): "
-                    + e.getClass().getName() + ": " + e.getMessage(), null);
-            return false;
-        }
-    }
-
-    // postBytecode uploads the manifest JSON + classes zip as a multipart form
-    // to k8s-proxy's bytecode endpoint, tagged with the build tag.
-    private static void postBytecode(String baseUrl, String buildTag, String manifestJson, byte[] zipBytes)
-            throws IOException {
-        String boundary = "keployBytecodeBoundary" + Integer.toHexString(System.identityHashCode(zipBytes));
-        String target = baseUrl + (baseUrl.contains("?") ? "&" : "?") + "buildTag=" + urlEncode(buildTag);
-        log(Level.INFO, "Keploy dedup: POST bytecode -> " + target
-                + " (manifest=" + manifestJson.length() + "B, zip=" + zipBytes.length + "B)", null);
-        URL u = new URL(target);
-        HttpURLConnection conn = (HttpURLConnection) u.openConnection();
-        relaxTlsIfHttps(conn);
-        conn.setDoOutput(true);
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(SOCKET_TIMEOUT_MILLIS);
-        conn.setReadTimeout(30000);
-        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-        try (OutputStream out = conn.getOutputStream()) {
-            log(Level.INFO, "Keploy dedup: POST bytecode connection open; streaming body", null);
-            writeAscii(out, "--" + boundary + "\r\n");
-            writeAscii(out, "Content-Disposition: form-data; name=\"manifest\"; filename=\"manifest.json\"\r\n");
-            writeAscii(out, "Content-Type: application/json\r\n\r\n");
-            out.write(manifestJson.getBytes(StandardCharsets.UTF_8));
-            writeAscii(out, "\r\n--" + boundary + "\r\n");
-            writeAscii(out, "Content-Disposition: form-data; name=\"classes\"; filename=\"classes.zip\"\r\n");
-            writeAscii(out, "Content-Type: application/zip\r\n\r\n");
-            out.write(zipBytes);
-            writeAscii(out, "\r\n--" + boundary + "--\r\n");
-            out.flush();
-        }
-        int code = conn.getResponseCode();
-        String body = readStream(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-        conn.disconnect();
-        log(Level.INFO, "Keploy dedup: POST bytecode -> HTTP " + code
-                + (body.isEmpty() ? "" : (" body=" + body)), null);
-        if (code / 100 != 2) {
-            throw new IOException("bytecode upload returned HTTP " + code + (body.isEmpty() ? "" : (": " + body)));
-        }
-    }
-
-    private static String readStream(InputStream in) {
-        if (in == null) {
-            return "";
-        }
-        try {
-            byte[] b = readAllBytes(in);
-            String s = new String(b, StandardCharsets.UTF_8).trim();
-            return s.length() > 300 ? s.substring(0, 300) : s;
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private static void writeAscii(OutputStream out, String s) throws IOException {
-        out.write(s.getBytes(StandardCharsets.US_ASCII));
-    }
-
-    // relaxTlsIfHttps makes the bytecode upload tolerate k8s-proxy's self-signed
-    // in-cluster cert. The upload is a best-effort, cluster-internal data-plane
-    // call (like the raw-TCP coverage collector), so trust-all here is acceptable
-    // and avoids depending on the app JVM's truststore chaining to the proxy CA.
-    private static volatile javax.net.ssl.SSLSocketFactory trustAllFactory;
-
-    private static void relaxTlsIfHttps(HttpURLConnection conn) {
-        if (!(conn instanceof javax.net.ssl.HttpsURLConnection)) {
-            return;
-        }
-        try {
-            if (trustAllFactory == null) {
-                javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance("TLS");
-                ctx.init(null, new javax.net.ssl.TrustManager[]{new javax.net.ssl.X509TrustManager() {
-                    @Override
-                    public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {
-                    }
-
-                    @Override
-                    public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {
-                    }
-
-                    @Override
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                        return new java.security.cert.X509Certificate[0];
-                    }
-                }}, null);
-                trustAllFactory = ctx.getSocketFactory();
-            }
-            javax.net.ssl.HttpsURLConnection https = (javax.net.ssl.HttpsURLConnection) conn;
-            https.setSSLSocketFactory(trustAllFactory);
-            https.setHostnameVerifier((hostname, session) -> true);
-            log(Level.INFO, "Keploy dedup: relaxed TLS (trust-all) for bytecode upload", null);
-        } catch (Exception e) {
-            log(Level.WARNING, "Keploy dedup: failed to relax TLS: " + e.getMessage(), null);
-        }
-    }
-
-    private static String urlEncode(String s) {
-        try {
-            return URLEncoder.encode(s, StandardCharsets.UTF_8.name());
-        } catch (Exception e) {
-            return s;
-        }
-    }
-
     private static void deleteSocketFile(File file) {
         if (file.exists() && !file.delete()) {
             log(Level.FINE, "Failed to delete socket file " + file.getAbsolutePath(), null);
@@ -512,11 +386,11 @@ public final class KeployDedupAgent {
                     }
 
                     try {
-                        Map<String, List<Integer>> executedLinesByFile = collector.capture();
-                        if (executedLinesByFile.isEmpty()) {
-                            log(Level.FINE, "No Java coverage lines collected for " + command.testId, null);
+                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
+                        if (executedProbesByClass.isEmpty()) {
+                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                         }
-                        publisher.publish(command.testId, executedLinesByFile);
+                        publisher.publish(command.testId, executedProbesByClass);
                     } catch (Exception e) {
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                     } finally {
@@ -659,26 +533,36 @@ public final class KeployDedupAgent {
                         return;
                     }
 
+                    // Capture first; a failure here must NOT skip the COV. The
+                    // collector reads COV and ACK off the same line-oriented stream,
+                    // so exactly one COV must precede every ACK — a missing COV on an
+                    // exception would shift the collector onto the next test's frames.
+                    Map<String, List<Integer>> executedProbesByClass;
                     try {
-                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
-                        if (executedProbesByClass.isEmpty()) {
-                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
-                        }
-                        // Always emit COV before ACK — even when empty — so the
-                        // line-oriented collector reads exactly one COV per END (the
-                        // unix transport likewise always publishes). The payload is
-                        // recorded before the ACK releases the caller.
+                        executedProbesByClass = collector.capture();
+                    } catch (Exception e) {
+                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                        executedProbesByClass = Collections.emptyMap();
+                    }
+                    if (executedProbesByClass.isEmpty()) {
+                        log(Level.FINE, "No Java coverage collected for " + command.testId, null);
+                    }
+                    try {
+                        // Always emit exactly one COV before ACK — even when empty —
+                        // so the line-oriented collector stays in lockstep (the unix
+                        // transport likewise always publishes).
                         writeLine(out, "COV " + GSON.toJson(
                                 new DedupPayload(command.testId, executedProbesByClass)));
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
-                        // intercept), when the manifest has grown.
+                        // intercept), when the manifest has grown. A failure building
+                        // or sending it must not skip the already-sent COV or the ACK.
                         String classesFrame = collector.pollBytecodeFrame();
                         if (classesFrame != null) {
                             writeLine(out, classesFrame);
                         }
                     } catch (Exception e) {
-                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                        log(Level.FINE, "Failed to send CLASSES frame for " + command.testId, e);
                     } finally {
                         activeTestId = "";
                         writeLine(out, "ACK");
@@ -755,7 +639,6 @@ public final class KeployDedupAgent {
                 new java.util.concurrent.ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.AtomicInteger lastUploadedManifestSize =
                 new java.util.concurrent.atomic.AtomicInteger(-1);
-        private final AtomicBoolean uploadInFlight = new AtomicBoolean(false);
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
             this.jacocoClient = jacocoClient;
@@ -1472,8 +1355,8 @@ public final class KeployDedupAgent {
             this.socketFile = socketFile;
         }
 
-        private void publish(String testId, Map<String, List<Integer>> executedLinesByFile) throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, executedLinesByFile))
+        private void publish(String testId, Map<String, List<Integer>> executedProbesByClass) throws IOException {
+            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass))
                     .getBytes(StandardCharsets.UTF_8);
 
             try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
@@ -1485,14 +1368,24 @@ public final class KeployDedupAgent {
         }
     }
 
+    // DedupPayload is the per-test wire payload (one COV frame).
+    //
+    // NOTE ON THE FIELD NAME: `executedLinesByFile` is a HISTORICAL wire key. Its
+    // value is now the set of executed JaCoCo PROBE indices per VM class name
+    // ({"com/foo/Bar": [probeIdx...]}) — NOT source lines by file. The key is kept
+    // deliberately for backward compatibility with consumers that deserialize by
+    // this exact name (enterprise dedup #2188, k8s-proxy #574), which treat the
+    // value opaquely as key -> int-set. Renaming the JSON key is a coordinated
+    // cross-repo break and must land in lockstep on all three sides.
     private static final class DedupPayload {
 
         private final String id;
+        // Probes-by-class (see class note); serialized under the historical key.
         private final Map<String, List<Integer>> executedLinesByFile;
 
-        private DedupPayload(String id, Map<String, List<Integer>> executedLinesByFile) {
+        private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass) {
             this.id = id;
-            this.executedLinesByFile = executedLinesByFile;
+            this.executedLinesByFile = executedProbesByClass;
         }
     }
 

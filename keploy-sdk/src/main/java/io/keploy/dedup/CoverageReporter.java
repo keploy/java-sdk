@@ -138,6 +138,17 @@ public final class CoverageReporter {
         }
         // analyzeAll walks a dir tree (or a jar) and analyzes every .class,
         // computing each class's CRC64 id and matching it against the store.
+        //
+        // LIMITATION — load-time-transformed classes may undercount: the store id
+        // comes from the LIVE ExecutionData at record time, but analyzeAll hashes
+        // the ON-DISK .class bytes. If a class was transformed before JaCoCo saw it
+        // (another -javaagent, CGLIB, load-time weaving — common in Spring apps),
+        // the two CRC64 ids differ, so the analyzed class won't match its store
+        // entry: its fired probes are dropped from the numerator while it still
+        // counts toward the denominator, deflating the reported coverage. Dedup is
+        // UNAFFECTED (probe sets are compared like-for-like, never against on-disk
+        // bytes) — only the reported line/branch numbers can be low. To fully fix,
+        // export the exact instrumented bytes (or detect+log id mismatches here).
         analyzer.analyzeAll(classesFile);
 
         CoverageResult result = new CoverageResult();
