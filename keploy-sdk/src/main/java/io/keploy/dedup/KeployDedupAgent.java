@@ -489,6 +489,10 @@ public final class KeployDedupAgent {
             open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
             socket = open;
             connectFailureLogged = false;
+            // Fresh connection (possibly a new proxy replica after a drop): re-arm
+            // the one-time zip send so the collector on the other end gets the
+            // class bytecode. MinIO first-write-wins makes the re-store idempotent.
+            collector.resetBytecodeSentForNewConnection();
             log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
@@ -639,6 +643,24 @@ public final class KeployDedupAgent {
                 new java.util.concurrent.ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.AtomicInteger lastUploadedManifestSize =
                 new java.util.concurrent.atomic.AtomicInteger(-1);
+        // Whether the (constant) class-bytecode zip has already been sent on the
+        // CURRENT collector connection. The indexed class set never changes (a
+        // one-time classpath scan), so the zip is sent ONCE per connection via a
+        // CLASSES frame; subsequent manifest growth rides lightweight MANIFEST
+        // frames carrying no zip. Reset on every (re)connect so a fresh collector
+        // connection receives the zip again — preserving the reconnect
+        // self-healing the old re-send-on-every-growth path gave for free, without
+        // the redundant resends or the 16 MiB single-line blow-up on large apps.
+        private volatile boolean bytecodeSentThisConnection = false;
+
+        // resetBytecodeSentForNewConnection re-arms the one-time zip send for a
+        // freshly (re)established collector connection. Also clears the manifest
+        // high-water mark so the first poll on the new connection re-emits the
+        // full CLASSES frame even if the manifest hasn't grown since the drop.
+        void resetBytecodeSentForNewConnection() {
+            bytecodeSentThisConnection = false;
+            lastUploadedManifestSize.set(-1);
+        }
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
             this.jacocoClient = jacocoClient;
@@ -838,24 +860,42 @@ public final class KeployDedupAgent {
                 return null;
             }
             final int size = liveManifest.size();
-            if (size == 0 || size <= lastUploadedManifestSize.get()) {
-                return null; // nothing new since the last send
+            if (size == 0) {
+                return null; // no classes hit yet
+            }
+            // Send the constant class zip once per connection; after that, only a
+            // manifest-only frame when the manifest actually grows. This removes
+            // the old per-growth zip resend (O(n^2) bytes) and keeps any single
+            // line small once the zip is out, so the collector's line reader never
+            // trips its max-line cap mid-replay.
+            final boolean sendZip = !bytecodeSentThisConnection;
+            if (!sendZip && size <= lastUploadedManifestSize.get()) {
+                return null; // zip already sent and manifest unchanged since last send
             }
             try {
                 Map<String, ManifestEntry> snapshot = new LinkedHashMap<>(liveManifest);
-                byte[] zip = zipIndexedClasses();
                 String manifestJson = GSON.toJson(snapshot);
                 java.util.Base64.Encoder enc = java.util.Base64.getEncoder();
-                String frame = "CLASSES "
-                        + enc.encodeToString(buildTag.getBytes(StandardCharsets.UTF_8)) + " "
-                        + enc.encodeToString(manifestJson.getBytes(StandardCharsets.UTF_8)) + " "
-                        + enc.encodeToString(zip);
+                String b64Tag = enc.encodeToString(buildTag.getBytes(StandardCharsets.UTF_8));
+                String b64Manifest = enc.encodeToString(manifestJson.getBytes(StandardCharsets.UTF_8));
+                String frame;
+                if (sendZip) {
+                    byte[] zip = zipIndexedClasses();
+                    frame = "CLASSES " + b64Tag + " " + b64Manifest + " " + enc.encodeToString(zip);
+                    bytecodeSentThisConnection = true;
+                    log(Level.INFO, "Keploy dedup: sending CLASSES frame over collector channel "
+                            + "(zip once/connection, classes=" + size + ", zipBytes=" + zip.length + ")", null);
+                } else {
+                    // Manifest-only update — the collector keeps the zip it already
+                    // stored for this build tag and just refreshes the manifest.
+                    frame = "MANIFEST " + b64Tag + " " + b64Manifest;
+                    log(Level.FINE, "Keploy dedup: sending MANIFEST frame (manifest-only update, classes="
+                            + size + ")", null);
+                }
                 lastUploadedManifestSize.set(size);
-                log(Level.INFO, "Keploy dedup: sending CLASSES frame over collector channel (classes="
-                        + size + ", zipBytes=" + zip.length + ")", null);
                 return frame;
             } catch (Throwable e) {
-                log(Level.WARNING, "Keploy dedup: failed to build CLASSES frame: " + e.getMessage(), null);
+                log(Level.WARNING, "Keploy dedup: failed to build bytecode frame: " + e.getMessage(), null);
                 return null;
             }
         }
