@@ -58,6 +58,32 @@ public final class KeployDedupAgent {
     private static final Logger LOGGER = Logger.getLogger(KeployDedupAgent.class.getName());
     private static final Gson GSON = new Gson();
 
+    // --- package-private wire-format helpers (single source of the collector
+    // channel contract; exercised by unit tests without reaching into the
+    // private collector) ---
+
+    // toDedupJson serializes a COV payload exactly as the live agent does (same
+    // GSON + DedupPayload), so tests can lock the wire shape. The historical
+    // "executedLinesByFile" key now carries {vmClassName -> [probeIdx]}.
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass) {
+        return GSON.toJson(new DedupPayload(id, probesByClass));
+    }
+
+    // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
+    // collector channel. Non-null zip => the full "CLASSES <b64tag> <b64manifest>
+    // <b64zip>" frame (sent once per connection); null zip => a lightweight
+    // "MANIFEST <b64tag> <b64manifest>" update. Kept as one helper so the frame
+    // contract that k8s-proxy parses stays in a single, testable place.
+    static String encodeBytecodeFrame(String buildTag, String manifestJson, byte[] zip) {
+        java.util.Base64.Encoder enc = java.util.Base64.getEncoder();
+        String b64Tag = enc.encodeToString(buildTag.getBytes(StandardCharsets.UTF_8));
+        String b64Manifest = enc.encodeToString(manifestJson.getBytes(StandardCharsets.UTF_8));
+        if (zip != null) {
+            return "CLASSES " + b64Tag + " " + b64Manifest + " " + enc.encodeToString(zip);
+        }
+        return "MANIFEST " + b64Tag + " " + b64Manifest;
+    }
+
     private static final String CONTROL_SOCKET_PATH = "/tmp/coverage_control.sock";
     private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
     private static final String DEFAULT_JACOCO_HOST = "127.0.0.1";
@@ -875,20 +901,17 @@ public final class KeployDedupAgent {
             try {
                 Map<String, ManifestEntry> snapshot = new LinkedHashMap<>(liveManifest);
                 String manifestJson = GSON.toJson(snapshot);
-                java.util.Base64.Encoder enc = java.util.Base64.getEncoder();
-                String b64Tag = enc.encodeToString(buildTag.getBytes(StandardCharsets.UTF_8));
-                String b64Manifest = enc.encodeToString(manifestJson.getBytes(StandardCharsets.UTF_8));
                 String frame;
                 if (sendZip) {
                     byte[] zip = zipIndexedClasses();
-                    frame = "CLASSES " + b64Tag + " " + b64Manifest + " " + enc.encodeToString(zip);
+                    frame = encodeBytecodeFrame(buildTag, manifestJson, zip);
                     bytecodeSentThisConnection = true;
                     log(Level.INFO, "Keploy dedup: sending CLASSES frame over collector channel "
                             + "(zip once/connection, classes=" + size + ", zipBytes=" + zip.length + ")", null);
                 } else {
                     // Manifest-only update — the collector keeps the zip it already
                     // stored for this build tag and just refreshes the manifest.
-                    frame = "MANIFEST " + b64Tag + " " + b64Manifest;
+                    frame = encodeBytecodeFrame(buildTag, manifestJson, null);
                     log(Level.FINE, "Keploy dedup: sending MANIFEST frame (manifest-only update, classes="
                             + size + ")", null);
                 }
