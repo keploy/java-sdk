@@ -16,7 +16,7 @@ Keploy Enterprise drives dynamic dedup per testcase.
 2. The Java agent resets JaCoCo coverage counters for that testcase.
 3. Enterprise replays the testcase.
 4. Enterprise sends `END <test-set>/<test-id>` on `/tmp/coverage_control.sock`.
-5. The Java agent dumps JaCoCo execution data, resolves executed Java lines, and sends them as JSON on `/tmp/coverage_data.sock`.
+5. The Java agent dumps JaCoCo execution data and sends the executed probe indices per class (`{className -> [probeIdx]}`) as JSON on `/tmp/coverage_data.sock`. Probes capture branch-level coverage (which branch a test took), so they distinguish tests that run the same lines but take different branches.
 6. Enterprise writes the result to `dedupData.yaml` and uses it to identify duplicates.
 
 Coverage is collected at per-testcase granularity, not process granularity.

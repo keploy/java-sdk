@@ -108,9 +108,11 @@ public final class SmokeHarness {
         }
 
         String json = payload.get();
+        // The fingerprint is keyed by VM class name (probe-based coverage),
+        // e.g. "smoke/Work" — not a source file like "Work.java".
         if (json == null
                 || !json.contains("\"id\":\"test-set-0/" + mode + "\"")
-                || !json.contains("Work.java")) {
+                || !json.contains("smoke/Work")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
         System.out.println(mode + ": " + json);

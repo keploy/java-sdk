@@ -1,10 +1,6 @@
 package io.keploy.dedup;
 
 import com.google.gson.Gson;
-import org.jacoco.core.analysis.Analyzer;
-import org.jacoco.core.analysis.CoverageBuilder;
-import org.jacoco.core.analysis.IClassCoverage;
-import org.jacoco.core.analysis.ICounter;
 import org.jacoco.core.data.ExecutionData;
 import org.jacoco.core.data.ExecutionDataStore;
 import org.jacoco.core.data.ExecutionDataWriter;
@@ -46,18 +42,47 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Collects per-testcase JaCoCo coverage and streams executed lines back to Keploy Enterprise.
+ * Collects per-testcase JaCoCo coverage and streams the executed probe set per
+ * class ({className -&gt; [probeIdx]}) back to Keploy Enterprise.
  */
 public final class KeployDedupAgent {
 
     private static final Logger LOGGER = Logger.getLogger(KeployDedupAgent.class.getName());
     private static final Gson GSON = new Gson();
+
+    // --- package-private wire-format helpers (single source of the collector
+    // channel contract; exercised by unit tests without reaching into the
+    // private collector) ---
+
+    // toDedupJson serializes a COV payload exactly as the live agent does (same
+    // GSON + DedupPayload), so tests can lock the wire shape. The historical
+    // "executedLinesByFile" key now carries {vmClassName -> [probeIdx]}.
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass) {
+        return GSON.toJson(new DedupPayload(id, probesByClass));
+    }
+
+    // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
+    // collector channel. Non-null zip => the full "CLASSES <b64tag> <b64manifest>
+    // <b64zip>" frame (sent once per connection); null zip => a lightweight
+    // "MANIFEST <b64tag> <b64manifest>" update. Kept as one helper so the frame
+    // contract that k8s-proxy parses stays in a single, testable place.
+    static String encodeBytecodeFrame(String buildTag, String manifestJson, byte[] zip) {
+        java.util.Base64.Encoder enc = java.util.Base64.getEncoder();
+        String b64Tag = enc.encodeToString(buildTag.getBytes(StandardCharsets.UTF_8));
+        String b64Manifest = enc.encodeToString(manifestJson.getBytes(StandardCharsets.UTF_8));
+        if (zip != null) {
+            return "CLASSES " + b64Tag + " " + b64Manifest + " " + enc.encodeToString(zip);
+        }
+        return "MANIFEST " + b64Tag + " " + b64Manifest;
+    }
 
     private static final String CONTROL_SOCKET_PATH = "/tmp/coverage_control.sock";
     private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
@@ -68,7 +93,9 @@ public final class KeployDedupAgent {
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
-    private static volatile CommandServer commandServer;
+    // The active transport worker: a CommandServer (unix, local/docker) or a
+    // CoverageTcpClient (TCP, k8s). Both are Closeable so stop() is transport-agnostic.
+    private static volatile Closeable coverageWorker;
 
     private KeployDedupAgent() {
     }
@@ -109,10 +136,48 @@ public final class KeployDedupAgent {
         CoverageCollector collector = new CoverageCollector(
                 new JacocoClient(resolveHost(), resolvePort()),
                 new CoverageIndex());
-        CommandServer server = new CommandServer(collector, new CoveragePublisher(new File(DATA_SOCKET_PATH)));
-        Thread thread = new Thread(server, "keploy-java-dedup-control");
+
+        Runnable worker;
+        String threadName;
+        String endpoint = resolveEndpoint();
+        if (endpoint != null) {
+            // k8s: the collector lives in a different pod, so there is no shared
+            // /tmp. Dial the collector's TCP endpoint and run the same protocol.
+            // NOTE: host:port is split on the LAST ':', which assumes an IPv4 or
+            // DNS host (the only forms the proxy advertises, e.g.
+            // "k8s-proxy.keploy.svc.cluster.local.:36340"). A bare or bracketed
+            // IPv6 literal would mis-split; add bracket handling if that ever ships.
+            int idx = endpoint.lastIndexOf(':');
+            if (idx <= 0 || idx == endpoint.length() - 1) {
+                STARTED.set(false);
+                log(Level.SEVERE, "Invalid KEPLOY_COVERAGE_ENDPOINT '" + endpoint + "', expected host:port", null);
+                return false;
+            }
+            String host = endpoint.substring(0, idx);
+            int port;
+            try {
+                port = Integer.parseInt(endpoint.substring(idx + 1).trim());
+            } catch (NumberFormatException e) {
+                STARTED.set(false);
+                log(Level.SEVERE, "Invalid port in KEPLOY_COVERAGE_ENDPOINT '" + endpoint + "'", e);
+                return false;
+            }
+            CoverageTcpClient client = new CoverageTcpClient(collector, host, port);
+            worker = client;
+            coverageWorker = client;
+            threadName = "keploy-java-dedup-tcp";
+            log(Level.INFO, "Keploy dedup: TCP transport enabled, will dial collector at " + host + ":" + port, null);
+        } else {
+            // local/docker: SDK owns the unix control socket and pushes coverage
+            // back over the unix data socket on a pod-shared /tmp.
+            CommandServer server = new CommandServer(collector, new CoveragePublisher(new File(DATA_SOCKET_PATH)));
+            worker = server;
+            coverageWorker = server;
+            threadName = "keploy-java-dedup-control";
+        }
+
+        Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
-        commandServer = server;
         thread.start();
         registerShutdownHook();
         return true;
@@ -131,11 +196,15 @@ public final class KeployDedupAgent {
      * Stops the background control socket listener.
      */
     public static void stop() {
-        CommandServer server = commandServer;
-        if (server != null) {
-            server.close();
+        Closeable worker = coverageWorker;
+        if (worker != null) {
+            try {
+                worker.close();
+            } catch (IOException e) {
+                log(Level.FINE, "Failed to close Java dedup coverage worker", e);
+            }
         }
-        commandServer = null;
+        coverageWorker = null;
         STARTED.set(false);
     }
 
@@ -190,6 +259,16 @@ public final class KeployDedupAgent {
         }
     }
 
+    /**
+     * Returns the collector's TCP endpoint ("host:port") for k8s mode, or {@code null}
+     * to use the unix-socket transport (local/docker). The collector advertises this
+     * to the SDK via KEPLOY_COVERAGE_ENDPOINT when app and collector are in different pods.
+     */
+    private static String resolveEndpoint() {
+        String value = envOrProperty("KEPLOY_COVERAGE_ENDPOINT", "keploy.coverage.endpoint", "");
+        return value.trim().isEmpty() ? null : value.trim();
+    }
+
     private static String envOrProperty(String envKey, String propertyKey, String defaultValue) {
         String value = System.getenv(envKey);
         if (value == null || value.trim().isEmpty()) {
@@ -203,6 +282,14 @@ public final class KeployDedupAgent {
 
     private static String normalizePath(String path) {
         return path.replace(File.separatorChar, '/');
+    }
+
+    // Build-constant coverage metadata for one class, serialized into the
+    // manifest the offline CoverageReporter consumes. id = CRC64 class id
+    // (unsigned-hex), probeCount = JaCoCo probe array length.
+    private static final class ManifestEntry {
+        private String id;
+        private int probeCount;
     }
 
     private static void deleteSocketFile(File file) {
@@ -306,6 +393,9 @@ public final class KeployDedupAgent {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
+                    // Warm up app classes once before the first measured window so
+                    // one-time <clinit> lines aren't charged to the first test.
+                    collector.warmup();
                     collector.reset();
                     writeAck(outputStream);
                     return;
@@ -322,11 +412,11 @@ public final class KeployDedupAgent {
                     }
 
                     try {
-                        Map<String, List<Integer>> executedLinesByFile = collector.capture();
-                        if (executedLinesByFile.isEmpty()) {
-                            log(Level.FINE, "No Java coverage lines collected for " + command.testId, null);
+                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
+                        if (executedProbesByClass.isEmpty()) {
+                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                         }
-                        publisher.publish(command.testId, executedLinesByFile);
+                        publisher.publish(command.testId, executedProbesByClass);
                     } catch (Exception e) {
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                     } finally {
@@ -356,6 +446,175 @@ public final class KeployDedupAgent {
                     localServer.close();
                 } catch (IOException e) {
                     log(Level.FINE, "Failed to close Java dedup control socket", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * TCP transport (k8s): the SDK dials the collector and keeps one bidirectional
+     * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
+     * but inverts the roles — here the SDK is the client. Wire protocol:
+     * <pre>
+     *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
+     *   SDK -&gt; collector : "ACK"                        (after START reset)
+     *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
+     * </pre>
+     * The collector starts listening only when replay begins, so the connect loop
+     * retries until it is reachable.
+     */
+    private static final class CoverageTcpClient implements Runnable, Closeable {
+
+        private static final long RECONNECT_DELAY_MILLIS = 1000;
+
+        private final CoverageCollector collector;
+        private final String host;
+        private final int port;
+        private final AtomicBoolean running = new AtomicBoolean(true);
+        private final Object testCaseLock = new Object();
+        private volatile Socket socket;
+        private String activeTestId = "";
+        // Connect retries spin ~1/s until the collector is reachable; log the first
+        // failure at INFO and the rest at FINE so we don't spam k8s app logs.
+        private boolean connectFailureLogged = false;
+
+        CoverageTcpClient(CoverageCollector collector, String host, int port) {
+            this.collector = collector;
+            this.host = host;
+            this.port = port;
+        }
+
+        @Override
+        public void run() {
+            while (running.get()) {
+                try {
+                    connectAndServe();
+                } catch (IOException e) {
+                    if (running.get()) {
+                        Level level = connectFailureLogged ? Level.FINE : Level.INFO;
+                        connectFailureLogged = true;
+                        log(level, "Keploy dedup: TCP connect to " + host + ":" + port
+                                + " failed (" + e.getClass().getSimpleName() + ": " + e.getMessage() + "), retrying", null);
+                    }
+                }
+                if (running.get()) {
+                    try {
+                        Thread.sleep(RECONNECT_DELAY_MILLIS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void connectAndServe() throws IOException {
+            Socket open = new Socket();
+            // Bounded connect, but NO read timeout: the connection is long-lived and
+            // idles between tests waiting for the next START/END command.
+            open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
+            socket = open;
+            connectFailureLogged = false;
+            // Fresh connection (possibly a new proxy replica after a drop): re-arm
+            // the one-time zip send so the collector on the other end gets the
+            // class bytecode. MinIO first-write-wins makes the re-store idempotent.
+            collector.resetBytecodeSentForNewConnection();
+            log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
+            try (Socket active = open;
+                 BufferedReader reader = new BufferedReader(
+                         new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
+                OutputStream out = active.getOutputStream();
+                String line;
+                while (running.get() && (line = reader.readLine()) != null) {
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty()) {
+                        continue;
+                    }
+                    CoverageCommand command = CoverageCommand.parse(trimmed);
+                    if (command == null) {
+                        continue;
+                    }
+                    dispatch(command, out);
+                }
+            } finally {
+                socket = null;
+            }
+        }
+
+        private void dispatch(CoverageCommand command, OutputStream out) throws IOException {
+            synchronized (testCaseLock) {
+                if (command.action == CommandAction.START) {
+                    activeTestId = command.testId;
+                    // Warm up app classes once before the first measured window so
+                    // one-time <clinit> lines aren't charged to the first test.
+                    collector.warmup();
+                    collector.reset();
+                    writeLine(out, "ACK");
+                    return;
+                }
+
+                if (command.action == CommandAction.END) {
+                    if (!command.testId.equals(activeTestId)) {
+                        log(Level.SEVERE,
+                                "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
+                                        + command.testId,
+                                null);
+                        writeLine(out, "ACK");
+                        return;
+                    }
+
+                    // Capture first; a failure here must NOT skip the COV. The
+                    // collector reads COV and ACK off the same line-oriented stream,
+                    // so exactly one COV must precede every ACK — a missing COV on an
+                    // exception would shift the collector onto the next test's frames.
+                    Map<String, List<Integer>> executedProbesByClass;
+                    try {
+                        executedProbesByClass = collector.capture();
+                    } catch (Exception e) {
+                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                        executedProbesByClass = Collections.emptyMap();
+                    }
+                    if (executedProbesByClass.isEmpty()) {
+                        log(Level.FINE, "No Java coverage collected for " + command.testId, null);
+                    }
+                    try {
+                        // Always emit exactly one COV before ACK — even when empty —
+                        // so the line-oriented collector stays in lockstep (the unix
+                        // transport likewise always publishes).
+                        writeLine(out, "COV " + GSON.toJson(
+                                new DedupPayload(command.testId, executedProbesByClass)));
+                        // Ride the bytecode+manifest over this same raw-TCP channel
+                        // (the only app->proxy path the replay agent doesn't mock-
+                        // intercept), when the manifest has grown. A failure building
+                        // or sending it must not skip the already-sent COV or the ACK.
+                        String classesFrame = collector.pollBytecodeFrame();
+                        if (classesFrame != null) {
+                            writeLine(out, classesFrame);
+                        }
+                    } catch (Exception e) {
+                        log(Level.FINE, "Failed to send CLASSES frame for " + command.testId, e);
+                    } finally {
+                        activeTestId = "";
+                        writeLine(out, "ACK");
+                    }
+                }
+            }
+        }
+
+        private void writeLine(OutputStream out, String message) throws IOException {
+            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
+
+        @Override
+        public void close() {
+            running.set(false);
+            Socket open = socket;
+            if (open != null) {
+                try {
+                    open.close();
+                } catch (IOException e) {
+                    log(Level.FINE, "Failed to close Java dedup TCP socket", e);
                 }
             }
         }
@@ -399,6 +658,35 @@ public final class KeployDedupAgent {
 
         private final JacocoClient jacocoClient;
         private final CoverageIndex coverageIndex;
+        private final AtomicBoolean warmed = new AtomicBoolean(false);
+        // Coverage manifest ({vmClassName -> {classId, probeCount}}) accumulated
+        // from the SAME per-test capture() path that produces dedup fingerprints —
+        // so its class matching is proven correct (a separate post-warmup dump
+        // raced the START reset and matched 0 classes). Build-constant, grows as
+        // new app classes are hit. Uploaded (overwrite) whenever it grows, so the
+        // final upload covers every class in the coverage union.
+        private final java.util.concurrent.ConcurrentMap<String, ManifestEntry> liveManifest =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.concurrent.atomic.AtomicInteger lastUploadedManifestSize =
+                new java.util.concurrent.atomic.AtomicInteger(-1);
+        // Whether the (constant) class-bytecode zip has already been sent on the
+        // CURRENT collector connection. The indexed class set never changes (a
+        // one-time classpath scan), so the zip is sent ONCE per connection via a
+        // CLASSES frame; subsequent manifest growth rides lightweight MANIFEST
+        // frames carrying no zip. Reset on every (re)connect so a fresh collector
+        // connection receives the zip again — preserving the reconnect
+        // self-healing the old re-send-on-every-growth path gave for free, without
+        // the redundant resends or the 16 MiB single-line blow-up on large apps.
+        private volatile boolean bytecodeSentThisConnection = false;
+
+        // resetBytecodeSentForNewConnection re-arms the one-time zip send for a
+        // freshly (re)established collector connection. Also clears the manifest
+        // high-water mark so the first poll on the new connection re-emits the
+        // full CLASSES frame even if the manifest hasn't grown since the drop.
+        void resetBytecodeSentForNewConnection() {
+            bytecodeSentThisConnection = false;
+            lastUploadedManifestSize.set(-1);
+        }
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
             this.jacocoClient = jacocoClient;
@@ -413,6 +701,73 @@ public final class KeployDedupAgent {
             }
         }
 
+        /**
+         * Eagerly initialize every indexed application class so their static
+         * initializers (&lt;clinit&gt;) run ONCE here, before the first test's
+         * coverage window. The very first request to a fresh JVM otherwise pays
+         * the one-time class-init cost, and JaCoCo charges those &lt;clinit&gt;
+         * lines to whichever test ran first — making the duplicate set
+         * non-deterministic run-to-run. Running them now (then letting the START
+         * reset clear the counters) means every test sees only the lines its own
+         * request executes. Called once, on the first START, when the app is
+         * fully started. Best-effort: per-class failures are ignored (the class
+         * just falls back to lazy init). Disable with
+         * KEPLOY_JAVA_DEDUP_WARMUP_DISABLED=true if a static initializer has
+         * harmful side effects.
+         */
+        private void warmup() {
+            if (isWarmupDisabled() || !warmed.compareAndSet(false, true)) {
+                return;
+            }
+            ClassLoader[] loaders = warmupLoaders();
+            int initialized = 0;
+            int failed = 0;
+            for (ClassEntry entry : coverageIndex.entries()) {
+                if (initializeClass(entry.className.replace('/', '.'), loaders)) {
+                    initialized++;
+                } else {
+                    failed++;
+                }
+            }
+            log(Level.INFO, "Keploy dedup: warmed up application classes (initialized="
+                    + initialized + ", skipped=" + failed + ")", null);
+        }
+
+        private boolean isWarmupDisabled() {
+            return isTruthy(envOrProperty("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED",
+                    "keploy.java.dedup.warmup.disabled", ""));
+        }
+
+        private ClassLoader[] warmupLoaders() {
+            List<ClassLoader> loaders = new ArrayList<>(3);
+            ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+            if (ctx != null) {
+                loaders.add(ctx);
+            }
+            ClassLoader sys = ClassLoader.getSystemClassLoader();
+            if (sys != null && !loaders.contains(sys)) {
+                loaders.add(sys);
+            }
+            ClassLoader own = KeployDedupAgent.class.getClassLoader();
+            if (own != null && !loaders.contains(own)) {
+                loaders.add(own);
+            }
+            return loaders.toArray(new ClassLoader[0]);
+        }
+
+        private boolean initializeClass(String binaryName, ClassLoader[] loaders) {
+            for (ClassLoader loader : loaders) {
+                try {
+                    Class.forName(binaryName, true, loader);
+                    return true;
+                } catch (Throwable ignored) {
+                    // Try the next loader; a class that no loader can initialize
+                    // (or whose <clinit> throws) is simply left to lazy init.
+                }
+            }
+            return false;
+        }
+
         private Map<String, List<Integer>> capture() throws IOException {
             byte[] dump = jacocoClient.dump(true, true);
             if (dump.length == 0) {
@@ -425,73 +780,70 @@ public final class KeployDedupAgent {
             ExecFileLoader loader = new ExecFileLoader();
             loader.load(new ByteArrayInputStream(dump));
             ExecutionDataStore executionDataStore = loader.getExecutionDataStore();
-            Set<String> hitClasses = hitClassNames(executionDataStore);
-            if (hitClasses.isEmpty()) {
+
+            // BRANCH coverage: fingerprint by the set of executed JaCoCo PROBES per
+            // class, NOT just executed lines. Each branch is instrumented as a
+            // distinct probe, so the executed-probe set distinguishes WHICH branch a
+            // test took (true vs false) — line status, and even branch counts, report
+            // identically for the true-path and false-path test. The probe set also
+            // subsumes line coverage (lines map to probes). Probe indices are stable
+            // for a given class bytecode, so the set is comparable across the run.
+            // Keyed by VM class name (canonical "com/foo/Bar"; no file-path
+            // normalization needed). CoverageIndex is used only to restrict to the
+            // app's own classes so JDK/library probes don't pollute the fingerprint.
+            Set<String> appClasses = indexedClassNames();
+            if (appClasses.isEmpty()) {
                 if (diagnosticsEnabled()) {
-                    diagnostic("execution data had no hit classes");
+                    diagnostic("coverage index has no app classes");
                 }
                 return Collections.emptyMap();
             }
 
-            List<ClassEntry> indexedEntries = coverageIndex.entries();
-            if (diagnosticsEnabled()) {
-                diagnostic("hitClasses=" + hitClasses.size()
-                                + ", indexedEntries=" + indexedEntries.size()
-                                + ", sampleHits=" + summarizeStrings(hitClasses, 5)
-                                + ", sampleEntries=" + summarizeClassEntries(indexedEntries, 5));
-            }
-
-            CoverageBuilder coverageBuilder = new CoverageBuilder();
-            Analyzer analyzer = new Analyzer(executionDataStore, coverageBuilder);
-            for (ClassEntry classEntry : indexedEntries) {
-                if (!hitClasses.contains(classEntry.className)) {
-                    continue;
-                }
-                try {
-                    analyzer.analyzeClass(classEntry.bytes, classEntry.location);
-                } catch (IOException | RuntimeException e) {
-                    log(Level.FINE, "Skipping unreadable Java class " + classEntry.location, e);
-                }
-            }
-
-            if (diagnosticsEnabled()) {
-                diagnostic("analyzedClasses=" + coverageBuilder.getClasses().size());
-            }
-
             Map<String, Set<Integer>> raw = new LinkedHashMap<>();
-            for (IClassCoverage classCoverage : coverageBuilder.getClasses()) {
-                if (!classCoverage.containsCode()) {
+            for (ExecutionData executionData : executionDataStore.getContents()) {
+                if (!executionData.hasHits()) {
                     continue;
                 }
-
-                List<Integer> executedLines = executedLines(classCoverage);
-                if (executedLines.isEmpty()) {
+                if (!appClasses.contains(executionData.getName())) {
                     continue;
                 }
-
-                String sourcePath = resolveSourcePath(classCoverage);
-                Set<Integer> merged = raw.get(sourcePath);
-                if (merged == null) {
-                    merged = new LinkedHashSet<>();
-                    raw.put(sourcePath, merged);
+                boolean[] probes = executionData.getProbes();
+                // Record this class's build-constant (classId, probeCount) for the
+                // coverage manifest. Same matching as the fingerprint below, so the
+                // manifest can never miss a class that appears in the union.
+                final int probeCount = probes.length;
+                final long classId = executionData.getId();
+                liveManifest.computeIfAbsent(executionData.getName(), k -> {
+                    ManifestEntry m = new ManifestEntry();
+                    m.id = Long.toHexString(classId);
+                    m.probeCount = probeCount;
+                    return m;
+                });
+                Set<Integer> fired = new LinkedHashSet<>();
+                for (int i = 0; i < probes.length; i++) {
+                    if (probes[i]) {
+                        fired.add(i);
+                    }
                 }
-                merged.addAll(executedLines);
+                if (!fired.isEmpty()) {
+                    raw.put(executionData.getName(), fired);
+                }
             }
 
             if (diagnosticsEnabled()) {
-                diagnostic("filesWithCoverage=" + raw.size()
-                        + ", sampleFiles=" + summarizeStrings(raw.keySet(), 5));
+                diagnostic("classesWithProbes=" + raw.size()
+                        + ", sampleClasses=" + summarizeStrings(raw.keySet(), 5));
             }
 
             return toSortedMap(raw);
         }
 
-        private Set<String> hitClassNames(ExecutionDataStore executionDataStore) {
+        // indexedClassNames returns the VM names of the app's own classes (from the
+        // CoverageIndex) so probe collection can skip JDK/library classes.
+        private Set<String> indexedClassNames() {
             Set<String> names = new LinkedHashSet<>();
-            for (ExecutionData executionData : executionDataStore.getContents()) {
-                if (executionData.hasHits()) {
-                    names.add(executionData.getName());
-                }
+            for (ClassEntry entry : coverageIndex.entries()) {
+                names.add(entry.className);
             }
             return names;
         }
@@ -507,51 +859,6 @@ public final class KeployDedupAgent {
             return sample.toString();
         }
 
-        private String summarizeClassEntries(List<ClassEntry> values, int limit) {
-            List<String> sample = new ArrayList<>();
-            for (ClassEntry value : values) {
-                sample.add(value.className);
-                if (sample.size() >= limit) {
-                    break;
-                }
-            }
-            return sample.toString();
-        }
-
-        private List<Integer> executedLines(IClassCoverage classCoverage) {
-            int firstLine = classCoverage.getFirstLine();
-            int lastLine = classCoverage.getLastLine();
-            if (firstLine < 0 || lastLine < firstLine) {
-                return Collections.emptyList();
-            }
-
-            List<Integer> lines = new ArrayList<>();
-            for (int line = firstLine; line <= lastLine; line++) {
-                int status = classCoverage.getLine(line).getStatus();
-                if (status != ICounter.EMPTY && status != ICounter.NOT_COVERED) {
-                    lines.add(line);
-                }
-            }
-            return lines;
-        }
-
-        private String resolveSourcePath(IClassCoverage classCoverage) {
-            String sourceFile = classCoverage.getSourceFileName();
-            if (sourceFile == null || sourceFile.trim().isEmpty()) {
-                return normalizePath(classCoverage.getName() + ".java");
-            }
-
-            String packageName = classCoverage.getPackageName();
-            String relativePath = packageName == null || packageName.isEmpty()
-                    ? sourceFile
-                    : packageName + "/" + sourceFile;
-            File localSource = new File(System.getProperty("user.dir"), "src/main/java/" + relativePath);
-            if (localSource.exists()) {
-                return normalizePath(localSource.getAbsolutePath());
-            }
-            return normalizePath(relativePath);
-        }
-
         private Map<String, List<Integer>> toSortedMap(Map<String, Set<Integer>> raw) {
             List<String> files = new ArrayList<>(raw.keySet());
             Collections.sort(files);
@@ -563,6 +870,74 @@ public final class KeployDedupAgent {
                 sorted.put(file, lines);
             }
             return sorted;
+        }
+
+        // pollBytecodeFrame returns a "CLASSES <b64tag> <b64manifest> <b64zip>"
+        // line to send over the collector channel (:36340) IF the coverage manifest
+        // has grown since the last send, else null. The raw-TCP collector channel
+        // is the ONLY app->proxy path that survives the replay agent's mock
+        // interception (an HTTPS upload gets 502'd as an unmatched outbound mock),
+        // so the bytecode rides it alongside the COV frames. buildTag/manifest/zip
+        // are base64'd to keep the whole frame on one line. Called after each
+        // capture; a no-op until the manifest grows or when KEPLOY_BUILD_TAG unset.
+        String pollBytecodeFrame() {
+            final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
+            if (buildTag.isEmpty()) {
+                return null;
+            }
+            final int size = liveManifest.size();
+            if (size == 0) {
+                return null; // no classes hit yet
+            }
+            // Send the constant class zip once per connection; after that, only a
+            // manifest-only frame when the manifest actually grows. This removes
+            // the old per-growth zip resend (O(n^2) bytes) and keeps any single
+            // line small once the zip is out, so the collector's line reader never
+            // trips its max-line cap mid-replay.
+            final boolean sendZip = !bytecodeSentThisConnection;
+            if (!sendZip && size <= lastUploadedManifestSize.get()) {
+                return null; // zip already sent and manifest unchanged since last send
+            }
+            try {
+                Map<String, ManifestEntry> snapshot = new LinkedHashMap<>(liveManifest);
+                String manifestJson = GSON.toJson(snapshot);
+                String frame;
+                if (sendZip) {
+                    byte[] zip = zipIndexedClasses();
+                    frame = encodeBytecodeFrame(buildTag, manifestJson, zip);
+                    bytecodeSentThisConnection = true;
+                    log(Level.INFO, "Keploy dedup: sending CLASSES frame over collector channel "
+                            + "(zip once/connection, classes=" + size + ", zipBytes=" + zip.length + ")", null);
+                } else {
+                    // Manifest-only update — the collector keeps the zip it already
+                    // stored for this build tag and just refreshes the manifest.
+                    frame = encodeBytecodeFrame(buildTag, manifestJson, null);
+                    log(Level.FINE, "Keploy dedup: sending MANIFEST frame (manifest-only update, classes="
+                            + size + ")", null);
+                }
+                lastUploadedManifestSize.set(size);
+                return frame;
+            } catch (Throwable e) {
+                log(Level.WARNING, "Keploy dedup: failed to build bytecode frame: " + e.getMessage(), null);
+                return null;
+            }
+        }
+
+        // zipIndexedClasses packs every indexed app .class (already in memory as
+        // ClassEntry.bytes) into a zip keyed by "<vmClassName>.class".
+        private byte[] zipIndexedClasses() throws IOException {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(256 * 1024);
+            int n = 0;
+            try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                for (ClassEntry entry : coverageIndex.entries()) {
+                    zos.putNextEntry(new ZipEntry(entry.className + ".class"));
+                    zos.write(entry.bytes);
+                    zos.closeEntry();
+                    n++;
+                }
+            }
+            log(Level.INFO, "Keploy dedup: zipIndexedClasses entries=" + n + " bytes=" + baos.size(), null);
+            return baos.toByteArray();
         }
     }
 
@@ -1043,8 +1418,8 @@ public final class KeployDedupAgent {
             this.socketFile = socketFile;
         }
 
-        private void publish(String testId, Map<String, List<Integer>> executedLinesByFile) throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, executedLinesByFile))
+        private void publish(String testId, Map<String, List<Integer>> executedProbesByClass) throws IOException {
+            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass))
                     .getBytes(StandardCharsets.UTF_8);
 
             try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
@@ -1056,14 +1431,24 @@ public final class KeployDedupAgent {
         }
     }
 
+    // DedupPayload is the per-test wire payload (one COV frame).
+    //
+    // NOTE ON THE FIELD NAME: `executedLinesByFile` is a HISTORICAL wire key. Its
+    // value is now the set of executed JaCoCo PROBE indices per VM class name
+    // ({"com/foo/Bar": [probeIdx...]}) — NOT source lines by file. The key is kept
+    // deliberately for backward compatibility with consumers that deserialize by
+    // this exact name (enterprise dedup #2188, k8s-proxy #574), which treat the
+    // value opaquely as key -> int-set. Renaming the JSON key is a coordinated
+    // cross-repo break and must land in lockstep on all three sides.
     private static final class DedupPayload {
 
         private final String id;
+        // Probes-by-class (see class note); serialized under the historical key.
         private final Map<String, List<Integer>> executedLinesByFile;
 
-        private DedupPayload(String id, Map<String, List<Integer>> executedLinesByFile) {
+        private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass) {
             this.id = id;
-            this.executedLinesByFile = executedLinesByFile;
+            this.executedLinesByFile = executedProbesByClass;
         }
     }
 
