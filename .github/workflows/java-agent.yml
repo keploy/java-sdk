@@ -1,8 +1,10 @@
 name: Java Agent
 
 on:
+  # Deliberately unfiltered: the Woodpecker pipeline this replaced ran the
+  # matrix on every pull request regardless of target, and this repo has
+  # several long-lived integration branches that would otherwise get no CI.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 

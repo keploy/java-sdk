@@ -1,31 +1,52 @@
 name: Release
 
-# Triggers on a v*.*.* tag push and performs the complete release:
-# builds and smoke tests the agent, signs and publishes it to Maven
-# Central, waits for it to land on repo1, and only then creates the
-# GitHub Release with the exact same signed artifacts attached.
+# Triggers on a v*.*.* tag push and performs the complete release: builds
+# and signs the agent, smoke tests the exact jar that will ship, publishes
+# it to Maven Central, and creates the GitHub Release from those same
+# signed artifacts.
 #
-# Ordering is deliberate: Central publishing is irreversible and is the
-# release that matters, so it happens first and gates everything after
-# it. A failed Central publish therefore leaves no GitHub Release behind,
-# which is what previously allowed a version to exist on GitHub but not
-# on Central (v2.0.6).
+# Split into two jobs on purpose. Publishing to Central is irreversible
+# and non-idempotent — the Portal rejects a re-upload of a version that
+# already exists — so everything that can fail cheaply (build, smoke test,
+# asset staging) runs *before* it, and everything after it lives in a
+# separate job that can be re-run on its own without touching Central.
+#
+# This matters because the one release incident this repo has actually
+# had, on v2.0.6, was exactly that shape: the Woodpecker deploy succeeded
+# and the pipeline then failed in the repo1 wait step (a ${VERSION}
+# templating bug, fixed in c1b96c1). v2.0.6 is on Central and is fine. Had
+# the wait step been able to strand the release, that cosmetic failure
+# would have been unrecoverable.
+#
+# workflow_dispatch is available as a manual recovery path; run it from
+# the tag ref, not a branch.
 
 on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+# Never let two releases of the same ref overlap. cancel-in-progress is
+# deliberately false: cancelling mid-deploy is the one thing that could
+# strand a half-published version.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  publish:
+    name: Build, sign and publish to Maven Central
     runs-on: ubuntu-latest
-    # Central's publishing plugin blocks until the deployment reaches the
-    # PUBLISHED state (waitMaxTime=7200 in the root pom), and the repo1
-    # poll below adds up to 30 more minutes.
+    # The pom's central-publishing-maven-plugin blocks until Central
+    # reports the deployment PUBLISHED (waitMaxTime=7200, i.e. 120
+    # minutes), plus the build and smoke test ahead of it.
     timeout-minutes: 150
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     env:
       # Public key id of the Keploy release signing key. Selects the right
       # secret key when more than one is present in the keyring.
@@ -36,9 +57,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve release version
+      - name: Resolve and validate release version
         id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        # Runs before the signing key is imported, and rejects anything
+        # that is not a plain vMAJOR.MINOR.PATCH[-suffix] tag. The tag name
+        # is attacker-influenced (git accepts backticks and semicolons in
+        # ref names, and `v*.*.*` happily matches them), and it is
+        # interpolated into Maven arguments below.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "Refusing to release from ref '${GITHUB_REF_NAME}'." >&2
+            echo "Expected a tag of the form vMAJOR.MINOR.PATCH[-suffix]." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -47,8 +81,11 @@ jobs:
           java-version: '17'
           cache: maven
           # Writes ~/.m2/settings.xml with a `central` server entry that
-          # resolves from the env vars named below, and imports the
-          # release signing key (removed again when the job ends).
+          # resolves from the env vars named below, and imports the release
+          # signing key (removed again when the job ends). The key must be
+          # stored as a plain ASCII-armored block: unlike the Woodpecker
+          # script this replaces, setup-java has no base64 / escaped-newline
+          # fallback.
           server-id: central
           server-username: CENTRAL_USERNAME
           server-password: CENTRAL_PASSWORD
@@ -56,44 +93,116 @@ jobs:
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Set release version in poms
+        # Pinned: an unqualified `versions:set` resolves the latest plugin
+        # from Central at run time, which would execute unreviewed code in
+        # the job that holds the signing key.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: >-
-          mvn -B -ntp versions:set
-          -DnewVersion=${{ steps.ver.outputs.version }}
+          mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.21.0:set
+          -DnewVersion="$VERSION"
           -DprocessAllModules=true
           -DgenerateBackupPoms=false
 
-      - name: Build and smoke test the agent
-        # Pre-flight gate on a plain (unsigned) build: publishing to Central
-        # cannot be undone, so the agent is proven to actually attach and
-        # run before anything leaves this job.
+      - name: Build and sign
+        # The `release` profile attaches sources + javadoc and signs every
+        # artifact with maven-gpg-plugin.
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: >-
+          mvn -B -ntp -P release -DskipTests clean verify
+          -Dgpg.keyname="$GPG_KEY_ID"
+
+      - name: Smoke test the release jar
+        # Runs against the artifact built above, which — because the deploy
+        # step below reuses this same target/ without cleaning — is the
+        # exact jar that gets published. maven-shade-plugin is idempotent
+        # here (it shades from original-*.jar), so re-running the lifecycle
+        # for `deploy` reproduces this jar byte for byte.
+        run: ./scripts/smoke-javaagent.sh
+
+      - name: Stage release assets
+        # Deliberately ahead of the Central deploy: this is fiddly,
+        # failure-prone file shuffling, and it must not be able to fail
+        # after an irreversible publish.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          mvn -B -ntp -DskipTests clean verify
-          ./scripts/smoke-javaagent.sh
+          set -euo pipefail
+          mkdir -p release-assets
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" release-assets/
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}-sources.jar" release-assets/
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}-javadoc.jar" release-assets/
+          # Unversioned copy so docs and scripts can link a stable filename,
+          # with a matching signature so it is verifiable under that name too.
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" "release-assets/keploy-sdk.jar"
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar.asc" "release-assets/keploy-sdk.jar.asc"
+          # The deployed poms are the source poms verbatim
+          # (createDependencyReducedPom=false), and the module pom declares
+          # the parent, so both are needed to consume these assets offline.
+          cp "keploy-sdk/pom.xml" "release-assets/keploy-sdk-${VERSION}.pom"
+          cp "pom.xml" "release-assets/java-sdk-${VERSION}.pom"
+          # Signatures. No nullglob: an unmatched glob must fail the job
+          # rather than quietly publish an unverifiable release.
+          cp keploy-sdk/target/*.asc release-assets/
+          cp target/*.asc release-assets/
+          # Belt and braces — assert every artifact shipped is signed.
+          missing=0
+          for f in release-assets/*.jar release-assets/*.pom; do
+            if [[ ! -f "${f}.asc" ]]; then
+              echo "Unsigned release asset: ${f}" >&2
+              missing=1
+            fi
+          done
+          [[ "$missing" -eq 0 ]] || exit 1
+          ls -la release-assets/
+
+      - name: Upload release assets
+        # Persisted so the github-release job below — and any later re-run
+        # of it — works from the exact artifacts that were validated here.
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Publish to Maven Central
-        # Single clean build so the artifacts staged for the GitHub Release
-        # below are byte-identical to the ones published to Central. The
-        # `release` profile attaches sources + javadoc, signs everything
-        # with maven-gpg-plugin, and deploys via central-publishing-maven-plugin.
+        # Last step in the job, and the point of no return. No `clean`: this
+        # reuses and republishes the artifacts smoke tested above.
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
         run: >-
-          mvn -B -ntp -P release -DskipTests clean deploy
+          mvn -B -ntp -P release -DskipTests deploy
           -Dgpg.keyname="$GPG_KEY_ID"
-          -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
-          -Dgpg.useagent=false
+
+  github-release:
+    name: Publish GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    # Bounded by the repo1 poll below. Kept in its own job so that a slow
+    # Central sync fails here, re-runnably, instead of stranding a release.
+    timeout-minutes: 45
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
 
       - name: Wait for artifact on Maven Central
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.publish.outputs.version }}
         run: |
           set -euo pipefail
           artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
           echo "Waiting for $artifact_url"
           for attempt in $(seq 1 60); do
-            if curl -fsI "$artifact_url" >/dev/null; then
+            # --max-time so a stalled connection cannot blow past the
+            # intended 30-minute bound.
+            if curl -fsI --max-time 30 "$artifact_url" >/dev/null; then
               echo "Released artifact is available on Maven Central"
               exit 0
             fi
@@ -101,55 +210,38 @@ jobs:
             sleep 30
           done
           echo "Released artifact is not available on Maven Central after 30 minutes"
+          echo "The Central publish itself succeeded; re-run this job once it syncs."
           exit 1
-
-      - name: Stage release assets
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          set -euxo pipefail
-          # Non-matching globs expand to nothing rather than to the literal
-          # pattern, so the signature copy below cannot create junk files.
-          shopt -s nullglob
-          mkdir -p release-assets
-          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" "release-assets/keploy-sdk-${VERSION}.jar"
-          # Unversioned copy so docs and scripts can link a stable filename.
-          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" "release-assets/keploy-sdk.jar"
-          cp "keploy-sdk/target/keploy-sdk-${VERSION}-sources.jar" "release-assets/"
-          cp "keploy-sdk/target/keploy-sdk-${VERSION}-javadoc.jar" "release-assets/"
-          cp "keploy-sdk/pom.xml" "release-assets/keploy-sdk-${VERSION}.pom"
-          # Detached GPG signatures, so the release assets can be verified
-          # against the same key that signed the Central artifacts.
-          for f in keploy-sdk/target/keploy-sdk-"${VERSION}"*.jar.asc; do
-            cp "$f" "release-assets/"
-          done
-          ls -la release-assets/
 
       - name: Publish GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           # Pre-release flag: anything with a hyphen suffix (e.g. v2.0.6-rc1)
           prerelease_flag=()
           if [[ "$TAG" == *-* ]]; then
             prerelease_flag=(--prerelease)
           fi
-          # Idempotent publish: if a previous run already created the
-          # release record, --clobber overwrites partial assets so a
-          # rerun ends in the same state either way.
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # Idempotent re-run: --clobber overwrites partial assets so the
+            # job ends in the same state either way. A release left as a
+            # draft by an interrupted run is promoted, otherwise it would
+            # stay invisible forever.
             echo "Release $TAG already exists — uploading assets with --clobber"
-            gh release upload "$TAG" \
-              --repo "${{ github.repository }}" \
-              --clobber \
-              release-assets/*
+            gh release upload "$TAG" --repo "$REPO" --clobber release-assets/*
+            if [[ "$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)" == "true" ]]; then
+              echo "Promoting draft release $TAG"
+              gh release edit "$TAG" --repo "$REPO" --draft=false
+            fi
           else
             gh release create "$TAG" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --title "Java SDK $TAG" \
-              --target "${{ github.sha }}" \
+              --target "$SHA" \
               --generate-notes \
               "${prerelease_flag[@]}" \
               release-assets/*
