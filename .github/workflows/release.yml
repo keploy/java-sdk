@@ -1,9 +1,15 @@
 name: Release
 
-# Triggers on a v*.*.* tag push and creates a GitHub Release with the
-# Keploy Java agent jar attached as a downloadable asset. Maven Central
-# publishing happens in parallel via the Woodpecker pipeline at
-# .woodpecker/release.yml — this workflow does not touch Central.
+# Triggers on a v*.*.* tag push and performs the complete release:
+# builds and smoke tests the agent, signs and publishes it to Maven
+# Central, waits for it to land on repo1, and only then creates the
+# GitHub Release with the exact same signed artifacts attached.
+#
+# Ordering is deliberate: Central publishing is irreversible and is the
+# release that matters, so it happens first and gates everything after
+# it. A failed Central publish therefore leaves no GitHub Release behind,
+# which is what previously allowed a version to exist on GitHub but not
+# on Central (v2.0.6).
 
 on:
   push:
@@ -16,6 +22,14 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Central's publishing plugin blocks until the deployment reaches the
+    # PUBLISHED state (waitMaxTime=7200 in the root pom), and the repo1
+    # poll below adds up to 30 more minutes.
+    timeout-minutes: 150
+    env:
+      # Public key id of the Keploy release signing key. Selects the right
+      # secret key when more than one is present in the keyring.
+      GPG_KEY_ID: 8541784E4EC36FB8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +46,14 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
+          # Writes ~/.m2/settings.xml with a `central` server entry that
+          # resolves from the env vars named below, and imports the
+          # release signing key (removed again when the job ends).
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Set release version in poms
         run: >-
@@ -40,30 +62,67 @@ jobs:
           -DprocessAllModules=true
           -DgenerateBackupPoms=false
 
-      - name: Build agent jar with sources and javadoc
-        # `release` profile attaches the source jar; the inner pom always
-        # attaches the javadoc jar. -Dgpg.skip=true keeps the signing step
-        # in the release profile inert (signing happens on Woodpecker
-        # where the GPG key is wired up).
-        run: mvn -B -ntp -P release -DskipTests -Dgpg.skip=true clean verify
+      - name: Build and smoke test the agent
+        # Pre-flight gate on a plain (unsigned) build: publishing to Central
+        # cannot be undone, so the agent is proven to actually attach and
+        # run before anything leaves this job.
+        run: |
+          mvn -B -ntp -DskipTests clean verify
+          ./scripts/smoke-javaagent.sh
 
-      - name: Smoke test java agent
-        run: ./scripts/smoke-javaagent.sh
+      - name: Publish to Maven Central
+        # Single clean build so the artifacts staged for the GitHub Release
+        # below are byte-identical to the ones published to Central. The
+        # `release` profile attaches sources + javadoc, signs everything
+        # with maven-gpg-plugin, and deploys via central-publishing-maven-plugin.
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: >-
+          mvn -B -ntp -P release -DskipTests clean deploy
+          -Dgpg.keyname="$GPG_KEY_ID"
+          -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
+          -Dgpg.useagent=false
+
+      - name: Wait for artifact on Maven Central
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
+          echo "Waiting for $artifact_url"
+          for attempt in $(seq 1 60); do
+            if curl -fsI "$artifact_url" >/dev/null; then
+              echo "Released artifact is available on Maven Central"
+              exit 0
+            fi
+            echo "Artifact not available yet, retrying in 30s ($attempt/60)"
+            sleep 30
+          done
+          echo "Released artifact is not available on Maven Central after 30 minutes"
+          exit 1
 
       - name: Stage release assets
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euxo pipefail
-          version="${{ steps.ver.outputs.version }}"
+          # Non-matching globs expand to nothing rather than to the literal
+          # pattern, so the signature copy below cannot create junk files.
+          shopt -s nullglob
           mkdir -p release-assets
-          cp "keploy-sdk/target/keploy-sdk-${version}.jar" "release-assets/keploy-sdk-${version}.jar"
-          cp "keploy-sdk/target/keploy-sdk-${version}.jar" "release-assets/keploy-sdk.jar"
-          if [[ -f "keploy-sdk/target/keploy-sdk-${version}-sources.jar" ]]; then
-            cp "keploy-sdk/target/keploy-sdk-${version}-sources.jar" "release-assets/"
-          fi
-          if [[ -f "keploy-sdk/target/keploy-sdk-${version}-javadoc.jar" ]]; then
-            cp "keploy-sdk/target/keploy-sdk-${version}-javadoc.jar" "release-assets/"
-          fi
-          cp "keploy-sdk/pom.xml" "release-assets/keploy-sdk-${version}.pom"
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" "release-assets/keploy-sdk-${VERSION}.jar"
+          # Unversioned copy so docs and scripts can link a stable filename.
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}.jar" "release-assets/keploy-sdk.jar"
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}-sources.jar" "release-assets/"
+          cp "keploy-sdk/target/keploy-sdk-${VERSION}-javadoc.jar" "release-assets/"
+          cp "keploy-sdk/pom.xml" "release-assets/keploy-sdk-${VERSION}.pom"
+          # Detached GPG signatures, so the release assets can be verified
+          # against the same key that signed the Central artifacts.
+          for f in keploy-sdk/target/keploy-sdk-"${VERSION}"*.jar.asc; do
+            cp "$f" "release-assets/"
+          done
           ls -la release-assets/
 
       - name: Publish GitHub Release
