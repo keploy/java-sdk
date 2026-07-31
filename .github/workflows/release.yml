@@ -67,9 +67,19 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+          # Hyphens are allowed inside the pre-release identifier (v2.1.0-alpha-1
+          # is legal and `v*.*.*` matches it). Leading zeros are not: 02.1.0 and
+          # 2.1.0 are distinct, permanent coordinates on Central.
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Refusing to release from ref '${GITHUB_REF_NAME}'." >&2
-            echo "Expected a tag of the form vMAJOR.MINOR.PATCH[-suffix]." >&2
+            echo "Expected a tag of the form vMAJOR.MINOR.PATCH[-prerelease]," >&2
+            echo "with no leading zeros in the numeric components." >&2
+            exit 1
+          fi
+          # Central only accepts release versions, and a SNAPSHOT tag would
+          # otherwise burn a full build and smoke test before being rejected.
+          if [[ "$version" == *[Ss][Nn][Aa][Pp][Ss][Hh][Oo][Tt]* ]]; then
+            echo "Refusing to release a SNAPSHOT version: ${version}" >&2
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -115,10 +125,12 @@ jobs:
 
       - name: Smoke test the release jar
         # Runs against the artifact built above, which — because the deploy
-        # step below reuses this same target/ without cleaning — is the
-        # exact jar that gets published. maven-shade-plugin is idempotent
-        # here (it shades from original-*.jar), so re-running the lifecycle
-        # for `deploy` reproduces this jar byte for byte.
+        # step below reuses this same target/ without cleaning — is the exact
+        # jar that gets published: on the second lifecycle pass `jar:jar` and
+        # `source:jar-no-fork` skip as up-to-date, so the agent jar and the
+        # sources jar are byte-identical to the ones tested here. (The javadoc
+        # jar is regenerated and differs by its embedded generation timestamp;
+        # it is content-equivalent and carries its own signature.)
         run: ./scripts/smoke-javaagent.sh
 
       - name: Stage release assets
@@ -166,10 +178,35 @@ jobs:
           path: release-assets/
           retention-days: 7
           if-no-files-found: error
+          # v4 artifact names are immutable within a run and a partial re-run
+          # does not clear them, so without this a re-run of a failed publish
+          # job would 409 here — before it ever reached the deploy.
+          overwrite: true
+
+      - name: Check whether this version is already published
+        id: central
+        # Makes the deploy idempotent, which is what makes recovery work at
+        # all. Central rejects a re-upload of an existing version, so without
+        # this any whole-run retrigger — a re-pushed tag, "Re-run all jobs",
+        # or the workflow_dispatch below — would dead-end here and skip the
+        # github-release job forever, permanently stranding the release it
+        # was supposed to rescue.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
+          if curl -fsI --max-time 30 "$url" >/dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "${VERSION} is already on Maven Central — skipping the deploy."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish to Maven Central
         # Last step in the job, and the point of no return. No `clean`: this
         # reuses and republishes the artifacts smoke tested above.
+        if: steps.central.outputs.already != 'true'
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
@@ -199,18 +236,23 @@ jobs:
           set -euo pipefail
           artifact_url="https://repo.maven.apache.org/maven2/io/keploy/keploy-sdk/${VERSION}/keploy-sdk-${VERSION}.jar"
           echo "Waiting for $artifact_url"
-          for attempt in $(seq 1 60); do
-            # --max-time so a stalled connection cannot blow past the
-            # intended 30-minute bound.
+          # Bounded by elapsed time, not by an iteration count: with
+          # `--max-time 30` on the request, 60 iterations of request+sleep
+          # could run for a full hour and be killed by the job timeout
+          # before the actionable message below ever printed.
+          deadline=$(( SECONDS + 1800 ))
+          attempt=0
+          while (( SECONDS < deadline )); do
+            attempt=$(( attempt + 1 ))
             if curl -fsI --max-time 30 "$artifact_url" >/dev/null; then
               echo "Released artifact is available on Maven Central"
               exit 0
             fi
-            echo "Artifact not available yet, retrying in 30s ($attempt/60)"
+            echo "Artifact not available yet, retrying in 30s (attempt ${attempt})"
             sleep 30
           done
           echo "Released artifact is not available on Maven Central after 30 minutes"
-          echo "The Central publish itself succeeded; re-run this job once it syncs."
+          echo "The Central publish itself succeeded — re-run this job once it syncs."
           exit 1
 
       - name: Publish GitHub Release

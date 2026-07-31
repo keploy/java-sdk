@@ -8,6 +8,13 @@ on:
   push:
     branches: [main]
 
+# Superseded runs are pointless work: a push to a PR branch makes the
+# previous run's result irrelevant. Matters more now that the trigger above
+# is unfiltered and this repo carries a lot of long-lived branches.
+concurrency:
+  group: java-agent-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: JDK ${{ matrix.java-version }}
