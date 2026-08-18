@@ -62,7 +62,12 @@
         <dependency>
             <groupId>org.jacoco</groupId>
             <artifactId>org.jacoco.core</artifactId>
-            <version>0.8.12</version>
+            <!-- Keep in step with k8s-proxy dedupinject.BundledJaCoCoVersion: this
+                 dependency is what shades ASM into keploy-sdk.jar, and that shaded
+                 ASM is an independent ceiling on the Java bytecode dynamic dedup can
+                 instrument. While this sat on 0.8.12 it, not the jacocoagent in the
+                 init image, was what capped dedup at Java 22. -->
+            <version>0.8.15</version>
         </dependency>
         <dependency>
             <groupId>com.kohlschutter.junixsocket</groupId>
