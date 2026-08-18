@@ -8,6 +8,10 @@ The repository contains only the dedup-focused `keploy-sdk` module.
 
 Supported runtimes in CI today are Java 8, 17, and 21.
 
+Dynamic dedup works on applications compiled up to **Java 26**. See
+[Supported Java versions](#supported-java-versions) for where that ceiling comes
+from and how to raise it.
+
 ## How It Works
 
 Keploy Enterprise drives dynamic dedup per testcase.
@@ -115,6 +119,54 @@ Keploy Enterprise and the Java SDK communicate over these Unix sockets:
 
 Without a shared `/tmp`, dedup will not work inside containers because Enterprise and the Java process will be writing to different socket paths.
 
+## Supported Java versions
+
+Dynamic dedup can only handle bytecode that **both** of its jars can read, so the
+supported ceiling is the lower of two limits — not one:
+
+| Component | Role | Reads up to |
+| --- | --- | --- |
+| `jacocoagent.jar` (k8s-proxy init image) | analyzes coverage | Java 26 (JaCoCo 0.8.15) |
+| `keploy-sdk.jar` (this repo) | instruments the app, via the ASM shaded in through `org.jacoco:org.jacoco.core` | Java 26 (jacoco.core 0.8.15) |
+
+Both currently sit at **Java 26**, so that is the effective ceiling.
+
+### Why this repo is part of the ceiling
+
+It is easy to assume the JaCoCo agent alone decides this. It does not. The dedup
+agent here does its own instrumentation through the ASM that `jacoco.core` brings
+in, and ASM refuses class files newer than the release it was built against. So
+the `jacoco.core` version in `keploy-sdk/pom.xml` is an **independent limit**, and
+for a long time it was the *lower* one: while it sat on 0.8.12 it capped dedup at
+Java 22 even though the agent could already read more.
+
+### What happens above the ceiling
+
+Nothing crashes, which is what makes it worth documenting. The app is instrumented,
+the replay runs, and every test passes — coverage is simply never produced, so no
+duplicates are found. That is indistinguishable from "this app genuinely has no
+duplicates" unless something says otherwise, which is why k8s-proxy now detects the
+app's real class-file version from the classes this agent uploads and reports the
+reason instead of failing silently.
+
+### Raising it
+
+1. Bump `org.jacoco:org.jacoco.core` in `keploy-sdk/pom.xml`, and cut a release.
+2. In k8s-proxy, bump `KEPLOY_SDK_VERSION` (`build/dedup-jars/build.sh`) to that
+   release, and set `BundledJaCoCoVersion`, `JaCoCoOfficialMaxJava` and
+   `SDKShadedASMMaxJava` in `pkg/platform/dedupinject/jacocompat.go`.
+
+Take the Java number from JaCoCo's
+[release notes](https://www.jacoco.org/jacoco/trunk/doc/changes.html) — the
+**officially supported** version, not the "experimental support for Java N+1 class
+files" one. Each JaCoCo release ships an ASM that *declares* one version beyond
+what it accepts by default, so reading the highest declared `Opcodes.V<n>`
+over-states real support by one. k8s-proxy's image build checks the constant
+against the ASM actually inside the jar and fails the build if it over-promises.
+
+A scheduled k8s-proxy pipeline also fails when a newer JaCoCo is published, so this
+ceiling does not quietly fall behind again.
+
 ## Configuration
 
 - `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
@@ -130,3 +182,4 @@ For a working reference, see the Java dedup sample in `keploy/samples-java`:
 - `samples-java/java-dedup`
 
 That sample is used in CI to validate Java dynamic dedup for JDK 8, 17, and 21 across native, classpath, Docker, distroless, and restricted Docker runs.
+The CI matrix is narrower than the supported range: it pins the runtimes the sample is exercised on, not the ceiling — see [Supported Java versions](#supported-java-versions).
