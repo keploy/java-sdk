@@ -1,10 +1,19 @@
 name: Java Agent
 
 on:
+  # Deliberately unfiltered: the Woodpecker pipeline this replaced ran the
+  # matrix on every pull request regardless of target, and this repo has
+  # several long-lived integration branches that would otherwise get no CI.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
+
+# Superseded runs are pointless work: a push to a PR branch makes the
+# previous run's result irrelevant. Matters more now that the trigger above
+# is unfiltered and this repo carries a lot of long-lived branches.
+concurrency:
+  group: java-agent-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
