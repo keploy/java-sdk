@@ -40,9 +40,15 @@ class JsonTest {
         assertEquals("nested deeper than 64 at offset 65", assertThrows(IllegalArgumentException.class, () -> Json.parse(deeper)).getMessage());
     }
 
+    @Test
+    void readsEveryDigit() {
+        assertEquals(new BigDecimal("1234567890.0987654321e9"), Json.parse("1234567890.0987654321e9"));
+        assertEquals(Collections.singletonMap("s", "a b"), Json.parse("{\"s\":\"a b\"}"));
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"", " ", "{", "{\"a\"", "{\"a\":", "{\"a\":1", "{\"a\":1,}", "{a:1}", "{\"a\" 1}", "[1", "[1,]", "[1 2]",
-        "\"abc", "\"a\\", "\"a\\x\"", "\"\\u12\"", "\"\\u12g4\"", "\"\\u+123\"", "\"\\u０１２３\"", "\"a\u0001\"", "tru", "fals", "nul", "nulL",
+    @ValueSource(strings = {"", " ", "{", "{\"a\"", "{\"a\":", "{\"a\":1", "{\"a\":1,}", "{a:1}", "{a\":1}", "{\"a\" 1}", "[1", "[1,]", "[1 2]",
+        "\"abc", "\"a\\", "\"a\\x\"", "\"\\u12\"", "\"\\u12g4\"", "\"\\u+123\"", "\"\\u０１２３\"", "\"a\u0001\"", "\"a\u001f\"", "tru", "fals", "nul", "nulL",
         "01", "+1", "-", ".5", "1.", "1e", "1e+", "--1", "1 2", "{}x", "x"})
     void refusesWhatIsNoJson(String s) {
         assertThrows(IllegalArgumentException.class, () -> Json.parse(s));

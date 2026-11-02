@@ -135,6 +135,16 @@ class ExtensionTest {
     }
 
     @Test
+    void anEmptyActionIsNoAction() {
+        agent.answer = (p, b) -> "charges()".equals(b.get("name")) && (p.endsWith("begin") || p.endsWith("end"))
+                ? new FakeAgent.Answer(200, "{\"v\":1,\"status\":\"ok\",\"action\":\"\"}")
+                : FakeAgent.ok(p, b);
+        assertEquals(map("charges()", "SUCCESSFUL"), results(run(Fixtures.Payments.class)));
+        assertEquals(Arrays.asList("claim . " + project, "begin " + F + "Payments::charges()", "charges", "end " + F + "Payments::charges() passed"),
+                log());
+    }
+
+    @Test
     void failsATestKeployFailedAtItsEnd() {
         agent.answer = (p, b) -> p.endsWith("end") && "passes()".equals(b.get("name"))
                 ? new FakeAgent.Answer(200, "{\"v\":1,\"status\":\"ok\",\"action\":\"fail\",\"reason\":\"keploy: GET /x had no recorded answer\"}")
