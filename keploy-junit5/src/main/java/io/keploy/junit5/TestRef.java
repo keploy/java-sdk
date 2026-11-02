@@ -10,7 +10,9 @@ import org.junit.platform.engine.UniqueId;
  * the test's class (its binary name, Outer$Inner for a @Nested class); name
  * is JUnit's own name of the method within it, from the test's unique ID:
  * {@code orders()}, {@code price(java.lang.String)}, and a template's
- * invocation index after it, {@code price(java.lang.String)[2]}.
+ * invocation index after it, {@code price(java.lang.String)[2]}. A test run
+ * through a JUnit Platform @Suite is named as when it runs directly: the
+ * suite and its engine are not the test.
  */
 final class TestRef {
     final String file;
@@ -37,6 +39,7 @@ final class TestRef {
         for (UniqueId.Segment s : UniqueId.parse(uniqueId).getSegments()) {
             switch (s.getType()) {
                 case "engine":
+                case "suite":
                 case "class":
                 case "nested-class":
                     break;

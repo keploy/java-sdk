@@ -68,6 +68,12 @@
             <artifactId>junit-platform-testkit</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- The rows run tests through a JUnit Platform @Suite too. -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

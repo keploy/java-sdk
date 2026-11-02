@@ -75,9 +75,12 @@ nothing, and the suite runs as plain JUnit.
 - Its ID is `<class>::<method>`: the class's binary name
   (`com.shop.OrdersTest$Refunds` for a `@Nested` class) and JUnit's name of
   the method, with a parameterized or repeated test's invocation index:
-  `com.shop.OrdersTest::price(java.lang.String)[2]`.
+  `com.shop.OrdersTest::price(java.lang.String)[2]`. A test run through a
+  JUnit Platform `@Suite` has the same ID as when it runs directly.
 
-## Limits (each fails loudly; no test runs unjudged)
+## Limits
+
+Each of these fails loudly under keploy, so no Jupiter test runs unjudged:
 
 - One test JVM at a time: keploy refuses a second claim. Keep Surefire's
   `forkCount` at 1 (its default), and Gradle's `maxParallelForks` at 1.
@@ -90,9 +93,13 @@ nothing, and the suite runs as plain JUnit.
   so keploy cannot judge them one by one: the factory fails under keploy.
   Write them as `@ParameterizedTest`.
 - A test begun a second time in one JVM fails (a rerun, such as Surefire's
-  `rerunFailingTestsCount`): keploy names a test by its class and name.
+  `rerunFailingTestsCount`, or a second `@Suite` that selects the same test
+  class): keploy names a test by its class and name.
 - A JVM cannot change its own environment, so it does not export
   `KEPLOY_TEST_PID` to the processes its tests start; one of them that runs
   tests under a keploy SDK claims too, and keploy refuses it.
-- Only JUnit Jupiter tests: JUnit 4 tests run by the Vintage engine are not
-  wrapped.
+
+Only JUnit Jupiter tests are judged. The tests of every other JUnit Platform
+engine run unjudged, as without keploy: JUnit 4 tests on the Vintage engine,
+and Spock, Kotest, jqwik and Cucumber tests. This extension is a Jupiter
+extension, and no other engine calls it; their calls are the test JVM's.

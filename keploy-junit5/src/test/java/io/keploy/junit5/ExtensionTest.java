@@ -234,6 +234,39 @@ class ExtensionTest {
                 "begin " + F + "Named$Inner::inner()", "end " + F + "Named$Inner::inner() passed"), log());
     }
 
+    /** Runs suite classes through JUnit's suite engine, keploy-junit5 loaded for the whole run. */
+    static List<Event> suites(Class<?>... suites) {
+        EngineTestKit.Builder b = EngineTestKit.engine("junit-platform-suite").configurationParameter(KeployExtension.AUTODETECT, "true");
+        for (Class<?> c : suites) {
+            b.selectors(DiscoverySelectors.selectClass(c));
+        }
+        return b.execute().allEvents().list();
+    }
+
+    @Test
+    void namesATestRunThroughASuiteAsWhenItRunsDirectly() {
+        Map<String, String> r = results(suites(Fixtures.NamedSuite.class));
+        assertEquals("SUCCESSFUL", r.get("inner()"));
+        assertTrue(r.get("dynamic()").startsWith("FAILED: keploy: keploy-junit5 begins and ends each test at JUnit's BeforeEach and AfterEach"
+                + " callbacks, and cannot name [engine:junit-platform-suite]/[suite:" + F + "NamedSuite]/[engine:junit-jupiter]/[class:" + F
+                + "Named]/[test-factory:dynamic()] as one test (a test-factory;"), r.get("dynamic()"));
+        assertEquals(Arrays.asList("claim . " + project,
+                "begin " + F + "Named::price(int)[1]", "end " + F + "Named::price(int)[1] passed",
+                "begin " + F + "Named::price(int)[2]", "end " + F + "Named::price(int)[2] passed",
+                "begin " + F + "Named::repeats()[1]", "end " + F + "Named::repeats()[1] passed",
+                "begin " + F + "Named::repeats()[2]", "end " + F + "Named::repeats()[2] passed",
+                "begin " + F + "Named$Inner::inner()", "end " + F + "Named$Inner::inner() passed"), log());
+    }
+
+    @Test
+    void failsATestTwoSuitesRunInOneJvm() {
+        Map<String, String> r = results(suites(Fixtures.PaymentsSuite.class, Fixtures.PaymentsSuiteAgain.class));
+        assertEquals("FAILED: keploy: charges() in " + F + "Payments would begin a second time, and keploy names a test by its"
+                + " class and name: run each test once (no reruns, such as Surefire's rerunFailingTestsCount)", r.get("charges()"));
+        assertEquals(Arrays.asList("claim . " + project, "begin " + F + "Payments::charges()", "charges",
+                "end " + F + "Payments::charges() passed"), log());
+    }
+
     @Test
     void takesAnAbortAsSkipped() {
         assertEquals("passed", KeployExtension.outcome(null));

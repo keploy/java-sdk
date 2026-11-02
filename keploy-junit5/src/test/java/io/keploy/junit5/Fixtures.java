@@ -24,6 +24,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.platform.suite.api.SelectClasses;
+import org.junit.platform.suite.api.Suite;
 
 /** The suites the rows run through JUnit (EngineTestKit). Static nested: Surefire runs none of them itself. */
 final class Fixtures {
@@ -130,6 +132,23 @@ final class Fixtures {
             void inner() {
             }
         }
+    }
+
+    /** Named, run through a JUnit Platform suite. */
+    @Suite
+    @SelectClasses(Named.class)
+    static class NamedSuite {
+    }
+
+    /** Two suites that run one class: each test of it runs twice in one JVM. */
+    @Suite
+    @SelectClasses(Payments.class)
+    static class PaymentsSuite {
+    }
+
+    @Suite
+    @SelectClasses(Payments.class)
+    static class PaymentsSuiteAgain {
     }
 
     @ExtendWith(KeployExtension.class)
