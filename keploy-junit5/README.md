@@ -75,7 +75,10 @@ nothing, and the suite runs as plain JUnit.
 - Its ID is `<class>::<method>`: the class's binary name
   (`com.shop.OrdersTest$Refunds` for a `@Nested` class) and JUnit's name of
   the method, with a parameterized or repeated test's invocation index:
-  `com.shop.OrdersTest::price(java.lang.String)[2]`. A test run through a
+  `com.shop.OrdersTest::price(java.lang.String)[2]`. Each invocation of a
+  `@ParameterizedClass` (JUnit 5.13 and later) runs each of the class's tests
+  as a test of its own, with the class's invocation index before the method:
+  `com.shop.OrdersTest::[2]price(java.lang.String)`. A test run through a
   JUnit Platform `@Suite` has the same ID as when it runs directly.
 
 ## Limits

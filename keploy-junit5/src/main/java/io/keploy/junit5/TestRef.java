@@ -10,7 +10,11 @@ import org.junit.platform.engine.UniqueId;
  * the test's class (its binary name, Outer$Inner for a @Nested class); name
  * is JUnit's own name of the method within it, from the test's unique ID:
  * {@code orders()}, {@code price(java.lang.String)}, and a template's
- * invocation index after it, {@code price(java.lang.String)[2]}. A test run
+ * invocation index after it, {@code price(java.lang.String)[2]}. A test of a
+ * class template (a @ParameterizedClass, JUnit 5.13 and later) has the class's
+ * invocation index before it, {@code [2]price(java.lang.String)}, one per
+ * class template it runs in, outermost first: each invocation of the class
+ * runs each of its tests in a BeforeEach/AfterEach pair of its own. A test run
  * through a JUnit Platform @Suite is named as when it runs directly: the
  * suite and its engine are not the test.
  */
@@ -42,12 +46,15 @@ final class TestRef {
                 case "suite":
                 case "class":
                 case "nested-class":
+                case "class-template":
+                case "nested-class-template":
                     break;
                 case "method":
                 case "test-template":
                     name.append(s.getValue());
                     break;
                 case "test-template-invocation":
+                case "class-template-invocation":
                     name.append('[').append(s.getValue().replace("#", "")).append(']');
                     break;
                 default:

@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -13,6 +16,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -265,6 +271,66 @@ class ExtensionTest {
                 + " class and name: run each test once (no reruns, such as Surefire's rerunFailingTestsCount)", r.get("charges()"));
         assertEquals(Arrays.asList("claim . " + project, "begin " + F + "Payments::charges()", "charges",
                 "end " + F + "Payments::charges() passed"), log());
+    }
+
+    /**
+     * A @ParameterizedClass (JUnit 5.13 and later) runs each of its tests once per invocation of the class, each in a
+     * BeforeEach/AfterEach pair of its own: each is a test of its own, named with the class's invocation index. The
+     * rows compile on JUnit 5.10, which has no class templates, so the fixture is compiled here when JUnit has them.
+     */
+    @Test
+    void namesEachInvocationOfAParameterizedClassAsATestOfItsOwn(@TempDir Path tmp) throws Exception {
+        Class<?> annotation;
+        try {
+            annotation = Class.forName("org.junit.jupiter.params.ParameterizedClass");
+        } catch (ClassNotFoundException e) {
+            String v = Test.class.getPackage().getImplementationVersion();
+            assertTrue(v != null && v.matches("5\\.([0-9]|1[0-2])\\..*"), "JUnit " + v + " has no @ParameterizedClass");
+            return;
+        }
+        Path src = Files.createDirectories(tmp.resolve("src/classtemplates")).resolve("Prices.java");
+        Files.write(src, String.join("\n",
+                "package classtemplates;",
+                "import org.junit.jupiter.api.*;",
+                "import org.junit.jupiter.params.*;",
+                "import org.junit.jupiter.params.provider.ValueSource;",
+                "@ParameterizedClass @ValueSource(ints = {1, 2})",
+                "@TestMethodOrder(MethodOrderer.MethodName.class) @TestClassOrder(ClassOrderer.ClassName.class)",
+                "public class Prices {",
+                "  @Parameter int n;",
+                "  @Test void price() {}",
+                "  @ParameterizedTest @ValueSource(strings = {\"a\", \"b\"}) void tax(String s) {}",
+                "  @Nested @ParameterizedClass @ValueSource(strings = {\"x\", \"y\"}) class Coupons {",
+                "    @Parameter String c;",
+                "    @Test void coupon() {}",
+                "  }",
+                "  @Nested class Refunds { @Test void refund() {} }",
+                "}").getBytes(StandardCharsets.UTF_8));
+        StringBuilder cp = new StringBuilder();
+        for (Class<?> c : new Class<?>[] {Test.class, annotation, Class.forName("org.apiguardian.api.API"),
+                Class.forName("org.junit.platform.commons.annotation.Testable")}) {
+            cp.append(new File(c.getProtectionDomain().getCodeSource().getLocation().toURI())).append(File.pathSeparator);
+        }
+        Path out = Files.createDirectory(tmp.resolve("out"));
+        JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+        assertEquals(0, javac.run(null, null, null, "-proc:none", "-cp", cp.toString(), "-d", out.toString(), src.toString()));
+        try (URLClassLoader l = new URLClassLoader(new URL[] {out.toUri().toURL()}, getClass().getClassLoader())) {
+            Map<String, String> r = results(run(l.loadClass("classtemplates.Prices")));
+            assertEquals(map("price()", "SUCCESSFUL", "#1", "SUCCESSFUL", "#2", "SUCCESSFUL", "coupon()", "SUCCESSFUL",
+                    "refund()", "SUCCESSFUL"), r);
+        }
+        List<String> want = new ArrayList<>();
+        want.add("claim . " + project);
+        for (int n = 1; n <= 2; n++) {
+            String i = "[" + n + "]";
+            for (String t : new String[] {"Prices::" + i + "price()", "Prices::" + i + "tax(java.lang.String)[1]",
+                    "Prices::" + i + "tax(java.lang.String)[2]", "Prices$Coupons::" + i + "[1]coupon()",
+                    "Prices$Coupons::" + i + "[2]coupon()", "Prices$Refunds::" + i + "refund()"}) {
+                want.add("begin classtemplates." + t);
+                want.add("end classtemplates." + t + " passed");
+            }
+        }
+        assertEquals(want, log());
     }
 
     @Test
