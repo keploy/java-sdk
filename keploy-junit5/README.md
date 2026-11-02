@@ -34,11 +34,23 @@ junit.jupiter.extensions.autodetection.enabled=true
 
 (Gradle: `test { useJUnitPlatform(); systemProperty 'junit.jupiter.extensions.autodetection.enabled', 'true' }`.)
 
-Then run the suite under keploy:
+keploy needs the project's `keploy.yml` to name the recording and CI's test
+command; without `mock.command`, keploy refuses the run with
+`no keploy project here: set mock.command ...`:
+
+```yaml
+# keploy.yml
+mock:
+  name: shop          # the recording: keploy/shop/
+  command: mvn test   # CI's test command
+```
+
+Then run the suite under keploy with `KEPLOY_PROVEN=1`, in one test JVM.
+`--local` keeps the recording on disk, in `keploy/<name>/`:
 
 ```sh
-KEPLOY_PROVEN=1 keploy mock record -c "mvn test"
-KEPLOY_PROVEN=1 keploy mock replay -c "mvn test"
+KEPLOY_PROVEN=1 keploy mock record --local -c "mvn test"
+KEPLOY_PROVEN=1 keploy mock replay --local -c "mvn test"
 ```
 
 Without keploy (`KEPLOY_MOCK_AGENT` unset or `off`) the extension does

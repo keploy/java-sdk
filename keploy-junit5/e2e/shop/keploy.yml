@@ -1,0 +1,6 @@
+# The keploy project of the e2e suite: the set's name and CI's test command,
+# one test JVM (Surefire's default forkCount, 1): keploy judges one test at a
+# time. Offline: e2e/lane.sh fills the Maven repository first.
+mock:
+  name: shop
+  command: mvn -B -ntp -o test

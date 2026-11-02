@@ -41,3 +41,34 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: maven
       - run: mvn -B -ntp -Djunit.version=${{ matrix.junit }} verify
+
+  e2e:
+    # e2e/lane.sh: this commit's extension, installed with Maven into the
+    # lane's own Maven repository and used by a small JUnit 5 suite, run with
+    # Maven under keploy mock record with its provider up, then keploy mock
+    # replay with the provider stopped; a test whose call has no recorded
+    # answer, and one that no longer makes its recorded call, fail with
+    # keploy's text; a quarantined test is skipped with keploy's reason.
+    name: e2e (keploy mock record and replay)
+    runs-on: ubuntu-latest
+    # The lane takes a few minutes, Maven's downloads included: a run past 15
+    # is a hang.
+    timeout-minutes: 15
+    env:
+      # keploy's enterprise build, which judges each test under
+      # KEPLOY_PROVEN=1. Pinned, and checked against its digest, so that a
+      # new keploy release cannot change this job's result unseen.
+      KEPLOY_VERSION: "3.8.106"
+      KEPLOY_SHA256: "2c4c9bcf0a703b65827d1cee5ca88fe9d7856844a08cac368b42b83345fef3ce"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: install keploy ${{ env.KEPLOY_VERSION }}
+        run: |
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/keploy" "https://keploy.io/ent/dl/$KEPLOY_VERSION/enterprise_linux_amd64"
+          echo "$KEPLOY_SHA256  $RUNNER_TEMP/keploy" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/keploy"
+      - run: KEPLOY_BIN="$RUNNER_TEMP/keploy" bash keploy-junit5/e2e/lane.sh
