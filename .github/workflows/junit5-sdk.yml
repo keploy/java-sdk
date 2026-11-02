@@ -10,6 +10,9 @@ on:
     paths:
       - "keploy-junit5/**"
       - ".github/workflows/junit5-sdk.yml"
+  # keploy-junit5-release.yml runs these rows and the e2e lane on a release
+  # tag before it publishes.
+  workflow_call:
 
 concurrency:
   group: keploy-junit5-${{ github.ref }}

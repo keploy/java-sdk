@@ -5,9 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!--
-      A project of its own, not a module of this repository's root pom: the
-      root's release builds and deploys every module it lists, and this one is
-      not published yet.
+      A project of its own, not a module of this repository's root pom: it is
+      released on its own tag, keploy-junit5-vX.Y.Z, with its own version, by
+      .github/workflows/keploy-junit5-release.yml (README.md, "Releasing").
+      The root's release.yml builds and deploys only the root's modules.
+      The version here stays a SNAPSHOT: the release workflow sets the tag's.
     -->
     <groupId>io.keploy</groupId>
     <artifactId>keploy-junit5</artifactId>
@@ -24,6 +26,22 @@
             <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <id>keploy</id>
+            <name>Keploy</name>
+            <email>hello@keploy.io</email>
+            <organization>Keploy</organization>
+            <organizationUrl>https://keploy.io</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git@github.com:keploy/java-sdk.git</connection>
+        <developerConnection>scm:git@github.com:keploy/java-sdk.git</developerConnection>
+        <url>https://github.com/keploy/java-sdk.git</url>
+    </scm>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -90,4 +108,78 @@
             </plugin>
         </plugins>
     </build>
+
+    <!--
+      The release profile: sources and javadoc jars, every artifact signed,
+      and the deploy to Maven Central, as the root pom's release profile does
+      for the root's modules.
+    -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.2.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.4.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.10.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                            <waitMaxTime>7200</waitMaxTime>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -106,3 +106,17 @@ Only JUnit Jupiter tests are judged. The tests of every other JUnit Platform
 engine run unjudged, as without keploy: JUnit 4 tests on the Vintage engine,
 and Spock, Kotest, jqwik and Cucumber tests. This extension is a Jupiter
 extension, and no other engine calls it; their calls are the test JVM's.
+
+## Releasing
+
+keploy-junit5 is released on its own tag, with its own version, apart from
+the repository's `v*.*.*` releases of the agent. To release X.Y.Z, push the
+tag `keploy-junit5-vX.Y.Z` on a commit of `main`:
+`git tag keploy-junit5-vX.Y.Z <sha> && git push origin keploy-junit5-vX.Y.Z`.
+The tag runs the rows and the e2e lane, then
+`.github/workflows/keploy-junit5-release.yml` sets the pom's version to X.Y.Z
+for that run only, builds the jar with its sources and javadoc jars, signs
+each, and deploys them to Maven Central. It uses the repository secrets that
+`release.yml` uses: `CENTRAL_USERNAME` and `CENTRAL_PASSWORD` (a Central
+Portal user token for the `io.keploy` namespace), `MAVEN_GPG_PRIVATE_KEY` and
+`MAVEN_GPG_PASSPHRASE`; it refuses to start, naming each one that is not set.
