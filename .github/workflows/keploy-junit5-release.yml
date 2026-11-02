@@ -1,0 +1,141 @@
+name: keploy-junit5 release
+
+# Publishes io.keploy:keploy-junit5 to Maven Central from a tag.
+#
+# To release X.Y.Z: push the tag keploy-junit5-vX.Y.Z on a commit of main.
+# The rows on every JDK and JUnit leg and the e2e lane (junit5-sdk.yml) run
+# on the tagged commit first; the publish runs only when they all pass. It
+# sets keploy-junit5/pom.xml's version to X.Y.Z in this run only (the pom on
+# main stays a SNAPSHOT), builds the jar with its sources and javadoc jars,
+# signs each, and deploys them to Central, which refuses a version it already
+# has.
+#
+# keploy-junit5 is a Maven project of its own, released with its own
+# version: release.yml (v*.*.* tags) builds and deploys only the root pom's
+# modules, and never this one. This workflow signs and deploys with the same
+# key and the same secret names as release.yml: CENTRAL_USERNAME and
+# CENTRAL_PASSWORD (a Central Portal user token for the io.keploy namespace),
+# MAVEN_GPG_PRIVATE_KEY (the ASCII-armored release key, id 8541784E4EC36FB8)
+# and MAVEN_GPG_PASSPHRASE. A step below fails, naming each one that is not
+# set, before anything is built or signed.
+# Every action this workflow runs, the rows' included, is pinned by commit:
+# the publish job holds the signing key and the Central token.
+#
+# On a pull request the same release build runs with no signing and no
+# deploy, so a javadoc error or a missing jar shows before a tag.
+on:
+  push:
+    tags: ["keploy-junit5-v*"]
+  pull_request:
+    paths:
+      - "keploy-junit5/**"
+      - ".github/workflows/keploy-junit5-release.yml"
+      - ".github/workflows/junit5-sdk.yml"
+
+permissions:
+  contents: read
+
+# Never let two releases of the same tag overlap, and never cancel one
+# mid-deploy.
+concurrency:
+  group: keploy-junit5-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rows:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/junit5-sdk.yml
+
+  publish:
+    name: build, sign and publish to Maven Central
+    if: github.event_name == 'push'
+    needs: rows
+    runs-on: ubuntu-latest
+    # central-publishing-maven-plugin waits until Central reports the
+    # deployment PUBLISHED (waitMaxTime 7200 s), plus the build ahead of it.
+    timeout-minutes: 150
+    env:
+      # The public key id of keploy's release signing key, as release.yml.
+      GPG_KEY_ID: 8541784E4EC36FB8
+    defaults:
+      run:
+        shell: bash # -eo pipefail: a failed command before a pipe fails the step
+        working-directory: keploy-junit5
+    steps:
+      - name: The tag names a release version
+        id: ver
+        # Before the signing key is imported. The tag name is interpolated
+        # into Maven's arguments below, so only digits and dots pass.
+        working-directory: .
+        run: |
+          version="${GITHUB_REF_NAME#keploy-junit5-v}"
+          if [[ "$GITHUB_REF_NAME" != keploy-junit5-v* || ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::refusing to publish from '$GITHUB_REF_NAME': the tag must be keploy-junit5-vX.Y.Z, X.Y.Z a release version with no leading zeros"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: The Central and signing secrets are set
+        working-directory: .
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          missing=()
+          for s in CENTRAL_USERNAME CENTRAL_PASSWORD MAVEN_GPG_PRIVATE_KEY MAVEN_GPG_PASSPHRASE; do
+            [[ -n "${!s}" ]] || missing+=("$s")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::the secret(s) ${missing[*]} are not set; refusing to publish"
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "17"
+          # Writes ~/.m2/settings.xml with a `central` server entry read from
+          # the env vars named here, and imports the signing key.
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - name: Set the release version in the pom
+        # Pinned, as release.yml pins it: an unpinned plugin would run
+        # unreviewed code in the job that holds the signing key.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.21.0:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+      - name: Build, sign and publish
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: mvn -B -ntp -P release -DskipTests clean deploy -Dgpg.keyname="$GPG_KEY_ID"
+
+  dry-run:
+    name: release build, dry run
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash # -eo pipefail: a failed command before a pipe fails the step
+        working-directory: keploy-junit5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Release build, unsigned
+        run: mvn -B -ntp -P release -DskipTests -Dgpg.skip clean verify
+      - name: The release carries its jar, sources and javadoc
+        run: |
+          v=$(mvn -B -ntp -q help:evaluate -Dexpression=project.version -DforceStdout)
+          for f in "keploy-junit5-$v.jar" "keploy-junit5-$v-sources.jar" "keploy-junit5-$v-javadoc.jar"; do
+            test -s "target/$f" || { echo "::error::the release would ship without $f"; exit 1; }
+          done
+          unzip -l "target/keploy-junit5-$v.jar" | grep -q 'io/keploy/junit5/' || { echo "::error::keploy-junit5-$v.jar holds no io/keploy/junit5 classes"; exit 1; }
