@@ -38,8 +38,8 @@
     </developers>
 
     <scm>
-        <connection>scm:git@github.com:keploy/java-sdk.git</connection>
-        <developerConnection>scm:git@github.com:keploy/java-sdk.git</developerConnection>
+        <connection>scm:git:https://github.com/keploy/java-sdk.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/keploy/java-sdk.git</developerConnection>
         <url>https://github.com/keploy/java-sdk.git</url>
     </scm>
 
