@@ -18,6 +18,25 @@ mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugi
   -DoutputDirectory="${module_dir}/target" \
   -DdestFileName=jacocoagent.jar
 
+# The tcp-report run below compares against the released keploy-sdk 2.1.1
+# CoverageReporter (the coverage-runner Job's), and runs once more with an
+# older ASM ahead of the SDK on the application classpath.
+# (copy names each jar artifactId-version.jar.)
+mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+  -Dartifact=io.keploy:keploy-sdk:2.1.1:jar \
+  -DoutputDirectory="${module_dir}/target/smoke-deps"
+mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+  -Dartifact=org.ow2.asm:asm:5.0.4:jar \
+  -DoutputDirectory="${module_dir}/target/smoke-deps"
+runner_reporter_jar="${module_dir}/target/smoke-deps/keploy-sdk-2.1.1.jar"
+older_asm_jar="${module_dir}/target/smoke-deps/asm-5.0.4.jar"
+for jar in "${runner_reporter_jar}" "${older_asm_jar}"; do
+  if [[ ! -f "${jar}" ]]; then
+    echo "missing ${jar}" >&2
+    exit 1
+  fi
+done
+
 jacoco_jar="$(find "${module_dir}/target" -maxdepth 1 -type f \( \
   -name 'jacocoagent.jar' -o -name 'org.jacoco.agent-*-runtime.jar' \) | sort | head -n 1)"
 if [[ -z "${jacoco_jar}" || ! -f "${jacoco_jar}" ]]; then
@@ -162,8 +181,11 @@ JAVA
 
 # The in-JVM coverage report (TCP transport): a sample app runs two test cases
 # under JaCoCo, the harness plays the collector (START/END, COV/CLASSES frames,
-# then REPORT), and the in-JVM numbers must equal the offline CoverageReporter's,
-# run exactly as the coverage-runner Job runs it, on the same inputs.
+# then REPORT), and the in-JVM numbers must equal the offline CoverageReporter's
+# (this build's and the released one the coverage-runner Job ships), run exactly
+# as the coverage-runner Job runs it, on the same inputs. Two app classes never
+# run (Unused, and Tier, an interface with no code), so the totals must count
+# classes no probe fired in.
 mkdir -p "${work_dir}/src/tcp/smoke" "${work_dir}/tcp-app" "${work_dir}/tcp-harness"
 cat > "${work_dir}/src/tcp/smoke/Shop.java" <<'JAVA'
 package smoke;
@@ -217,6 +239,30 @@ public final class Shop {
             return items.stream().mapToInt(p -> p > 0 ? p : 0).sum();
         }
     }
+}
+JAVA
+
+cat > "${work_dir}/src/tcp/smoke/Unused.java" <<'JAVA'
+package smoke;
+
+public final class Unused {
+    private Unused() {
+    }
+
+    public static int tier(int n) {
+        if (n > 10) {
+            return 2;
+        }
+        return n < 0 ? -1 : 1;
+    }
+}
+JAVA
+
+cat > "${work_dir}/src/tcp/smoke/Tier.java" <<'JAVA'
+package smoke;
+
+public interface Tier {
+    int unit();
 }
 JAVA
 
@@ -374,27 +420,30 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 
 public final class SmokeCompare {
+    // args[0] is the released reporter's output (the coverage-runner Job's);
+    // every other output must equal it.
     public static void main(String[] args) throws Exception {
         Gson gson = new Gson();
         JsonObject offline = read(gson, args[0]);
         for (int i = 1; i < args.length; i++) {
-            JsonObject inJvm = read(gson, args[i]);
-            if (!offline.equals(inJvm)) {
-                throw new IllegalStateException(args[i] + " differs from the offline reporter: "
-                        + inJvm + " vs " + offline);
+            JsonObject other = read(gson, args[i]);
+            if (!offline.equals(other)) {
+                throw new IllegalStateException(args[i] + " differs from the coverage-runner's reporter: "
+                        + other + " vs " + offline);
             }
         }
         long lineCovered = offline.get("lineCovered").getAsLong();
         long lineTotal = offline.get("lineTotal").getAsLong();
         long branchCovered = offline.get("branchCovered").getAsLong();
         long branchTotal = offline.get("branchTotal").getAsLong();
-        // Shop + Shop$Basket ran partly: both counters must be partly covered.
-        if (offline.get("classCount").getAsInt() != 2 || offline.get("hitClassCount").getAsInt() != 2
+        // Shop + Shop$Basket ran partly, Unused and Tier not at all: four classes,
+        // two hit, and both counters partly covered.
+        if (offline.get("classCount").getAsInt() != 4 || offline.get("hitClassCount").getAsInt() != 2
                 || lineCovered <= 0 || lineCovered >= lineTotal
                 || branchCovered <= 0 || branchCovered >= branchTotal) {
             throw new IllegalStateException("implausible coverage: " + offline);
         }
-        System.out.println("tcp-report: in-JVM equals offline: " + offline);
+        System.out.println("tcp-report: " + (args.length - 1) + " outputs equal the coverage-runner's: " + offline);
     }
 
     private static JsonObject read(Gson gson, String path) throws Exception {
@@ -404,7 +453,8 @@ public final class SmokeCompare {
 }
 JAVA
 
-javac -cp "${agent_jar}" -d "${work_dir}/tcp-app" "${work_dir}/src/tcp/smoke/Shop.java"
+javac -cp "${agent_jar}" -d "${work_dir}/tcp-app" "${work_dir}/src/tcp/smoke/Shop.java" \
+  "${work_dir}/src/tcp/smoke/Unused.java" "${work_dir}/src/tcp/smoke/Tier.java"
 javac -cp "${work_dir}/tcp-app:${agent_jar}" -d "${work_dir}/tcp-harness" \
   "${work_dir}/src/tcp/smoke/SmokeTcpHarness.java" \
   "${work_dir}/src/tcp/smoke/SmokeCompare.java"
@@ -503,8 +553,32 @@ java \
 # The coverage-runner Job's own steps (coverage-run.sh): unzip the CLASSES zip
 # into a directory, then run the offline reporter on it.
 (cd "${tcp_dir}/runner-classes" && jar xf ../classes.zip)
+# runner.json is the released reporter's, offline.json this build's.
+java -cp "${runner_reporter_jar}" io.keploy.dedup.CoverageReporter \
+  --classes "${tcp_dir}/runner-classes" --union "${tcp_dir}/union.json" \
+  --manifest "${tcp_dir}/manifest.json" --out "${tcp_dir}/runner.json"
 java -cp "${agent_jar}" io.keploy.dedup.CoverageReporter \
   --classes "${tcp_dir}/runner-classes" --union "${tcp_dir}/union.json" \
   --manifest "${tcp_dir}/manifest.json" --out "${tcp_dir}/offline.json"
-java -cp "${work_dir}/tcp-harness:${agent_jar}" smoke.SmokeCompare \
+java -cp "${work_dir}/tcp-harness:${agent_jar}" smoke.SmokeCompare "${tcp_dir}/runner.json" \
   "${tcp_dir}/offline.json" "${tcp_dir}/injvm-live.json" "${tcp_dir}/injvm-manifest.json"
+
+# The same app shipping an older org.objectweb.asm ahead of the SDK on its flat
+# classpath: the SDK's own (relocated) ASM still analyzes the classes. The ASM
+# jar is also one of the app's class roots, and its classes must stay out of
+# the index (the CLASSES zip and the totals), as before the relocation.
+tcp_asm_dir="${work_dir}/tcp-older-asm"
+mkdir -p "${tcp_asm_dir}"
+echo "Running Java agent smoke: tcp-report-older-asm"
+java \
+  -javaagent:"${jacoco_jar}=destfile=${tcp_asm_dir}/jacoco.exec" \
+  -Dkeploy.java.class.dirs="${work_dir}/tcp-app,${older_asm_jar}" \
+  -Dkeploy.java.classpath.fallback=false \
+  -cp "${older_asm_jar}:${work_dir}/tcp-app:${work_dir}/tcp-harness:${agent_jar}" \
+  smoke.SmokeTcpHarness "${tcp_asm_dir}"
+if ! diff <(jar tf "${tcp_dir}/classes.zip" | sort) <(jar tf "${tcp_asm_dir}/classes.zip" | sort); then
+  echo "tcp-report-older-asm: the CLASSES zip differs when the app ships ASM" >&2
+  exit 1
+fi
+java -cp "${work_dir}/tcp-harness:${agent_jar}" smoke.SmokeCompare "${tcp_dir}/runner.json" \
+  "${tcp_asm_dir}/injvm-live.json" "${tcp_asm_dir}/injvm-manifest.json"

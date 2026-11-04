@@ -50,12 +50,15 @@ import org.junit.Test;
  * manifest, and both must equal JaCoCo's own analysis of the real execution
  * data. The sample app (sample.shop.Shop) runs under JaCoCo's instrumenter as
  * two "test cases"; their fired probes are the union, exactly as the collector
- * builds it from the COV frames.
+ * builds it from the COV frames. Two sample classes never run (an untouched
+ * class and an interface with no code), so the totals and the class count must
+ * also cover classes no probe fired in, as JaCoCo's own analysis does.
  */
 public class CoverageReporterInJvmTest {
 
     private static final Gson GSON = new Gson();
-    private static final String[] SAMPLE = {"sample/shop/Shop", "sample/shop/Shop$Basket"};
+    private static final String[] SAMPLE = {"sample/shop/Shop", "sample/shop/Shop$Basket", "sample/shop/Unused",
+        "sample/shop/Tier"};
 
     private static Map<String, byte[]> classes;
     private static Map<String, List<Integer>> union;
@@ -126,7 +129,7 @@ public class CoverageReporterInJvmTest {
                     union.put(ed.getName(), new ArrayList<>(fired));
                 }
             }
-            assertEquals("both sample classes ran", 2, manifest.size());
+            assertEquals("Shop and Shop$Basket ran, Unused and Tier did not", 2, manifest.size());
 
             // Ground truth: JaCoCo's own analysis of the real merged execution data.
             CoverageBuilder builder = new CoverageBuilder();
@@ -135,6 +138,12 @@ public class CoverageReporterInJvmTest {
                 analyzer.analyzeClass(e.getValue(), e.getKey());
             }
             groundTruth = sums(builder);
+            assertEquals("JaCoCo counts the untouched class and the interface", 4, builder.getClasses().size());
+            IClassCoverage unused = builder.getClasses().stream()
+                    .filter(c -> c.getName().equals("sample/shop/Unused")).findFirst().get();
+            assertTrue("Unused adds lines and branches no test covered", unused.getLineCounter().getTotalCount() > 0
+                    && unused.getBranchCounter().getTotalCount() > 0
+                    && unused.getInstructionCounter().getCoveredCount() == 0);
         } finally {
             runtime.shutdown();
         }
@@ -149,6 +158,7 @@ public class CoverageReporterInJvmTest {
         System.clearProperty("keploy.coverage.endpoint");
         System.clearProperty("keploy.java.class.dirs");
         System.clearProperty("keploy.java.classpath.fallback");
+        System.clearProperty("keploy.jacoco.port");
         if (tempDir != null) {
             List<Path> paths = new ArrayList<>();
             Files.walk(tempDir).forEach(paths::add);
@@ -173,7 +183,7 @@ public class CoverageReporterInJvmTest {
         assertEquals(groundTruth[5], inJvm.instructionTotal);
         assertEquals(groundTruth[6], inJvm.methodCovered);
         assertEquals(groundTruth[7], inJvm.methodTotal);
-        assertEquals(2, inJvm.classCount);
+        assertEquals("every analyzed class counts, run or not, code or not", 4, inJvm.classCount);
         assertEquals(2, inJvm.hitClassCount);
     }
 
@@ -255,12 +265,55 @@ public class CoverageReporterInJvmTest {
 
     @Test
     public void reportReplyPrefersTheRequestManifest() {
-        // An empty live manifest would leave every class unhit.
+        // This JVM captured nothing (an empty live manifest): the request's own
+        // manifest still gives the numbers, and without it the reply is an error.
         Map<String, CoverageReporter.ClassMeta> live = new HashMap<>();
         String reply = KeployDedupAgent.reportReply("ts", request(union, manifest), () -> classes, () -> live);
         assertEquals(groundTruth[0], replyJson(reply).get("lineCovered").getAsLong());
         String liveOnly = KeployDedupAgent.reportReply("ts", request(union, null), () -> classes, () -> live);
-        assertEquals(0, replyJson(liveOnly).get("lineCovered").getAsLong());
+        assertErrorReply("live manifest empty", NOTHING_CAPTURED, liveOnly);
+    }
+
+    @Test
+    public void reportReplyFailsWhenTheManifestCannotBackTheUnion() {
+        // Nothing captured (no JaCoCo agent, or no app class ran) is an error,
+        // never 0% coverage: an empty manifest, from the request or the live one,
+        // or one with no usable entry, whatever the union.
+        Map<String, List<Integer>> none = new HashMap<>();
+        Map<String, CoverageReporter.ClassMeta> empty = new HashMap<>();
+        assertErrorReply("request manifest empty", NOTHING_CAPTURED,
+                KeployDedupAgent.reportReply("ts", request(union, empty), () -> classes, () -> manifest));
+        assertErrorReply("live manifest and union empty", NOTHING_CAPTURED,
+                KeployDedupAgent.reportReply("ts", request(none, null), () -> classes, () -> empty));
+        for (CoverageReporter.ClassMeta bad : unusable()) {
+            Map<String, CoverageReporter.ClassMeta> onlyBad = new HashMap<>();
+            onlyBad.put("sample/shop/Shop", bad);
+            assertErrorReply("only an unusable entry " + GSON.toJson(bad), NOTHING_CAPTURED,
+                    KeployDedupAgent.reportReply("ts", request(none, onlyBad), () -> classes, () -> manifest));
+        }
+        // A class the union names but the manifest lacks would lose its probes.
+        Map<String, CoverageReporter.ClassMeta> noBasket = new HashMap<>(manifest);
+        noBasket.remove("sample/shop/Shop$Basket");
+        assertErrorReply("union class missing", "the manifest has no usable entry for sample/shop/Shop$Basket,",
+                KeployDedupAgent.reportReply("ts", request(union, noBasket), () -> classes, () -> manifest));
+        assertErrorReply("union class missing from the live manifest",
+                "the manifest has no usable entry for sample/shop/Shop$Basket,",
+                KeployDedupAgent.reportReply("ts", request(union, null), () -> classes, () -> noBasket));
+        for (CoverageReporter.ClassMeta bad : unusable()) {
+            Map<String, CoverageReporter.ClassMeta> badShop = new HashMap<>(manifest);
+            badShop.put("sample/shop/Shop", bad);
+            assertErrorReply("union class unusable " + GSON.toJson(bad),
+                    "the manifest has no usable entry for sample/shop/Shop,",
+                    KeployDedupAgent.reportReply("ts", request(union, badShop), () -> classes, () -> manifest));
+        }
+        // A manifest class the union does not name is fine: no probe fired in it.
+        Map<String, List<Integer>> shopOnly = new HashMap<>();
+        shopOnly.put("sample/shop/Shop", union.get("sample/shop/Shop"));
+        JsonObject json = replyJson(KeployDedupAgent.reportReply("ts", request(shopOnly, null), () -> classes,
+                () -> manifest));
+        assertFalse(json.toString(), json.has("error"));
+        assertEquals(1, json.get("hitClassCount").getAsInt());
+        assertEquals(4, json.get("classCount").getAsInt());
     }
 
     @Test
@@ -282,10 +335,10 @@ public class CoverageReporterInJvmTest {
         garbage.put("sample/shop/Broken", new byte[] {(byte) 0xCA, (byte) 0xFE, 0, 1});
         assertErrorReply("garbage class", "IOException: Error while analyzing sample/shop/Broken.class",
                 KeployDedupAgent.reportReply("ts", request(union, manifest), () -> garbage, () -> manifest));
-        Map<String, CoverageReporter.ClassMeta> badId = new HashMap<>();
+        Map<String, CoverageReporter.ClassMeta> badId = new HashMap<>(manifest);
         CoverageReporter.ClassMeta meta = new CoverageReporter.ClassMeta();
         meta.id = "not-hex";
-        meta.probeCount = 3;
+        meta.probeCount = manifest.get("sample/shop/Shop").probeCount;
         badId.put("sample/shop/Shop", meta);
         assertErrorReply("bad id", "NumberFormatException: ",
                 KeployDedupAgent.reportReply("ts", request(union, badId), () -> classes, () -> manifest));
@@ -326,12 +379,7 @@ public class CoverageReporterInJvmTest {
     @Test
     public void reportOverTheTcpChannelEqualsOffline() throws Exception {
         tempDir = Files.createTempDirectory("keploy-injvm");
-        File classDir = tempDir.resolve("classes").toFile();
-        for (Map.Entry<String, byte[]> e : classes.entrySet()) {
-            File f = new File(classDir, e.getKey() + ".class");
-            assertTrue(f.getParentFile().isDirectory() || f.getParentFile().mkdirs());
-            Files.write(f.toPath(), e.getValue());
-        }
+        File classDir = writeClasses(tempDir);
         try (ServerSocket server = new ServerSocket(0)) {
             server.setSoTimeout(20000);
             System.setProperty("keploy.java.class.dirs", classDir.getAbsolutePath());
@@ -365,7 +413,82 @@ public class CoverageReporterInJvmTest {
         }
     }
 
+    @Test
+    public void reportWithoutAJacocoAgentIsAnError() throws Exception {
+        // This JVM runs no JaCoCo agent, so every END sends an empty COV and no
+        // CLASSES frame: the live manifest stays empty, and a REPORT that relies
+        // on it must say so instead of reporting 0% coverage.
+        try {
+            Class.forName("org.jacoco.agent.rt.RT");
+            fail("the row needs a JVM without the JaCoCo agent");
+        } catch (ClassNotFoundException expected) {
+            // no agent
+        }
+        // Nor does anything answer at the JaCoCo TCP fallback: a port just freed.
+        int closedPort;
+        try (ServerSocket probe = new ServerSocket(0)) {
+            closedPort = probe.getLocalPort();
+        }
+        System.setProperty("keploy.jacoco.port", String.valueOf(closedPort));
+        tempDir = Files.createTempDirectory("keploy-injvm");
+        File classDir = writeClasses(tempDir);
+        try (ServerSocket server = new ServerSocket(0)) {
+            server.setSoTimeout(20000);
+            System.setProperty("keploy.java.class.dirs", classDir.getAbsolutePath());
+            System.setProperty("keploy.java.classpath.fallback", "false");
+            System.setProperty("keploy.coverage.endpoint", "127.0.0.1:" + server.getLocalPort());
+            assertTrue(KeployDedupAgent.start());
+            try (Socket conn = server.accept()) {
+                conn.setSoTimeout(20000);
+                BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream(),
+                        StandardCharsets.UTF_8));
+                OutputStream out = conn.getOutputStream();
+                assertEquals("CAPS REPORT", in.readLine());
+                for (int t = 1; t <= 2; t++) {
+                    send(out, "START ts/t" + t);
+                    assertEquals("ACK", in.readLine());
+                    assertEquals(21, sample.shop.Shop.price(3, "gold"));
+                    send(out, "END ts/t" + t);
+                    String line;
+                    while ((line = in.readLine()) != null && !line.equals("ACK")) {
+                        assertFalse("no JaCoCo, no class upload: " + line, line.startsWith("CLASSES "));
+                    }
+                    assertEquals("ACK", line);
+                }
+                send(out, "REPORT ts {\"union\":{}}");
+                assertErrorReply("no agent, empty union", NOTHING_CAPTURED, in.readLine());
+                assertEquals("ACK", in.readLine());
+                send(out, "REPORT ts " + request(union, null));
+                assertErrorReply("no agent, a union", NOTHING_CAPTURED, in.readLine());
+                assertEquals("ACK", in.readLine());
+            }
+        }
+    }
+
     // --- helpers ---
+
+    private static final String NOTHING_CAPTURED = "no coverage captured: the manifest has no usable class";
+
+    // unusable lists manifest entries the reporter skips: no id, a negative
+    // probe count, or none at all.
+    private static List<CoverageReporter.ClassMeta> unusable() {
+        CoverageReporter.ClassMeta noId = new CoverageReporter.ClassMeta();
+        noId.probeCount = 3;
+        CoverageReporter.ClassMeta negative = new CoverageReporter.ClassMeta();
+        negative.id = manifest.get("sample/shop/Shop").id;
+        negative.probeCount = -1;
+        return java.util.Arrays.asList(noId, negative, null);
+    }
+
+    private static File writeClasses(Path dir) throws IOException {
+        File classDir = dir.resolve("classes").toFile();
+        for (Map.Entry<String, byte[]> e : classes.entrySet()) {
+            File f = new File(classDir, e.getKey() + ".class");
+            assertTrue(f.getParentFile().isDirectory() || f.getParentFile().mkdirs());
+            Files.write(f.toPath(), e.getValue());
+        }
+        return classDir;
+    }
 
     private CoverageReporter.CoverageResult offline() throws IOException {
         Path dir = tempDir != null ? tempDir : (tempDir = Files.createTempDirectory("keploy-injvm"));

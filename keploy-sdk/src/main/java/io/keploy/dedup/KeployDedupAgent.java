@@ -99,7 +99,8 @@ public final class KeployDedupAgent {
     // and a request without a manifest uses this JVM's live manifest (the one it
     // uploads in its CLASSES/MANIFEST frames). classes yields the app's indexed
     // class bytes by VM name. It never throws: the collector reads one REPORT
-    // line before each ACK, so every request gets exactly one reply line.
+    // line before each ACK, so every REPORT that names a test set gets exactly
+    // one reply line.
     static String reportReply(String testSetId, String requestJson,
                               java.util.concurrent.Callable<Map<String, byte[]>> classes,
                               java.util.concurrent.Callable<Map<String, CoverageReporter.ClassMeta>> liveManifest) {
@@ -118,10 +119,13 @@ public final class KeployDedupAgent {
                 } else {
                     Map<String, CoverageReporter.ClassMeta> manifest =
                             request.manifest != null ? request.manifest : liveManifest.call();
-                    CoverageReporter.CoverageResult result =
-                            CoverageReporter.computeInJvm(appClasses, request.union, manifest);
-                    result.testSetId = testSetId;
-                    return "REPORT " + GSON.toJson(result);
+                    error = manifestGap(request.union, manifest);
+                    if (error == null) {
+                        CoverageReporter.CoverageResult result =
+                                CoverageReporter.computeInJvm(appClasses, request.union, manifest);
+                        result.testSetId = testSetId;
+                        return "REPORT " + GSON.toJson(result);
+                    }
                 }
             }
         } catch (Throwable e) {
@@ -129,6 +133,29 @@ public final class KeployDedupAgent {
         }
         log(Level.WARNING, "Keploy dedup: in-JVM coverage report for " + testSetId + " failed: " + error, null);
         return "REPORT " + GSON.toJson(new ReportError(testSetId, error));
+    }
+
+    // manifestGap says why a manifest cannot back a REPORT, or returns null when
+    // it can. A manifest with no usable class means this JVM captured nothing (no
+    // JaCoCo agent, or no app class ran), and a class the union names that the
+    // manifest lacks would have its fired probes dropped. A report either way
+    // would read as low or 0% coverage, so it is an error instead. "Lacks" is
+    // what the reporter skips: no entry, or one CoverageReporter.usable rejects.
+    static String manifestGap(Map<String, List<Integer>> union,
+                              Map<String, CoverageReporter.ClassMeta> manifest) {
+        boolean captured = false;
+        for (CoverageReporter.ClassMeta meta : manifest.values()) {
+            captured |= CoverageReporter.usable(meta);
+        }
+        if (!captured) {
+            return "no coverage captured: the manifest has no usable class";
+        }
+        for (String className : union.keySet()) {
+            if (!CoverageReporter.usable(manifest.get(className))) {
+                return "the manifest has no usable entry for " + className + ", which the union names";
+            }
+        }
+        return null;
     }
 
     // ReportRequest is the JSON body of a REPORT command (see reportReply).
@@ -521,7 +548,6 @@ public final class KeployDedupAgent {
      * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
      * but inverts the roles — here the SDK is the client. Wire protocol:
      * <pre>
-     *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;" | "REPORT &lt;testSetId&gt; &lt;json&gt;"
      *   SDK -&gt; collector : "CAPS REPORT"                (first line, on connect)
      *                      "ACK"                        (after START reset)
@@ -1504,13 +1530,20 @@ public final class KeployDedupAgent {
             return entryName;
         }
 
+        // An app's own ASM classes stay out of the index. The prefix is built at
+        // run time on purpose: the jar's shade relocation of ASM rewrites every
+        // string constant that names org/objectweb/asm, so a literal here would
+        // become the relocated prefix and the app's ASM would be indexed. (The
+        // SDK's relocated copy sits under io/keploy/dedup/, which is skipped too.)
+        private static final String APP_ASM_PREFIX = String.join("/", "org", "objectweb", "asm", "");
+
         private boolean shouldSkipClass(String name) {
             return name.endsWith("module-info.class")
                     || name.endsWith("package-info.class")
                     || name.startsWith("io/keploy/dedup/")
                     || name.startsWith("io/keploy/servlet/")
                     || name.startsWith("org/jacoco/")
-                    || name.startsWith("org/objectweb/asm/")
+                    || name.startsWith(APP_ASM_PREFIX)
                     || name.startsWith("org/newsclub/net/unix/")
                     || name.startsWith("com/google/gson/")
                     || name.contains("$Mockito")

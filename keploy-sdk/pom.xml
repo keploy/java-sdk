@@ -102,6 +102,17 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <!-- The in-JVM coverage report runs JaCoCo's analyzer inside the
+                                 app's JVM, so its ASM must not be the app's: an app that ships
+                                 an older org.objectweb.asm ahead of this jar on a flat classpath
+                                 would otherwise break the analyzer. Under io/keploy/dedup/ the
+                                 relocated classes are also outside the SDK's app-class index. -->
+                            <relocations>
+                                <relocation>
+                                    <pattern>org.objectweb.asm</pattern>
+                                    <shadedPattern>io.keploy.dedup.shaded.asm</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <manifestEntries>

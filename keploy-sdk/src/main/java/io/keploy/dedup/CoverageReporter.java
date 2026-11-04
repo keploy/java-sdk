@@ -80,6 +80,15 @@ public final class CoverageReporter {
         int probeCount;  // ExecutionData.getProbes().length
     }
 
+    /**
+     * Whether compute can rebuild a class's execution data from this manifest
+     * entry. It skips an entry that is missing, has no id or has a negative probe
+     * count, so that class's fired probes count for nothing.
+     */
+    static boolean usable(ClassMeta meta) {
+        return meta != null && meta.id != null && meta.probeCount >= 0;
+    }
+
     /** Computed coverage counters, serialized to the --out file. */
     static final class CoverageResult {
         // Set only on an in-JVM REPORT reply, so the collector can match the
@@ -170,7 +179,7 @@ public final class CoverageReporter {
         for (Map.Entry<String, ClassMeta> entry : manifest.entrySet()) {
             String className = entry.getKey();
             ClassMeta meta = entry.getValue();
-            if (meta == null || meta.id == null || meta.probeCount < 0) {
+            if (!usable(meta)) {
                 continue;
             }
             boolean[] probes = new boolean[meta.probeCount];
