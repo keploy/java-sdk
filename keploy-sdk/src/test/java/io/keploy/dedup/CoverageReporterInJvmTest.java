@@ -314,6 +314,72 @@ public class CoverageReporterInJvmTest {
         assertFalse(json.toString(), json.has("error"));
         assertEquals(1, json.get("hitClassCount").getAsInt());
         assertEquals(4, json.get("classCount").getAsInt());
+        // So is an unusable entry for a class the union does not name: the
+        // reporter skips it, offline and in-JVM, and the numbers stay JaCoCo's.
+        for (CoverageReporter.ClassMeta bad : unusable()) {
+            Map<String, CoverageReporter.ClassMeta> extra = new TreeMap<>(manifest);
+            extra.put("sample/shop/Unused", bad);
+            String what = "unusable entry outside the union " + GSON.toJson(bad);
+            assertTotals(what + " (request)", groundTruth, replyJson(KeployDedupAgent.reportReply("ts",
+                    request(union, extra), () -> classes, () -> manifest)));
+            assertTotals(what + " (live)", groundTruth, replyJson(KeployDedupAgent.reportReply("ts",
+                    request(union, null), () -> classes, () -> extra)));
+        }
+    }
+
+    @Test
+    public void unusableEntryOutsideTheUnionIsSkippedOffline() throws Exception {
+        for (CoverageReporter.ClassMeta bad : unusable()) {
+            Map<String, CoverageReporter.ClassMeta> extra = new TreeMap<>(manifest);
+            extra.put("sample/shop/Unused", bad);
+            assertTotals("offline, unusable entry " + GSON.toJson(bad), groundTruth,
+                    GSON.toJsonTree(offline(union, extra)).getAsJsonObject());
+        }
+    }
+
+    @Test
+    public void aClassWhoseIdDiffersCountsAsUncovered() throws Exception {
+        // A class whose manifest id is not its bytes' id (another agent changed
+        // it before JaCoCo saw it): JaCoCo marks it no-match, counts it as a
+        // class and counts its lines and branches, none covered. Both modes
+        // must do the same, and must not drop it from the totals.
+        Map<String, CoverageReporter.ClassMeta> other = new TreeMap<>(manifest);
+        CoverageReporter.ClassMeta basket = manifest.get("sample/shop/Shop$Basket");
+        CoverageReporter.ClassMeta moved = new CoverageReporter.ClassMeta();
+        moved.id = Long.toHexString(Long.parseUnsignedLong(basket.id, 16) ^ 1L);
+        moved.probeCount = basket.probeCount;
+        other.put("sample/shop/Shop$Basket", moved);
+
+        ExecutionDataStore store = new ExecutionDataStore();
+        for (Map.Entry<String, CoverageReporter.ClassMeta> e : other.entrySet()) {
+            boolean[] probes = new boolean[e.getValue().probeCount];
+            for (int i : union.get(e.getKey())) {
+                probes[i] = true;
+            }
+            store.put(new ExecutionData(Long.parseUnsignedLong(e.getValue().id, 16), e.getKey(), probes));
+        }
+        CoverageBuilder builder = new CoverageBuilder();
+        Analyzer analyzer = new Analyzer(store, builder);
+        for (Map.Entry<String, byte[]> e : classes.entrySet()) {
+            analyzer.analyzeClass(e.getValue(), e.getKey());
+        }
+        long[] expected = sums(builder);
+        assertTrue("Shop$Basket is no-match", builder.getClasses().stream()
+                .anyMatch(c -> c.getName().equals("sample/shop/Shop$Basket") && c.isNoMatch()));
+        assertEquals("its lines still count", groundTruth[1], expected[1]);
+        assertEquals("its branches still count", groundTruth[3], expected[3]);
+        assertTrue("none of its lines are covered", expected[0] < groundTruth[0]);
+
+        for (JsonObject json : java.util.Arrays.asList(
+                GSON.toJsonTree(CoverageReporter.computeInJvm(classes, union, other)).getAsJsonObject(),
+                GSON.toJsonTree(offline(union, other)).getAsJsonObject(),
+                replyJson(KeployDedupAgent.reportReply("ts", request(union, other), () -> classes,
+                        () -> manifest)))) {
+            assertTotals("no-match class", expected, json);
+            assertEquals(json.toString(), 4, json.get("classCount").getAsInt());
+            // hitClassCount counts the union's classes with a fired probe, as before.
+            assertEquals(json.toString(), 2, json.get("hitClassCount").getAsInt());
+        }
     }
 
     @Test
@@ -491,6 +557,11 @@ public class CoverageReporterInJvmTest {
     }
 
     private CoverageReporter.CoverageResult offline() throws IOException {
+        return offline(union, manifest);
+    }
+
+    private CoverageReporter.CoverageResult offline(Map<String, List<Integer>> u,
+                                                    Map<String, CoverageReporter.ClassMeta> m) throws IOException {
         Path dir = tempDir != null ? tempDir : (tempDir = Files.createTempDirectory("keploy-injvm"));
         Path zip = dir.resolve("classes.zip");
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zip))) {
@@ -502,8 +573,8 @@ public class CoverageReporterInJvmTest {
         }
         Path unionFile = dir.resolve("union.json");
         Path manifestFile = dir.resolve("manifest.json");
-        Files.write(unionFile, GSON.toJson(union).getBytes(StandardCharsets.UTF_8));
-        Files.write(manifestFile, GSON.toJson(manifest).getBytes(StandardCharsets.UTF_8));
+        Files.write(unionFile, GSON.toJson(u).getBytes(StandardCharsets.UTF_8));
+        Files.write(manifestFile, GSON.toJson(m).getBytes(StandardCharsets.UTF_8));
         return CoverageReporter.compute(zip, unionFile, manifestFile);
     }
 
@@ -551,6 +622,16 @@ public class CoverageReporterInJvmTest {
             store.put(new ExecutionData(Long.parseUnsignedLong(e.getValue().id, 16), e.getKey(), probes));
         }
         return store;
+    }
+
+    // assertTotals checks a result's eight counters against sums' order.
+    private static void assertTotals(String what, long[] expected, JsonObject json) {
+        assertFalse(what + ": " + json, json.has("error"));
+        String[] keys = {"lineCovered", "lineTotal", "branchCovered", "branchTotal", "instructionCovered",
+            "instructionTotal", "methodCovered", "methodTotal"};
+        for (int i = 0; i < keys.length; i++) {
+            assertEquals(what + ": " + keys[i] + " in " + json, expected[i], json.get(keys[i]).getAsLong());
+        }
     }
 
     private static long[] sums(CoverageBuilder builder) {
