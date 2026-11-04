@@ -160,6 +160,255 @@ public final class SmokeHarness {
 }
 JAVA
 
+# The in-JVM coverage report (TCP transport): a sample app runs two test cases
+# under JaCoCo, the harness plays the collector (START/END, COV/CLASSES frames,
+# then REPORT), and the in-JVM numbers must equal the offline CoverageReporter's,
+# run exactly as the coverage-runner Job runs it, on the same inputs.
+mkdir -p "${work_dir}/src/tcp/smoke" "${work_dir}/tcp-app" "${work_dir}/tcp-harness"
+cat > "${work_dir}/src/tcp/smoke/Shop.java" <<'JAVA'
+package smoke;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public final class Shop {
+    private Shop() {
+    }
+
+    public static int price(int quantity, String tier) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("quantity must be positive");
+        }
+        int unit;
+        switch (tier) {
+            case "gold":
+                unit = 7;
+                break;
+            case "silver":
+                unit = 9;
+                break;
+            default:
+                unit = 10;
+        }
+        Basket basket = new Basket();
+        for (int i = 0; i < quantity; i++) {
+            basket.add(unit);
+        }
+        int total = basket.total();
+        return quantity >= 10 && !"gold".equals(tier) ? total - total / 10 : total;
+    }
+
+    public static int parse(String raw) {
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    static final class Basket {
+        private final List<Integer> items = new ArrayList<>();
+
+        void add(int price) {
+            items.add(price);
+        }
+
+        int total() {
+            return items.stream().mapToInt(p -> p > 0 ? p : 0).sum();
+        }
+    }
+}
+JAVA
+
+cat > "${work_dir}/src/tcp/smoke/SmokeTcpHarness.java" <<'JAVA'
+package smoke;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.reflect.TypeToken;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public final class SmokeTcpHarness {
+    private static final Gson GSON = new Gson();
+    private static final Map<String, TreeSet<Integer>> UNION = new TreeMap<String, TreeSet<Integer>>();
+    private static byte[] zip;
+    private static String manifest;
+
+    public static void main(String[] args) throws Exception {
+        Path out = Paths.get(args[0]);
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            server.setSoTimeout(20000);
+            System.setProperty("keploy.coverage.endpoint", "127.0.0.1:" + server.getLocalPort());
+            System.setProperty("keploy.build.tag", "smoke-tcp");
+            // The same start() the -javaagent premain calls, once the port is known.
+            if (!io.keploy.dedup.KeployDedupAgent.start()) {
+                throw new IllegalStateException("the SDK did not start");
+            }
+            try (Socket conn = server.accept()) {
+                conn.setSoTimeout(20000);
+                BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream(),
+                        StandardCharsets.UTF_8));
+                OutputStream os = conn.getOutputStream();
+                expect("CAPS REPORT", in.readLine());
+
+                send(os, "START test-set-0/t1");
+                expect("ACK", in.readLine());
+                if (Shop.price(3, "gold") != 21) {
+                    throw new IllegalStateException("unexpected application result");
+                }
+                send(os, "END test-set-0/t1");
+                readUntilAck(in);
+
+                send(os, "START test-set-0/t2");
+                expect("ACK", in.readLine());
+                if (Shop.price(10, "bronze") != 90 || Shop.parse("x1") != -1) {
+                    throw new IllegalStateException("unexpected application result");
+                }
+                send(os, "END test-set-0/t2");
+                readUntilAck(in);
+
+                if (zip == null || manifest == null || UNION.isEmpty()) {
+                    throw new IllegalStateException("no CLASSES frame or no COV probes: union=" + UNION);
+                }
+                Map<String, List<Integer>> union = new TreeMap<String, List<Integer>>();
+                for (Map.Entry<String, TreeSet<Integer>> e : UNION.entrySet()) {
+                    union.put(e.getKey(), new ArrayList<Integer>(e.getValue()));
+                }
+                Files.write(out.resolve("classes.zip"), zip);
+                Files.write(out.resolve("manifest.json"), manifest.getBytes(StandardCharsets.UTF_8));
+                Files.write(out.resolve("union.json"), GSON.toJson(union).getBytes(StandardCharsets.UTF_8));
+
+                // The union alone (the SDK's live manifest), then with the stored manifest.
+                Map<String, Object> request = new LinkedHashMap<String, Object>();
+                request.put("union", union);
+                report(in, os, request, out.resolve("injvm-live.json"));
+                request.put("manifest", GSON.fromJson(manifest, JsonObject.class));
+                report(in, os, request, out.resolve("injvm-manifest.json"));
+            }
+        }
+        io.keploy.dedup.KeployDedupAgent.stop();
+    }
+
+    private static void report(BufferedReader in, OutputStream os, Map<String, Object> request, Path dest)
+            throws Exception {
+        send(os, "REPORT test-set-0 " + GSON.toJson(request));
+        String reply = in.readLine();
+        expect("ACK", in.readLine());
+        if (reply == null || !reply.startsWith("REPORT {")) {
+            throw new IllegalStateException("unexpected REPORT reply: " + reply);
+        }
+        JsonObject json = GSON.fromJson(reply.substring("REPORT ".length()), JsonObject.class);
+        if (json.has("error") || !"test-set-0".equals(json.get("testSetId").getAsString())) {
+            throw new IllegalStateException("REPORT failed: " + reply);
+        }
+        json.remove("testSetId");
+        Files.write(dest, GSON.toJson(json).getBytes(StandardCharsets.UTF_8));
+        System.out.println("tcp-report: " + dest.getFileName() + " " + json);
+    }
+
+    private static void readUntilAck(BufferedReader in) throws Exception {
+        Base64.Decoder dec = Base64.getDecoder();
+        String line;
+        while ((line = in.readLine()) != null && !line.equals("ACK")) {
+            if (line.startsWith("COV ")) {
+                JsonObject cov = GSON.fromJson(line.substring(4), JsonObject.class);
+                Map<String, List<Integer>> probes = GSON.fromJson(cov.get("executedLinesByFile"),
+                        new TypeToken<Map<String, List<Integer>>>() { }.getType());
+                for (Map.Entry<String, List<Integer>> e : probes.entrySet()) {
+                    if (!UNION.containsKey(e.getKey())) {
+                        UNION.put(e.getKey(), new TreeSet<Integer>());
+                    }
+                    UNION.get(e.getKey()).addAll(e.getValue());
+                }
+            } else if (line.startsWith("CLASSES ")) {
+                String[] f = line.substring(8).split(" ");
+                manifest = new String(dec.decode(f[1]), StandardCharsets.UTF_8);
+                zip = dec.decode(f[2]);
+            } else if (line.startsWith("MANIFEST ")) {
+                manifest = new String(dec.decode(line.substring(9).split(" ")[1]), StandardCharsets.UTF_8);
+            }
+        }
+        if (line == null) {
+            throw new IllegalStateException("the SDK closed the connection before ACK");
+        }
+    }
+
+    private static void send(OutputStream os, String line) throws Exception {
+        os.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+        os.flush();
+    }
+
+    private static void expect(String want, String got) {
+        if (!want.equals(got)) {
+            throw new IllegalStateException("expected '" + want + "', got '" + got + "'");
+        }
+    }
+}
+JAVA
+
+cat > "${work_dir}/src/tcp/smoke/SmokeCompare.java" <<'JAVA'
+package smoke;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+public final class SmokeCompare {
+    public static void main(String[] args) throws Exception {
+        Gson gson = new Gson();
+        JsonObject offline = read(gson, args[0]);
+        for (int i = 1; i < args.length; i++) {
+            JsonObject inJvm = read(gson, args[i]);
+            if (!offline.equals(inJvm)) {
+                throw new IllegalStateException(args[i] + " differs from the offline reporter: "
+                        + inJvm + " vs " + offline);
+            }
+        }
+        long lineCovered = offline.get("lineCovered").getAsLong();
+        long lineTotal = offline.get("lineTotal").getAsLong();
+        long branchCovered = offline.get("branchCovered").getAsLong();
+        long branchTotal = offline.get("branchTotal").getAsLong();
+        // Shop + Shop$Basket ran partly: both counters must be partly covered.
+        if (offline.get("classCount").getAsInt() != 2 || offline.get("hitClassCount").getAsInt() != 2
+                || lineCovered <= 0 || lineCovered >= lineTotal
+                || branchCovered <= 0 || branchCovered >= branchTotal) {
+            throw new IllegalStateException("implausible coverage: " + offline);
+        }
+        System.out.println("tcp-report: in-JVM equals offline: " + offline);
+    }
+
+    private static JsonObject read(Gson gson, String path) throws Exception {
+        return gson.fromJson(new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8),
+                JsonObject.class);
+    }
+}
+JAVA
+
+javac -cp "${agent_jar}" -d "${work_dir}/tcp-app" "${work_dir}/src/tcp/smoke/Shop.java"
+javac -cp "${work_dir}/tcp-app:${agent_jar}" -d "${work_dir}/tcp-harness" \
+  "${work_dir}/src/tcp/smoke/SmokeTcpHarness.java" \
+  "${work_dir}/src/tcp/smoke/SmokeCompare.java"
+
 javac -cp "${agent_jar}" -d "${work_dir}/classes" \
   "${work_dir}/src/smoke/Work.java" \
   "${work_dir}/src/smoke/SmokeHarness.java"
@@ -241,3 +490,21 @@ run_smoke "servlet-war-layout" \
   java_with_agents "servlet-war-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "servlet-war-layout"
+
+tcp_dir="${work_dir}/tcp"
+mkdir -p "${tcp_dir}/runner-classes"
+echo "Running Java agent smoke: tcp-report"
+java \
+  -javaagent:"${jacoco_jar}=destfile=${tcp_dir}/jacoco.exec" \
+  -Dkeploy.java.class.dirs="${work_dir}/tcp-app" \
+  -Dkeploy.java.classpath.fallback=false \
+  -cp "${work_dir}/tcp-app:${work_dir}/tcp-harness:${agent_jar}" \
+  smoke.SmokeTcpHarness "${tcp_dir}"
+# The coverage-runner Job's own steps (coverage-run.sh): unzip the CLASSES zip
+# into a directory, then run the offline reporter on it.
+(cd "${tcp_dir}/runner-classes" && jar xf ../classes.zip)
+java -cp "${agent_jar}" io.keploy.dedup.CoverageReporter \
+  --classes "${tcp_dir}/runner-classes" --union "${tcp_dir}/union.json" \
+  --manifest "${tcp_dir}/manifest.json" --out "${tcp_dir}/offline.json"
+java -cp "${work_dir}/tcp-harness:${agent_jar}" smoke.SmokeCompare \
+  "${tcp_dir}/offline.json" "${tcp_dir}/injvm-live.json" "${tcp_dir}/injvm-manifest.json"

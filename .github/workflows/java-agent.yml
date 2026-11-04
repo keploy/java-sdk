@@ -35,8 +35,8 @@ jobs:
           java-version: ${{ matrix.java-version }}
           cache: maven
 
-      - name: Build
-        run: mvn -B -DskipTests clean verify
+      - name: Build and unit-test
+        run: mvn -B clean verify
 
       - name: Smoke test Java agent
         run: ./scripts/smoke-javaagent.sh

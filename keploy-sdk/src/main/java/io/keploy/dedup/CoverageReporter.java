@@ -3,9 +3,9 @@ package io.keploy.dedup;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import org.jacoco.core.analysis.Analyzer;
-import org.jacoco.core.analysis.CoverageBuilder;
 import org.jacoco.core.analysis.IClassCoverage;
 import org.jacoco.core.analysis.ICounter;
+import org.jacoco.core.analysis.ICoverageVisitor;
 import org.jacoco.core.data.ExecutionData;
 import org.jacoco.core.data.ExecutionDataStore;
 
@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -57,6 +58,14 @@ import java.util.Map;
  * {@code {"lineCovered":N,"lineTotal":N,"branchCovered":N,"branchTotal":N,
  * "instructionCovered":N,"instructionTotal":N,"methodCovered":N,
  * "methodTotal":N,"classCount":N,"hitClassCount":N}}.
+ *
+ * <p><b>In-JVM mode.</b> The same computation also runs inside the app's own
+ * JVM, where the SDK already holds the app's class bytes and the live manifest:
+ * the collector sends a {@code REPORT} command with the union over the TCP
+ * collector channel and gets the same JSON back, so no separate JVM is needed
+ * (see {@link #computeInJvm} and {@code KeployDedupAgent}'s TCP transport). Both
+ * modes share {@link #compute(ClassSource, Map, Map)}, so the same inputs give
+ * the same numbers.
  */
 public final class CoverageReporter {
 
@@ -73,6 +82,10 @@ public final class CoverageReporter {
 
     /** Computed coverage counters, serialized to the --out file. */
     static final class CoverageResult {
+        // Set only on an in-JVM REPORT reply, so the collector can match the
+        // reply to its test set. Gson leaves a null field out, so the offline
+        // --out JSON is unchanged.
+        String testSetId;
         long lineCovered, lineTotal;
         long branchCovered, branchTotal;
         long instructionCovered, instructionTotal;
@@ -105,7 +118,53 @@ public final class CoverageReporter {
     static CoverageResult compute(Path classesPath, Path unionPath, Path manifestPath) throws IOException {
         Map<String, List<Integer>> union = readUnion(unionPath);
         Map<String, ClassMeta> manifest = readManifest(manifestPath);
+        final File classesFile = classesPath.toFile();
+        return compute(analyzer -> {
+            if (!classesFile.exists()) {
+                throw new IOException("classes path does not exist: " + classesPath);
+            }
+            // analyzeAll walks a dir tree (or a jar) and analyzes every .class,
+            // computing each class's CRC64 id and matching it against the store.
+            //
+            // LIMITATION — load-time-transformed classes may undercount: the store id
+            // comes from the LIVE ExecutionData at record time, but analyzeAll hashes
+            // the ON-DISK .class bytes. If a class was transformed before JaCoCo saw it
+            // (another -javaagent, CGLIB, load-time weaving — common in Spring apps),
+            // the two CRC64 ids differ, so the analyzed class won't match its store
+            // entry: its fired probes are dropped from the numerator while it still
+            // counts toward the denominator, deflating the reported coverage. Dedup is
+            // UNAFFECTED (probe sets are compared like-for-like, never against on-disk
+            // bytes) — only the reported line/branch numbers can be low. To fully fix,
+            // export the exact instrumented bytes (or detect+log id mismatches here).
+            analyzer.analyzeAll(classesFile);
+        }, union, manifest);
+    }
 
+    /**
+     * In-JVM mode: the same computation over class bytes the caller already holds
+     * in memory (the SDK's indexed app classes, the very bytes it zips for the
+     * offline mode). Each entry maps a VM class name to its {@code .class} bytes.
+     */
+    static CoverageResult computeInJvm(Map<String, byte[]> classes, Map<String, List<Integer>> union,
+                                       Map<String, ClassMeta> manifest) throws IOException {
+        return compute(analyzer -> {
+            for (Map.Entry<String, byte[]> entry : classes.entrySet()) {
+                analyzer.analyzeClass(entry.getValue(), entry.getKey() + ".class");
+            }
+        }, union, manifest);
+    }
+
+    /** Feeds the app's classes to the analyzer: from disk (offline) or from memory (in-JVM). */
+    interface ClassSource {
+        void analyze(Analyzer analyzer) throws IOException;
+    }
+
+    /**
+     * The one computation both modes share: rebuild the execution data from the
+     * manifest and the union, then analyze the classes.
+     */
+    static CoverageResult compute(ClassSource classes, Map<String, List<Integer>> union,
+                                  Map<String, ClassMeta> manifest) throws IOException {
         ExecutionDataStore store = new ExecutionDataStore();
         int hitClasses = 0;
         for (Map.Entry<String, ClassMeta> entry : manifest.entrySet()) {
@@ -130,31 +189,35 @@ public final class CoverageReporter {
             store.put(new ExecutionData(id, className, probes));
         }
 
-        CoverageBuilder builder = new CoverageBuilder();
-        Analyzer analyzer = new Analyzer(store, builder);
-        File classesFile = classesPath.toFile();
-        if (!classesFile.exists()) {
-            throw new IOException("classes path does not exist: " + classesPath);
-        }
-        // analyzeAll walks a dir tree (or a jar) and analyzes every .class,
-        // computing each class's CRC64 id and matching it against the store.
-        //
-        // LIMITATION — load-time-transformed classes may undercount: the store id
-        // comes from the LIVE ExecutionData at record time, but analyzeAll hashes
-        // the ON-DISK .class bytes. If a class was transformed before JaCoCo saw it
-        // (another -javaagent, CGLIB, load-time weaving — common in Spring apps),
-        // the two CRC64 ids differ, so the analyzed class won't match its store
-        // entry: its fired probes are dropped from the numerator while it still
-        // counts toward the denominator, deflating the reported coverage. Dedup is
-        // UNAFFECTED (probe sets are compared like-for-like, never against on-disk
-        // bytes) — only the reported line/branch numbers can be low. To fully fix,
-        // export the exact instrumented bytes (or detect+log id mismatches here).
-        analyzer.analyzeAll(classesFile);
+        Totals totals = new Totals();
+        classes.analyze(new Analyzer(store, totals));
 
-        CoverageResult result = new CoverageResult();
-        int classCount = 0;
-        for (IClassCoverage cc : builder.getClasses()) {
-            classCount++;
+        CoverageResult result = totals.result;
+        result.hitClassCount = hitClasses;
+        return result;
+    }
+
+    /**
+     * Sums each class's counters as the analyzer hands it over, so neither mode
+     * keeps the whole coverage tree in memory (the in-JVM mode runs in the app's
+     * heap). It counts a class name once, as JaCoCo's CoverageBuilder does: the
+     * same name with the same id again is the same class and is skipped, and the
+     * same name with a different id fails with CoverageBuilder's own error.
+     */
+    static final class Totals implements ICoverageVisitor {
+        private final Map<String, Long> idsByName = new HashMap<>();
+        final CoverageResult result = new CoverageResult();
+
+        @Override
+        public void visitCoverage(IClassCoverage cc) {
+            Long seen = idsByName.put(cc.getName(), cc.getId());
+            if (seen != null) {
+                if (seen != cc.getId()) {
+                    throw new IllegalStateException("Can't add different class with same name: " + cc.getName());
+                }
+                return;
+            }
+            result.classCount++;
             result.lineCovered += cc.getLineCounter().getCoveredCount();
             result.lineTotal += cc.getLineCounter().getTotalCount();
             result.branchCovered += cc.getBranchCounter().getCoveredCount();
@@ -164,9 +227,6 @@ public final class CoverageReporter {
             result.methodCovered += cc.getMethodCounter().getCoveredCount();
             result.methodTotal += cc.getMethodCounter().getTotalCount();
         }
-        result.classCount = classCount;
-        result.hitClassCount = hitClasses;
-        return result;
     }
 
     private static Map<String, List<Integer>> readUnion(Path path) throws IOException {

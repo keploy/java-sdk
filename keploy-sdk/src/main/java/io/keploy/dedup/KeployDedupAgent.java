@@ -84,6 +84,64 @@ public final class KeployDedupAgent {
         return "MANIFEST " + b64Tag + " " + b64Manifest;
     }
 
+    // CAPS_LINE is the first line the SDK writes on every TCP collector
+    // connection: it names the commands beyond START/END this SDK answers, so the
+    // collector sends REPORT only to an SDK that will reply to it. An older SDK
+    // writes no CAPS line, and a collector that predates CAPS ignores the line
+    // (it reads only ACK, COV, CLASSES and MANIFEST).
+    static final String CAPS_LINE = "CAPS REPORT";
+
+    // reportReply answers one in-JVM REPORT command: "REPORT <json>", where the
+    // JSON is the CoverageReporter result for the request's union, tagged with
+    // the test set id, or {"testSetId":..,"error":..} when the request cannot be
+    // answered. The request is {"union":{vmClassName:[probeIdx]},
+    // "manifest":{vmClassName:{"id":hex,"probeCount":n}}}; the union is required,
+    // and a request without a manifest uses this JVM's live manifest (the one it
+    // uploads in its CLASSES/MANIFEST frames). classes yields the app's indexed
+    // class bytes by VM name. It never throws: the collector reads one REPORT
+    // line before each ACK, so every request gets exactly one reply line.
+    static String reportReply(String testSetId, String requestJson,
+                              java.util.concurrent.Callable<Map<String, byte[]>> classes,
+                              java.util.concurrent.Callable<Map<String, CoverageReporter.ClassMeta>> liveManifest) {
+        String error;
+        try {
+            // Gson reads an empty body as null.
+            ReportRequest request = GSON.fromJson(requestJson, ReportRequest.class);
+            if (request == null || request.union == null) {
+                error = "report request has no union";
+            } else {
+                Map<String, CoverageReporter.ClassMeta> manifest =
+                        request.manifest != null ? request.manifest : liveManifest.call();
+                CoverageReporter.CoverageResult result =
+                        CoverageReporter.computeInJvm(classes.call(), request.union, manifest);
+                result.testSetId = testSetId;
+                return "REPORT " + GSON.toJson(result);
+            }
+        } catch (Throwable e) {
+            error = e.getClass().getSimpleName() + ": " + e.getMessage();
+        }
+        log(Level.WARNING, "Keploy dedup: in-JVM coverage report for " + testSetId + " failed: " + error, null);
+        return "REPORT " + GSON.toJson(new ReportError(testSetId, error));
+    }
+
+    // ReportRequest is the JSON body of a REPORT command (see reportReply).
+    static final class ReportRequest {
+        Map<String, List<Integer>> union;
+        Map<String, CoverageReporter.ClassMeta> manifest;
+    }
+
+    // ReportError is the REPORT reply when no coverage could be computed. It has
+    // no counters, so a collector can never read a failure as 0% coverage.
+    private static final class ReportError {
+        private final String testSetId;
+        private final String error;
+
+        private ReportError(String testSetId, String error) {
+            this.testSetId = testSetId;
+            this.error = error;
+        }
+    }
+
     private static final String CONTROL_SOCKET_PATH = "/tmp/coverage_control.sock";
     private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
     private static final String DEFAULT_JACOCO_HOST = "127.0.0.1";
@@ -457,8 +515,11 @@ public final class KeployDedupAgent {
      * but inverts the roles — here the SDK is the client. Wire protocol:
      * <pre>
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
-     *   SDK -&gt; collector : "ACK"                        (after START reset)
+     *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;" | "REPORT &lt;testSetId&gt; &lt;json&gt;"
+     *   SDK -&gt; collector : "CAPS REPORT"                (first line, on connect)
+     *                      "ACK"                        (after START reset)
      *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
+     *                      "REPORT &lt;compact-json&gt;" + "ACK" (in-JVM coverage, see reportReply)
      * </pre>
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
@@ -524,6 +585,7 @@ public final class KeployDedupAgent {
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
                 OutputStream out = active.getOutputStream();
+                writeLine(out, CAPS_LINE);
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
@@ -543,6 +605,13 @@ public final class KeployDedupAgent {
 
         private void dispatch(CoverageCommand command, OutputStream out) throws IOException {
             synchronized (testCaseLock) {
+                if (command.action == CommandAction.REPORT) {
+                    // In-JVM line/branch coverage for a test set: one REPORT line,
+                    // then ACK, like COV. reportReply never throws.
+                    writeLine(out, collector.report(command.testId, command.payload));
+                    writeLine(out, "ACK");
+                    return;
+                }
                 if (command.action == CommandAction.START) {
                     activeTestId = command.testId;
                     // Warm up app classes once before the first measured window so
@@ -622,17 +691,26 @@ public final class KeployDedupAgent {
 
     private enum CommandAction {
         START,
-        END
+        END,
+        // TCP transport only: the unix transport answers START and END alone.
+        REPORT
     }
 
     private static final class CoverageCommand {
 
         private final CommandAction action;
         private final String testId;
+        // REPORT only: the request JSON after the test set id ("" when absent).
+        private final String payload;
 
         private CoverageCommand(CommandAction action, String testId) {
+            this(action, testId, "");
+        }
+
+        private CoverageCommand(CommandAction action, String testId, String payload) {
             this.action = action;
             this.testId = testId;
+            this.payload = payload;
         }
 
         private static CoverageCommand parse(String raw) {
@@ -647,6 +725,10 @@ public final class KeployDedupAgent {
             }
             if ("END".equals(parts[0])) {
                 return new CoverageCommand(CommandAction.END, parts[1].trim());
+            }
+            if ("REPORT".equals(parts[0])) {
+                String[] args = parts[1].trim().split(" ", 2);
+                return new CoverageCommand(CommandAction.REPORT, args[0], args.length == 2 ? args[1] : "");
             }
 
             log(Level.FINE, "Unknown Java dedup command: " + raw, null);
@@ -836,6 +918,29 @@ public final class KeployDedupAgent {
             }
 
             return toSortedMap(raw);
+        }
+
+        // report computes a test set's line/branch coverage in this JVM: the
+        // indexed class bytes (what zipIndexedClasses sends) and the live manifest
+        // (what pollBytecodeFrame sends) are the offline reporter's classes and
+        // manifest, and the collector supplies the union. See reportReply.
+        String report(String testSetId, String requestJson) {
+            return reportReply(testSetId, requestJson, () -> {
+                Map<String, byte[]> classes = new LinkedHashMap<>();
+                for (ClassEntry entry : coverageIndex.entries()) {
+                    classes.put(entry.className, entry.bytes);
+                }
+                return classes;
+            }, () -> {
+                Map<String, CoverageReporter.ClassMeta> manifest = new LinkedHashMap<>();
+                for (Map.Entry<String, ManifestEntry> live : liveManifest.entrySet()) {
+                    CoverageReporter.ClassMeta meta = new CoverageReporter.ClassMeta();
+                    meta.id = live.getValue().id;
+                    meta.probeCount = live.getValue().probeCount;
+                    manifest.put(live.getKey(), meta);
+                }
+                return manifest;
+            });
         }
 
         // indexedClassNames returns the VM names of the app's own classes (from the
