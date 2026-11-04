@@ -298,6 +298,16 @@ public class CoverageReporterInJvmTest {
                 KeployDedupAgent.reportReply("ts", request(union, null), () -> classes, () -> {
                     throw new IllegalStateException("manifest failed");
                 }));
+        // No indexed class: an error, not zero totals that read as an app with no code.
+        assertErrorReply("no classes", "no application classes indexed",
+                KeployDedupAgent.reportReply("ts", request(union, manifest), LinkedHashMap::new, () -> manifest));
+        // An Error (a JaCoCo class the app's class loader cannot link, a deep
+        // class that overflows the analyzer's stack) is still one error reply,
+        // never a REPORT left unanswered.
+        assertErrorReply("analyzer cannot link", "NoClassDefFoundError: org/jacoco/core/analysis/Analyzer",
+                KeployDedupAgent.reportReply("ts", request(union, manifest), () -> {
+                    throw new NoClassDefFoundError("org/jacoco/core/analysis/Analyzer");
+                }, () -> manifest));
     }
 
     @Test

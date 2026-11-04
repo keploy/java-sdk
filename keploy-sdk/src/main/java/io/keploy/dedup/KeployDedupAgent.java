@@ -110,12 +110,19 @@ public final class KeployDedupAgent {
             if (request == null || request.union == null) {
                 error = "report request has no union";
             } else {
-                Map<String, CoverageReporter.ClassMeta> manifest =
-                        request.manifest != null ? request.manifest : liveManifest.call();
-                CoverageReporter.CoverageResult result =
-                        CoverageReporter.computeInJvm(classes.call(), request.union, manifest);
-                result.testSetId = testSetId;
-                return "REPORT " + GSON.toJson(result);
+                Map<String, byte[]> appClasses = classes.call();
+                if (appClasses.isEmpty()) {
+                    // Zero totals would read as an app with no code, so a request
+                    // with no class to analyze fails like any other.
+                    error = "no application classes indexed";
+                } else {
+                    Map<String, CoverageReporter.ClassMeta> manifest =
+                            request.manifest != null ? request.manifest : liveManifest.call();
+                    CoverageReporter.CoverageResult result =
+                            CoverageReporter.computeInJvm(appClasses, request.union, manifest);
+                    result.testSetId = testSetId;
+                    return "REPORT " + GSON.toJson(result);
+                }
             }
         } catch (Throwable e) {
             error = e.getClass().getSimpleName() + ": " + e.getMessage();
