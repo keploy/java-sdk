@@ -53,9 +53,9 @@ public class CoverageTcpClientTest {
             out.write("END test-set-0/test-47\nEND test-set-0/test-48\n".getBytes(StandardCharsets.UTF_8));
             out.flush();
 
-            assertEquals(KeployDedupAgent.IGNORED_REPLY + " test-set-0/test-47", in.readLine());
+            assertEquals("IGNORED test-set-0/test-47", in.readLine());
             assertEquals("ACK", in.readLine());
-            assertEquals(KeployDedupAgent.IGNORED_REPLY + " test-set-0/test-48", in.readLine());
+            assertEquals("IGNORED test-set-0/test-48", in.readLine());
             assertEquals("ACK", in.readLine());
         }
     }

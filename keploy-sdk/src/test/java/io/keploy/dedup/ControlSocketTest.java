@@ -69,7 +69,7 @@ public class ControlSocketTest {
         File socket = new File(KeployDedupAgent.controlSocketPath);
         assertTrue(socket.createNewFile());
         assertTrue(KeployDedupAgent.start());
-        assertEquals(KeployDedupAgent.IGNORED_REPLY, send("END test-set-0/test-1"));
+        assertEquals("IGNORED", send("END test-set-0/test-1"));
     }
 
     @Test
@@ -82,7 +82,7 @@ public class ControlSocketTest {
     @Test
     public void endWithNoStartIsAnsweredIgnoredNotAck() throws Exception {
         assertTrue(KeployDedupAgent.start());
-        assertEquals(KeployDedupAgent.IGNORED_REPLY, send("END test-set-0/test-47"));
+        assertEquals("IGNORED", send("END test-set-0/test-47"));
     }
 
     private static String send(String command) throws IOException {
