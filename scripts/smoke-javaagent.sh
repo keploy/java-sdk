@@ -165,9 +165,23 @@ public final class SmokeHarness {
 }
 JAVA
 
+cat > "${work_dir}/src/smoke/PlainApp.java" <<'JAVA'
+package smoke;
+
+public final class PlainApp {
+    private PlainApp() {
+    }
+
+    public static void main(String[] args) {
+        System.out.println("plain-app: main ran");
+    }
+}
+JAVA
+
 javac -cp "${agent_jar}" -d "${work_dir}/classes" \
   "${work_dir}/src/smoke/Work.java" \
-  "${work_dir}/src/smoke/SmokeHarness.java"
+  "${work_dir}/src/smoke/SmokeHarness.java" \
+  "${work_dir}/src/smoke/PlainApp.java"
 
 run_smoke() {
   local mode="${1:?mode required}"
@@ -246,3 +260,30 @@ run_smoke "servlet-war-layout" \
   java_with_agents "servlet-war-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "servlet-war-layout"
+
+# The agent binds the control socket in premain, so junixsocket's native
+# library loads there, before main runs. A JVM that cannot load it must still
+# run the app, without dedup: whatever the bind throws, premain must not fail
+# the app's start. junixsocket's override properties make the library
+# unloadable; the agent's SEVERE line shows they did, so this case cannot pass
+# with the library loaded.
+echo "Running Java agent smoke: native-library-unloadable"
+rm -f /tmp/coverage_control.sock /tmp/coverage_data.sock /tmp/keploy-sdk-smoke-native-library-unloadable.exec
+unloadable_log="${work_dir}/native-library-unloadable.log"
+unloadable_rc=0
+java_with_agents "native-library-unloadable" \
+  -Dorg.newsclub.net.unix.library.override=/nonexistent/libjunixsocket.so \
+  -Dorg.newsclub.net.unix.library.override.force=true \
+  -cp "${work_dir}/classes:${agent_jar}" \
+  smoke.PlainApp >"${unloadable_log}" 2>&1 || unloadable_rc=$?
+if [[ "${unloadable_rc}" -ne 0 ]] || ! grep -qx 'plain-app: main ran' "${unloadable_log}"; then
+  cat "${unloadable_log}" >&2
+  echo "native-library-unloadable: the app did not run (exit ${unloadable_rc}) with junixsocket's native library unloadable" >&2
+  exit 1
+fi
+if ! grep -q 'Java dedup control socket server is unavailable' "${unloadable_log}"; then
+  cat "${unloadable_log}" >&2
+  echo "native-library-unloadable: the agent did not say the control socket is unavailable: the library loaded, so this case tested nothing" >&2
+  exit 1
+fi
+echo "native-library-unloadable: main ran, and the agent ran it without dedup"
