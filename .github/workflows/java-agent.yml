@@ -38,5 +38,8 @@ jobs:
       - name: Build
         run: mvn -B -DskipTests clean verify
 
+      - name: Unit tests
+        run: mvn -B -pl keploy-sdk -am test
+
       - name: Smoke test Java agent
         run: ./scripts/smoke-javaagent.sh

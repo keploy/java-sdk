@@ -84,12 +84,19 @@ public final class KeployDedupAgent {
         return "MANIFEST " + b64Tag + " " + b64Manifest;
     }
 
-    private static final String CONTROL_SOCKET_PATH = "/tmp/coverage_control.sock";
+    // The unix control socket's path. Not final only so tests can bind one of
+    // their own; the agent never changes it.
+    static volatile String controlSocketPath = "/tmp/coverage_control.sock";
     private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
     private static final String DEFAULT_JACOCO_HOST = "127.0.0.1";
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
+    // The answer to an END not taken (no START for that test came first, as
+    // after a restart): nothing was published for it, so Keploy must not use
+    // the test's coverage. On the unix socket it is the whole answer; on TCP
+    // it is a frame naming the test, and ACK still follows (CoverageTcpClient).
+    static final String IGNORED_REPLY = "IGNORED";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -170,7 +177,24 @@ public final class KeployDedupAgent {
         } else {
             // local/docker: SDK owns the unix control socket and pushes coverage
             // back over the unix data socket on a pod-shared /tmp.
-            CommandServer server = new CommandServer(collector, new CoveragePublisher(new File(DATA_SOCKET_PATH)));
+            //
+            // Bind here, on the caller's thread, not on the accept thread:
+            // premain runs before the app's main, so the socket is listening
+            // before any app code can answer a health check, and Keploy's
+            // first START finds it. Bound on the accept thread, it could come
+            // up after the app answered and Keploy had fired its first tests,
+            // whose START and END then reached no one: their coverage was lost.
+            CommandServer server = new CommandServer(collector,
+                    new CoveragePublisher(new File(DATA_SOCKET_PATH)), new File(controlSocketPath));
+            try {
+                server.bind();
+            } catch (Throwable t) {
+                // Never let premain fail the app's start: run it without dedup.
+                server.close();
+                STARTED.set(false);
+                log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
+                return false;
+            }
             worker = server;
             coverageWorker = server;
             threadName = "keploy-java-dedup-control";
@@ -332,26 +356,32 @@ public final class KeployDedupAgent {
 
         private final CoverageCollector collector;
         private final CoveragePublisher publisher;
+        private final File controlSocket;
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Object testCaseLock = new Object();
         private volatile AFUNIXServerSocket serverSocket;
         private String activeTestId = "";
 
-        CommandServer(CoverageCollector collector, CoveragePublisher publisher) {
+        CommandServer(CoverageCollector collector, CoveragePublisher publisher, File controlSocket) {
             this.collector = collector;
             this.publisher = publisher;
+            this.controlSocket = controlSocket;
+        }
+
+        // bind replaces a stale socket file and listens on the control socket.
+        // start() calls it before it returns, so a command sent once start()
+        // has returned waits in the backlog for run() instead of being refused.
+        // On a failure the caller closes this server, which closes the socket.
+        void bind() throws IOException {
+            deleteSocketFile(controlSocket);
+            serverSocket = AFUNIXServerSocket.newInstance();
+            serverSocket.bind(AFUNIXSocketAddress.of(controlSocket), SOCKET_BACKLOG);
+            relaxSocketPermissions(controlSocket);
         }
 
         @Override
         public void run() {
-            File controlSocket = new File(CONTROL_SOCKET_PATH);
-            deleteSocketFile(controlSocket);
-
-            try (AFUNIXServerSocket localServer = AFUNIXServerSocket.newInstance()) {
-                localServer.bind(AFUNIXSocketAddress.of(controlSocket), SOCKET_BACKLOG);
-                relaxSocketPermissions(controlSocket);
-                serverSocket = localServer;
-
+            try (AFUNIXServerSocket localServer = serverSocket) {
                 while (running.get()) {
                     try {
                         handle(localServer.accept());
@@ -407,7 +437,9 @@ public final class KeployDedupAgent {
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
                                         + command.testId,
                                 null);
-                        writeAck(outputStream);
+                        // Not ACK: this END publishes nothing, and an ACK told
+                        // Keploy it had, so it waited for a record that never came.
+                        writeReply(outputStream, IGNORED_REPLY);
                         return;
                     }
 
@@ -429,11 +461,15 @@ public final class KeployDedupAgent {
         }
 
         private void writeAck(OutputStream outputStream) {
+            writeReply(outputStream, "ACK");
+        }
+
+        private void writeReply(OutputStream outputStream, String reply) {
             try {
-                outputStream.write("ACK\n".getBytes(StandardCharsets.UTF_8));
+                outputStream.write((reply + "\n").getBytes(StandardCharsets.UTF_8));
                 outputStream.flush();
             } catch (IOException e) {
-                log(Level.FINE, "Java dedup control client disconnected before ACK was delivered", e);
+                log(Level.FINE, "Java dedup control client disconnected before " + reply + " was delivered", e);
             }
         }
 
@@ -459,6 +495,7 @@ public final class KeployDedupAgent {
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
      *   SDK -&gt; collector : "ACK"                        (after START reset)
      *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
+     *                      "IGNORED &lt;id&gt;" + "ACK"         (after END with no START)
      * </pre>
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
@@ -559,6 +596,11 @@ public final class KeployDedupAgent {
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
                                         + command.testId,
                                 null);
+                        // Say so before the ACK: with no COV the collector has no
+                        // other way to tell this test went unmeasured. ACK still
+                        // follows, as it ends the collector's wait, and a collector
+                        // that does not know this frame skips it.
+                        writeLine(out, IGNORED_REPLY + " " + command.testId);
                         writeLine(out, "ACK");
                         return;
                     }

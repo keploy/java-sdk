@@ -25,6 +25,8 @@ Keploy Enterprise drives dynamic dedup per testcase.
 
 Coverage is collected at per-testcase granularity, not process granularity.
 
+The agent binds `/tmp/coverage_control.sock` before the application's `main` runs, so the socket is listening before the application can answer a health check. It answers `ACK` to each command it took, and `IGNORED` to an `END` that no `START` for that testcase came before: nothing is published for it, and Enterprise keeps that testcase out of the comparison. On the TCP transport used in Kubernetes the same `END` is answered with `IGNORED <testcase>` and then `ACK`.
+
 ## How to Use
 
 ### 1. Download the Keploy Java Agent
