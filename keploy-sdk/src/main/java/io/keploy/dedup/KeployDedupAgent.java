@@ -92,9 +92,10 @@ public final class KeployDedupAgent {
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
-    // The control socket's answer to an END it did not take (no START for that
-    // test came first, as after a restart): nothing was published for it, so
-    // Keploy must not use the test's coverage. Any other answer is ACK.
+    // The answer to an END not taken (no START for that test came first, as
+    // after a restart): nothing was published for it, so Keploy must not use
+    // the test's coverage. On the unix socket it is the whole answer; on TCP
+    // it is a frame naming the test, and ACK still follows (CoverageTcpClient).
     static final String IGNORED_REPLY = "IGNORED";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
@@ -494,6 +495,7 @@ public final class KeployDedupAgent {
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
      *   SDK -&gt; collector : "ACK"                        (after START reset)
      *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
+     *                      "IGNORED &lt;id&gt;" + "ACK"         (after END with no START)
      * </pre>
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
@@ -594,6 +596,11 @@ public final class KeployDedupAgent {
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
                                         + command.testId,
                                 null);
+                        // Say so before the ACK: with no COV the collector has no
+                        // other way to tell this test went unmeasured. ACK still
+                        // follows, as it ends the collector's wait, and a collector
+                        // that does not know this frame skips it.
+                        writeLine(out, IGNORED_REPLY + " " + command.testId);
                         writeLine(out, "ACK");
                         return;
                     }
