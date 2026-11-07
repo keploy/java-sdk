@@ -73,6 +73,13 @@ public final class SmokeHarness {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length == 0 ? "unknown" : args[0];
+
+        // Keploy fires its first test as soon as the app answers a health
+        // check, so the agent has to be listening before main runs. This START
+        // is main's first act and nothing waits for the control socket: an
+        // agent that binds it any later fails here.
+        command("START test-set-0/" + mode);
+
         delete(DATA_SOCKET);
 
         AtomicReference<String> payload = new AtomicReference<String>();
@@ -94,10 +101,8 @@ public final class SmokeHarness {
         receiver.setDaemon(true);
         receiver.start();
 
-        waitFor(CONTROL_SOCKET);
         waitFor(DATA_SOCKET);
 
-        command("START test-set-0/" + mode);
         if (Work.exercise(1) != 4) {
             throw new IllegalStateException("unexpected application result");
         }
