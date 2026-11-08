@@ -17,9 +17,15 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -52,9 +58,30 @@ public class ControlSocketTest {
     private File dir;
     private FakeJacoco jacoco;
     private DataReceiver data;
+    // What the agent logged at SEVERE during the test: the first 20 of them,
+    // so that a server looping on a closed socket fails a row, not the JVM.
+    private final List<String> severe = new CopyOnWriteArrayList<>();
+    private final Handler severeLog = new Handler() {
+        @Override
+        public void publish(LogRecord record) {
+            if (record.getLevel().intValue() >= Level.SEVERE.intValue() && severe.size() < 20) {
+                severe.add(record.getMessage());
+            }
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+        }
+    };
+    private AFUNIXServerSocket foreign;
 
     @Before
     public void setUp() throws IOException {
+        Logger.getLogger(KeployDedupAgent.class.getName()).addHandler(severeLog);
         savedControlPath = KeployDedupAgent.controlSocketPath;
         savedDataPath = KeployDedupAgent.dataSocketPath;
         dir = Files.createTempDirectory("keploy-dedup-control").toFile();
@@ -67,6 +94,12 @@ public class ControlSocketTest {
     @After
     public void tearDown() throws Exception {
         KeployDedupAgent.stop();
+        KeployDedupAgent.workerStopWaitMillis = 5000;
+        Logger.getLogger(KeployDedupAgent.class.getName()).removeHandler(severeLog);
+        Logger.getLogger(KeployDedupAgent.class.getName()).setUseParentHandlers(true);
+        if (foreign != null) {
+            foreign.close();
+        }
         KeployDedupAgent.controlSocketPath = savedControlPath;
         KeployDedupAgent.dataSocketPath = savedDataPath;
         System.clearProperty(JACOCO_PORT_PROPERTY);
@@ -273,15 +306,140 @@ public class ControlSocketTest {
         // Deleted while the START runs: the next accept finds the file gone,
         // and junixsocket closes the socket.
         assertTrue(new File(KeployDedupAgent.controlSocketPath).delete());
+        // A server that loops on the closed socket logs without end: kept
+        // off the console, so that it fails this row rather than the run.
+        Logger.getLogger(KeployDedupAgent.class.getName()).setUseParentHandlers(false);
         assertEquals(TAKEN, answer.poll(30, TimeUnit.SECONDS));
-        while ((KeployDedupAgent.isStarted() || controlThreadAlive()) && System.nanoTime() < deadline) {
+        long ends = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while ((KeployDedupAgent.isStarted() || controlThreadAlive()) && System.nanoTime() < ends) {
             Thread.sleep(5);
         }
         // Before, the accept loop went on on the closed socket: it spun a core
         // and logged without end, and the agent still said it was started.
         assertFalse("the agent says it is no longer started", KeployDedupAgent.isStarted());
         assertFalse("the control thread ended", controlThreadAlive());
+        assertEquals("said once, and nothing else at SEVERE: " + severe, 1, severe.size());
+        assertTrue(severe.get(0), severe.get(0).contains("was closed: its file was deleted or replaced"));
         client.join();
+    }
+
+    @Test(timeout = 60000)
+    public void aStopDuringACommandLeavesTheSocketToItsOwnThread() throws Exception {
+        startWithJacoco();
+        jacoco.holdMillis = 1500;
+        BlockingQueue<String> answer = new LinkedBlockingQueue<>();
+        Thread client = new Thread(() -> {
+            try {
+                answer.add(send("START test-set-0/test-1"));
+            } catch (IOException e) {
+                answer.add(e.toString());
+            }
+        });
+        client.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jacocoConnections() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        Thread stopper = new Thread(KeployDedupAgent::stop);
+        stopper.start();
+        Thread.sleep(300);
+        // stop() is waiting for the START. The socket is still open, as only
+        // its own thread closes it: closed from here, junixsocket's accept on
+        // that thread could close whatever socket took its fd number next.
+        assertTrue("stop() is still waiting for the command", stopper.isAlive());
+        File socket = new File(KeployDedupAgent.controlSocketPath);
+        assertTrue("the socket file is still there", socket.exists());
+        assertConnects("the socket still listens", socket);
+        stopper.join();
+        assertEquals("the START was answered", TAKEN, answer.poll(30, TimeUnit.SECONDS));
+        assertFalse("the control thread ended", controlThreadAlive());
+        assertFalse("its own thread deleted the socket file", socket.exists());
+        assertEquals("nothing at SEVERE: " + severe, 0, severe.size());
+        client.join();
+    }
+
+    @Test(timeout = 60000)
+    public void aStopAfterAnotherServerTookThePathEndsTheThreadAndLeavesTheirSocket() throws Exception {
+        KeployDedupAgent.workerStopWaitMillis = 300;
+        assertTrue(KeployDedupAgent.start());
+        assertEquals(IGNORED, send("END test-set-0/test-1"));
+        Thread.sleep(100);
+        severe.clear();
+        // Another server takes the path while the control thread waits in its
+        // accept: close()'s wake-up reaches that server, not this one.
+        File socket = new File(KeployDedupAgent.controlSocketPath);
+        assertTrue(socket.delete());
+        foreign = AFUNIXServerSocket.newInstance();
+        foreign.bind(AFUNIXSocketAddress.of(socket));
+        KeployDedupAgent.stop();
+        assertFalse(KeployDedupAgent.isStarted());
+        // stop() closed the socket once its wait was over: the thread ends.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (controlThreadAlive() && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertFalse("the control thread ended", controlThreadAlive());
+        assertTrue("the other server's socket file is left alone", socket.exists());
+        assertConnects("the other server still listens", socket);
+        assertEquals("a stop says nothing at SEVERE: " + severe, 0, severe.size());
+    }
+
+    @Test(timeout = 60000)
+    public void aStopAfterTheSocketFileWasDeletedEndsAtOnce() throws Exception {
+        KeployDedupAgent.workerStopWaitMillis = 20000;
+        assertTrue(KeployDedupAgent.start());
+        assertEquals(IGNORED, send("END test-set-0/test-1"));
+        Thread.sleep(100);
+        assertTrue(new File(KeployDedupAgent.controlSocketPath).delete());
+        long began = System.nanoTime();
+        KeployDedupAgent.stop();
+        long tookMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
+        // No wake-up can reach the accept, so close() closes the socket at
+        // once; left to stop()'s second try, it took the whole wait.
+        assertTrue("stop() took " + tookMillis + " ms", tookMillis < 10000);
+        assertFalse("the control thread ended", controlThreadAlive());
+    }
+
+    @Test(timeout = 60000)
+    public void aStartWhileTheStoppedWorkerStillRunsACommandIsRefused() throws Exception {
+        KeployDedupAgent.workerStopWaitMillis = 100;
+        startWithJacoco();
+        // Under the SDK's 3 s read timeout, so the START is answered ACK.
+        jacoco.holdMillis = 2000;
+        BlockingQueue<String> answer = new LinkedBlockingQueue<>();
+        Thread client = new Thread(() -> {
+            try {
+                answer.add(send("START test-set-0/test-1"));
+            } catch (IOException e) {
+                answer.add(e.toString());
+            }
+        });
+        client.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jacocoConnections() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        KeployDedupAgent.stop();
+        assertTrue("stop() gave up while the START runs", controlThreadAlive());
+        // A second server on the path now would lose its socket file when
+        // the first one's thread ends and closes its own.
+        assertFalse("start() refuses while the old worker runs", KeployDedupAgent.start());
+        assertFalse(KeployDedupAgent.isStarted());
+        assertEquals("the START was answered", TAKEN, answer.poll(30, TimeUnit.SECONDS));
+        while (controlThreadAlive() && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertTrue("start() binds once the old worker has ended", KeployDedupAgent.start());
+        assertEquals(IGNORED, send("END test-set-0/test-1"));
+        client.join();
+    }
+
+    private static void assertConnects(String what, File socket) {
+        try (AFUNIXSocket probe = AFUNIXSocket.newInstance()) {
+            probe.connect(AFUNIXSocketAddress.of(socket), 3000);
+        } catch (IOException e) {
+            throw new AssertionError(what + ": " + e, e);
+        }
     }
 
     private int jacocoConnections() {

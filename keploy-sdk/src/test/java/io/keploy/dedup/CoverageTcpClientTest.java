@@ -110,6 +110,41 @@ public class CoverageTcpClientTest {
     }
 
     @Test
+    public void anEndWhoseDumpFailedNamesTheTestThenAnswersAckAndEndsTheTest() throws Exception {
+        jacoco = new FakeJacoco();
+        System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK", in.readLine());
+            // JaCoCo goes away for the dump: test-1's lines never reach the
+            // SDK. Before, it sent an empty COV, as for a test that ran no
+            // line of the app.
+            jacoco.dropNext.set(1);
+            send(out, "END test-set-0/test-1");
+            assertEquals("IGNORED test-set-0/test-1", in.readLine());
+            assertEquals("ACK", in.readLine());
+            // That END ended test-1.
+            send(out, "END test-set-0/test-1");
+            assertEquals("IGNORED test-set-0/test-1", in.readLine());
+            assertEquals("ACK", in.readLine());
+
+            send(out, "START test-set-0/test-2");
+            assertEquals("ACK", in.readLine());
+            send(out, "END test-set-0/test-2");
+            String cov = in.readLine();
+            assertTrue("a COV for test-2, got " + cov,
+                    cov != null && cov.startsWith("COV ") && cov.contains("test-set-0/test-2"));
+            assertEquals("ACK", in.readLine());
+        }
+    }
+
+    @Test
     public void aStartThatThrowsNamesTheTestThenAnswersAckAndTheConnectionGoesOn() throws Exception {
         // A port no socket can have: the reset throws IllegalArgumentException.
         System.setProperty(JACOCO_PORT_PROPERTY, "70000");
