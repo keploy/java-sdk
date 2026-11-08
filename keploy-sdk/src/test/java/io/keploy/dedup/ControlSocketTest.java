@@ -12,8 +12,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -22,9 +20,6 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import org.jacoco.core.runtime.RemoteControlReader;
-import org.jacoco.core.runtime.RemoteControlWriter;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -217,6 +212,91 @@ public class ControlSocketTest {
         assertTrue(KeployDedupAgent.isStarted());
     }
 
+    @Test(timeout = 60000)
+    public void stopWaitsForTheCommandInFlightAndForItsThread() throws Exception {
+        startWithJacoco();
+        jacoco.holdMillis = 1000;
+        BlockingQueue<String> answer = new LinkedBlockingQueue<>();
+        Thread client = new Thread(() -> {
+            try {
+                answer.add(send("START test-set-0/test-1"));
+            } catch (IOException e) {
+                answer.add(e.toString());
+            }
+        });
+        client.start();
+        // The START is in the SDK, waiting on JaCoCo, when stop() is called.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jacocoConnections() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        KeployDedupAgent.stop();
+        // Before, stop() closed the socket and returned at once, with the
+        // thread still inside the START.
+        assertFalse("the control thread ended before stop() returned", controlThreadAlive());
+        assertEquals("the START was answered", TAKEN, answer.poll(30, TimeUnit.SECONDS));
+        client.join();
+    }
+
+    @Test(timeout = 60000)
+    public void aStartAfterStopOnTheSamePathKeepsItsSocket() throws Exception {
+        for (int i = 0; i < 20; i++) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals("round " + i, IGNORED, send("END test-set-0/test-1"));
+            KeployDedupAgent.stop();
+            assertTrue(KeployDedupAgent.start());
+            // Bound by the closing server's thread, the file was gone or its
+            // socket closed: these were refused.
+            assertEquals("round " + i, IGNORED, send("END test-set-0/test-1"));
+            assertEquals("round " + i, IGNORED, send("END test-set-0/test-1"));
+            KeployDedupAgent.stop();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void aSocketFileDeletedUnderTheServerEndsItOnceAndSaysSo() throws Exception {
+        startWithJacoco();
+        jacoco.holdMillis = 500;
+        BlockingQueue<String> answer = new LinkedBlockingQueue<>();
+        Thread client = new Thread(() -> {
+            try {
+                answer.add(send("START test-set-0/test-1"));
+            } catch (IOException e) {
+                answer.add(e.toString());
+            }
+        });
+        client.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jacocoConnections() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        // Deleted while the START runs: the next accept finds the file gone,
+        // and junixsocket closes the socket.
+        assertTrue(new File(KeployDedupAgent.controlSocketPath).delete());
+        assertEquals(TAKEN, answer.poll(30, TimeUnit.SECONDS));
+        while ((KeployDedupAgent.isStarted() || controlThreadAlive()) && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        // Before, the accept loop went on on the closed socket: it spun a core
+        // and logged without end, and the agent still said it was started.
+        assertFalse("the agent says it is no longer started", KeployDedupAgent.isStarted());
+        assertFalse("the control thread ended", controlThreadAlive());
+        client.join();
+    }
+
+    private int jacocoConnections() {
+        return jacoco.accepted.get();
+    }
+
+    private static boolean controlThreadAlive() {
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.getName().equals("keploy-java-dedup-control") && t.isAlive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void startWithJacoco() throws IOException {
         jacoco = new FakeJacoco();
         System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
@@ -269,50 +349,6 @@ public class ControlSocketTest {
             all.write(buf, 0, n);
         }
         return new String(all.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    /**
-     * A JaCoCo tcpserver: it answers each dump or reset with an empty dump.
-     * dropNext closes that many connections first with no answer, as a JaCoCo
-     * that went away does.
-     */
-    private static final class FakeJacoco implements Closeable {
-
-        final ServerSocket server;
-        final AtomicInteger dropNext = new AtomicInteger();
-        final AtomicInteger served = new AtomicInteger();
-
-        FakeJacoco() throws IOException {
-            server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
-            Thread thread = new Thread(this::serve, "fake-jacoco");
-            thread.setDaemon(true);
-            thread.start();
-        }
-
-        private void serve() {
-            while (!server.isClosed()) {
-                try (Socket socket = server.accept()) {
-                    socket.setSoTimeout(30000);
-                    if (dropNext.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
-                        continue;
-                    }
-                    RemoteControlWriter writer = new RemoteControlWriter(socket.getOutputStream());
-                    RemoteControlReader reader = new RemoteControlReader(socket.getInputStream());
-                    reader.setRemoteCommandVisitor((dump, reset) -> {
-                        served.incrementAndGet();
-                        writer.sendCmdOk();
-                    });
-                    reader.read();
-                } catch (IOException e) {
-                    // Closed, or the client went away.
-                }
-            }
-        }
-
-        @Override
-        public void close() throws IOException {
-            server.close();
-        }
     }
 
     /** Keploy's data socket: it keeps each payload sent to it. */

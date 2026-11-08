@@ -94,11 +94,11 @@ public final class KeployDedupAgent {
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
-    // The answer to an END not taken (no START for that test came first, as
-    // after a restart): nothing was published for it, so Keploy must not use
-    // the test's coverage. On the unix socket it starts the whole answer
-    // (UNIX_REPLY_IGNORED); on TCP it is a frame naming the test, and ACK
-    // still follows (CoverageTcpClient).
+    // The answer to a command not taken (a START whose reset failed, an END
+    // with no START for that test, as after a restart): nothing is published
+    // for that test, so Keploy must not use its coverage. On the unix socket
+    // it starts the whole answer (UNIX_REPLY_IGNORED); on TCP it is a frame
+    // naming the test, and ACK still follows (CoverageTcpClient).
     static final String IGNORED_REPLY = "IGNORED";
     // The answers on the unix control socket: one line for every command the
     // SDK reads, written before it closes the connection. ACK says it took the
@@ -115,6 +115,13 @@ public final class KeployDedupAgent {
     // The active transport worker: a CommandServer (unix, local/docker) or a
     // CoverageTcpClient (TCP, k8s). Both are Closeable so stop() is transport-agnostic.
     private static volatile Closeable coverageWorker;
+    // The worker's thread. stop() waits for it to end, and start() does too
+    // when stop() gave up waiting (a command still running): until it ends it
+    // owns its socket, and a second worker on the same path would lose its
+    // socket file to the first one's close.
+    private static volatile Thread coverageThread;
+    // How long stop(), and a start() after it, wait for the worker's thread.
+    private static final long WORKER_STOP_WAIT_MILLIS = 5000;
 
     private KeployDedupAgent() {
     }
@@ -150,6 +157,11 @@ public final class KeployDedupAgent {
         }
         if (!STARTED.compareAndSet(false, true)) {
             return true;
+        }
+        if (!awaitWorkerThread()) {
+            STARTED.set(false);
+            log(Level.SEVERE, "Java dedup is not started: the worker stopped before is still running a command", null);
+            return false;
         }
 
         CoverageCollector collector = new CoverageCollector(
@@ -214,6 +226,7 @@ public final class KeployDedupAgent {
 
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
+        coverageThread = thread;
         thread.start();
         registerShutdownHook();
         return true;
@@ -241,7 +254,42 @@ public final class KeployDedupAgent {
             }
         }
         coverageWorker = null;
+        // Wait for the worker to end, so that a start() after this one does
+        // not overlap it. Still running after the wait, it is in a command or
+        // in an accept close()'s wake-up did not reach (the socket file was
+        // bound again by someone else). Either way it is past the point where
+        // closing its socket from here races its accept, so close it: an
+        // accept ends, and a command ends on its own once it is answered.
+        if (!awaitWorkerThread() && worker instanceof CommandServer) {
+            ((CommandServer) worker).closeSocket();
+            if (!awaitWorkerThread()) {
+                log(Level.WARNING, "Java dedup worker is still running a command; it stops once the command ends",
+                        null);
+            }
+        }
+        if (!isAlive(coverageThread)) {
+            coverageThread = null;
+        }
         STARTED.set(false);
+    }
+
+    // awaitWorkerThread waits up to WORKER_STOP_WAIT_MILLIS for the last
+    // worker's thread to end and says whether it has.
+    private static boolean awaitWorkerThread() {
+        Thread thread = coverageThread;
+        if (thread == null || thread == Thread.currentThread()) {
+            return true;
+        }
+        try {
+            thread.join(WORKER_STOP_WAIT_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return !thread.isAlive();
+    }
+
+    private static boolean isAlive(Thread thread) {
+        return thread != null && thread.isAlive();
     }
 
     private static boolean isDisabled() {
@@ -372,6 +420,8 @@ public final class KeployDedupAgent {
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Object testCaseLock = new Object();
         private volatile AFUNIXServerSocket serverSocket;
+        // Set once bind() has the socket listening, as start() then runs run().
+        private volatile boolean listening;
         private String activeTestId = "";
 
         CommandServer(CoverageCollector collector, CoveragePublisher publisher, File controlSocket) {
@@ -388,27 +438,56 @@ public final class KeployDedupAgent {
             deleteSocketFile(controlSocket);
             serverSocket = AFUNIXServerSocket.newInstance();
             serverSocket.bind(AFUNIXSocketAddress.of(controlSocket), SOCKET_BACKLOG);
+            listening = true;
             relaxSocketPermissions(controlSocket);
         }
 
+        // run accepts commands until close(). Only this thread closes the
+        // server socket, and it does so once it has left accept: junixsocket's
+        // accept holds the socket's raw fd number, and when it finds the
+        // socket file gone it closes that number. Closed from another thread
+        // while this one was inside accept, the number could already belong
+        // to the next server's socket (start() after stop()), which was then
+        // closed with its file still there: every command was refused.
         @Override
         public void run() {
             try (AFUNIXServerSocket localServer = serverSocket) {
                 while (running.get()) {
+                    Socket accepted;
                     try {
-                        handle(localServer.accept());
+                        accepted = localServer.accept();
                     } catch (IOException e) {
-                        if (running.get()) {
-                            log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
+                        if (!running.get()) {
+                            break;
                         }
+                        if (localServer.isClosed()) {
+                            // junixsocket closes the socket when its file was
+                            // deleted or bound again by someone else: no
+                            // command can reach it. Said once; looping on it
+                            // spun a core and logged without end.
+                            STARTED.set(false);
+                            log(Level.SEVERE, "Java dedup control socket " + controlSocket.getAbsolutePath()
+                                    + " was closed: its file was deleted or replaced, so Keploy's coverage"
+                                    + " commands no longer reach this app", e);
+                            break;
+                        }
+                        log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
+                        continue;
                     }
+                    if (!running.get()) {
+                        // close()'s wake-up, or a command that came with it.
+                        closeQuietly(accepted);
+                        break;
+                    }
+                    handle(accepted);
                 }
             } catch (Throwable t) {
                 STARTED.set(false);
                 log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
-            } finally {
-                deleteSocketFile(controlSocket);
             }
+            // The close above deleted the socket file, as it is still this
+            // server's: a start() after stop() binds only once this thread
+            // has ended (awaitWorkerThread).
         }
 
         // handle reads one command and answers it before the close: ACK if it
@@ -497,17 +576,45 @@ public final class KeployDedupAgent {
             }
         }
 
+        // close stops run() and leaves the socket for run() to close: it
+        // wakes run()'s accept with a connection of its own. Only when that
+        // connection cannot be made (the file is gone, so no command can come
+        // either) does it close the socket from here, as nothing else can
+        // wake that accept. A socket not listening (bind failed) is closed here.
         @Override
         public void close() {
             running.set(false);
             AFUNIXServerSocket localServer = serverSocket;
-            if (localServer != null) {
-                try {
-                    localServer.close();
-                } catch (IOException e) {
-                    log(Level.FINE, "Failed to close Java dedup control socket", e);
-                }
+            if (localServer == null || localServer.isClosed()) {
+                return;
             }
+            if (!listening) {
+                closeQuietly(localServer);
+                return;
+            }
+            try (AFUNIXSocket wake = AFUNIXSocket.newInstance()) {
+                wake.connect(AFUNIXSocketAddress.of(controlSocket), SOCKET_TIMEOUT_MILLIS);
+            } catch (IOException e) {
+                log(Level.FINE, "Could not wake the Java dedup control socket; closing it", e);
+                closeQuietly(localServer);
+            }
+        }
+
+        // closeSocket closes the socket from here, for stop() once run() has
+        // outlived close()'s wake-up.
+        void closeSocket() {
+            AFUNIXServerSocket localServer = serverSocket;
+            if (localServer != null) {
+                closeQuietly(localServer);
+            }
+        }
+    }
+
+    private static void closeQuietly(Closeable closeable) {
+        try {
+            closeable.close();
+        } catch (IOException e) {
+            log(Level.FINE, "Failed to close a Java dedup socket", e);
         }
     }
 
@@ -519,7 +626,8 @@ public final class KeployDedupAgent {
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
      *   SDK -&gt; collector : "ACK"                        (after START reset)
      *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
-     *                      "IGNORED &lt;id&gt;" + "ACK"         (after END with no START)
+     *                      "IGNORED &lt;id&gt;" + "ACK"         (after a START whose reset
+     *                                                     failed, or an END with no START)
      * </pre>
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
@@ -605,11 +713,31 @@ public final class KeployDedupAgent {
         private void dispatch(CoverageCommand command, OutputStream out) throws IOException {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
-                    activeTestId = command.testId;
-                    // Warm up app classes once before the first measured window so
-                    // one-time <clinit> lines aren't charged to the first test.
-                    collector.warmup();
-                    collector.reset();
+                    // As on the unix socket, the test is set only once the
+                    // counters are reset: counters not reset hold the lines of
+                    // the tests before this one, so this START is not taken and
+                    // its END is ignored too.
+                    activeTestId = "";
+                    boolean reset;
+                    try {
+                        // Warm up app classes once before the first measured window so
+                        // one-time <clinit> lines aren't charged to the first test.
+                        collector.warmup();
+                        reset = collector.reset();
+                    } catch (RuntimeException e) {
+                        // Not taken, and the connection goes on: thrown past
+                        // here, it ended this thread, and no later command
+                        // was answered.
+                        log(Level.SEVERE, "Failed to reset Java coverage for " + command.testId, e);
+                        reset = false;
+                    }
+                    if (reset) {
+                        activeTestId = command.testId;
+                    } else {
+                        // Said before the ACK, as for an END not taken: the
+                        // collector has no other sign this test went unmeasured.
+                        writeLine(out, IGNORED_REPLY + " " + command.testId);
+                    }
                     writeLine(out, "ACK");
                     return;
                 }
