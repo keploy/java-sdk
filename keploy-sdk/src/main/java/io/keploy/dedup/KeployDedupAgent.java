@@ -87,16 +87,28 @@ public final class KeployDedupAgent {
     // The unix control socket's path. Not final only so tests can bind one of
     // their own; the agent never changes it.
     static volatile String controlSocketPath = "/tmp/coverage_control.sock";
-    private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
+    // The unix data socket each test's coverage is sent on. Not final for the
+    // same reason.
+    static volatile String dataSocketPath = "/tmp/coverage_data.sock";
     private static final String DEFAULT_JACOCO_HOST = "127.0.0.1";
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
     // The answer to an END not taken (no START for that test came first, as
     // after a restart): nothing was published for it, so Keploy must not use
-    // the test's coverage. On the unix socket it is the whole answer; on TCP
-    // it is a frame naming the test, and ACK still follows (CoverageTcpClient).
+    // the test's coverage. On the unix socket it starts the whole answer
+    // (UNIX_REPLY_IGNORED); on TCP it is a frame naming the test, and ACK
+    // still follows (CoverageTcpClient).
     static final String IGNORED_REPLY = "IGNORED";
+    // The answers on the unix control socket: one line for every command the
+    // SDK reads, written before it closes the connection. ACK says it took the
+    // command: it reset the counters for a START, or sent the test's coverage
+    // for an END. IGNORED says it read the command and did not take it.
+    // proto=2 says this SDK answers every command it reads, so Keploy can read
+    // a close with no answer as a command not taken: on macOS a connection
+    // closed with its command unread gives Keploy no error, only the close.
+    static final String UNIX_REPLY_TAKEN = "ACK proto=2";
+    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=2";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -185,7 +197,7 @@ public final class KeployDedupAgent {
             // up after the app answered and Keploy had fired its first tests,
             // whose START and END then reached no one: their coverage was lost.
             CommandServer server = new CommandServer(collector,
-                    new CoveragePublisher(new File(DATA_SOCKET_PATH)), new File(controlSocketPath));
+                    new CoveragePublisher(new File(dataSocketPath)), new File(controlSocketPath));
             try {
                 server.bind();
             } catch (Throwable t) {
@@ -399,69 +411,81 @@ public final class KeployDedupAgent {
             }
         }
 
+        // handle reads one command and answers it before the close: ACK if it
+        // was taken, IGNORED if not. Only a connection closed with nothing sent
+        // gets no answer, as there is no command to answer.
         private void handle(Socket socket) {
             try (Socket commandSocket = socket;
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(commandSocket.getInputStream(), StandardCharsets.UTF_8))) {
                 String line = reader.readLine();
-                if (line == null || line.trim().isEmpty()) {
+                if (line == null) {
                     return;
                 }
 
-                CoverageCommand command = CoverageCommand.parse(line.trim());
-                if (command == null) {
-                    return;
+                boolean taken;
+                try {
+                    taken = run(line.trim());
+                } catch (RuntimeException e) {
+                    // Not taken, and the server goes on: thrown past here, it
+                    // would end the accept loop and every later test's command.
+                    log(Level.SEVERE, "Failed to run Java dedup coverage command: " + line.trim(), e);
+                    taken = false;
                 }
-
-                dispatch(command, commandSocket.getOutputStream());
+                writeReply(commandSocket.getOutputStream(), taken ? UNIX_REPLY_TAKEN : UNIX_REPLY_IGNORED);
             } catch (IOException e) {
                 log(Level.SEVERE, "Failed to handle Java dedup coverage command", e);
             }
         }
 
-        private void dispatch(CoverageCommand command, OutputStream outputStream) {
+        // run runs one command line ("START id", "END id") and says whether it
+        // was taken.
+        private boolean run(String line) {
+            CoverageCommand command = CoverageCommand.parse(line);
+            if (command == null) {
+                return false;
+            }
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
-                    activeTestId = command.testId;
+                    // Set only once the counters are reset: counters not reset
+                    // hold the lines of the tests before this one, so this START
+                    // is not taken and its END is ignored too.
+                    activeTestId = "";
                     // Warm up app classes once before the first measured window so
                     // one-time <clinit> lines aren't charged to the first test.
                     collector.warmup();
-                    collector.reset();
-                    writeAck(outputStream);
-                    return;
+                    if (!collector.reset()) {
+                        return false;
+                    }
+                    activeTestId = command.testId;
+                    return true;
                 }
 
-                if (command.action == CommandAction.END) {
-                    if (!command.testId.equals(activeTestId)) {
-                        log(Level.SEVERE,
-                                "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
-                                        + command.testId,
-                                null);
-                        // Not ACK: this END publishes nothing, and an ACK told
-                        // Keploy it had, so it waited for a record that never came.
-                        writeReply(outputStream, IGNORED_REPLY);
-                        return;
-                    }
+                if (!command.testId.equals(activeTestId)) {
+                    log(Level.SEVERE,
+                            "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
+                                    + command.testId,
+                            null);
+                    // Not ACK: this END publishes nothing, and an ACK told
+                    // Keploy it had, so it waited for a record that never came.
+                    return false;
+                }
 
-                    try {
-                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
-                        if (executedProbesByClass.isEmpty()) {
-                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
-                        }
-                        publisher.publish(command.testId, executedProbesByClass);
-                    } catch (Exception e) {
-                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
-                    } finally {
-                        activeTestId = "";
-                        writeAck(outputStream);
+                try {
+                    Map<String, List<Integer>> executedProbesByClass = collector.capture();
+                    if (executedProbesByClass.isEmpty()) {
+                        log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
-                    return;
+                    publisher.publish(command.testId, executedProbesByClass);
+                    return true;
+                } catch (Exception e) {
+                    // Not ACK for the same reason: nothing reached Keploy.
+                    log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                    return false;
+                } finally {
+                    activeTestId = "";
                 }
             }
-        }
-
-        private void writeAck(OutputStream outputStream) {
-            writeReply(outputStream, "ACK");
         }
 
         private void writeReply(OutputStream outputStream, String reply) {
@@ -735,11 +759,14 @@ public final class KeployDedupAgent {
             this.coverageIndex = coverageIndex;
         }
 
-        private void reset() {
+        // reset zeroes JaCoCo's counters and says whether it did.
+        private boolean reset() {
             try {
                 jacocoClient.dump(false, true);
+                return true;
             } catch (IOException e) {
-                log(Level.FINE, "Failed to reset JaCoCo counters", e);
+                log(Level.WARNING, "Failed to reset JaCoCo counters", e);
+                return false;
             }
         }
 
