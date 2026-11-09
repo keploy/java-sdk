@@ -15,7 +15,8 @@ name: keploy-junit5 release
 # modules, and never this one. This workflow signs and deploys with the same
 # key and the same secret names as release.yml: CENTRAL_USERNAME and
 # CENTRAL_PASSWORD (a Central Portal user token for the io.keploy namespace),
-# MAVEN_GPG_PRIVATE_KEY (the ASCII-armored release key, id 8541784E4EC36FB8)
+# MAVEN_GPG_PRIVATE_KEY (the ASCII-armored release key, id F844278E3B5F9051,
+# fingerprint 0167FEA3204A35D8C1E11EE9F844278E3B5F9051)
 # and MAVEN_GPG_PASSPHRASE. A step below fails, naming each one that is not
 # set, before anything is built or signed.
 # Every action this workflow runs, the rows' included, is pinned by commit:
@@ -56,7 +57,7 @@ jobs:
     timeout-minutes: 150
     env:
       # The public key id of keploy's release signing key, as release.yml.
-      GPG_KEY_ID: 8541784E4EC36FB8
+      GPG_KEY_ID: F844278E3B5F9051
     defaults:
       run:
         shell: bash # -eo pipefail: a failed command before a pipe fails the step
