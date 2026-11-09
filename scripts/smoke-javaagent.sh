@@ -129,9 +129,11 @@ public final class SmokeHarness {
             OutputStream output = socket.getOutputStream();
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
+            // The whole answer: one line saying the command was taken, then
+            // the close.
             String ack = readAll(socket.getInputStream());
-            if (!ack.contains("ACK")) {
-                throw new IllegalStateException("missing ACK for " + command + ": " + ack);
+            if (!"ACK proto=2\n".equals(ack)) {
+                throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
         }
     }

@@ -28,7 +28,9 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -38,6 +40,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
@@ -87,22 +90,43 @@ public final class KeployDedupAgent {
     // The unix control socket's path. Not final only so tests can bind one of
     // their own; the agent never changes it.
     static volatile String controlSocketPath = "/tmp/coverage_control.sock";
-    private static final String DATA_SOCKET_PATH = "/tmp/coverage_data.sock";
+    // The unix data socket each test's coverage is sent on. Not final for the
+    // same reason.
+    static volatile String dataSocketPath = "/tmp/coverage_data.sock";
     private static final String DEFAULT_JACOCO_HOST = "127.0.0.1";
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
-    // The answer to an END not taken (no START for that test came first, as
-    // after a restart): nothing was published for it, so Keploy must not use
-    // the test's coverage. On the unix socket it is the whole answer; on TCP
-    // it is a frame naming the test, and ACK still follows (CoverageTcpClient).
+    // The answer to a command not taken (a START whose reset failed, an END
+    // with no START for that test, as after a restart): nothing is published
+    // for that test, so Keploy must not use its coverage. On the unix socket
+    // it starts the whole answer (UNIX_REPLY_IGNORED); on TCP it is a frame
+    // naming the test, and ACK still follows (CoverageTcpClient).
     static final String IGNORED_REPLY = "IGNORED";
+    // The answers on the unix control socket: one line for every command the
+    // SDK reads, written before it closes the connection. ACK says it took the
+    // command: it reset the counters for a START, or sent the test's coverage
+    // for an END. IGNORED says it read the command and did not take it.
+    // proto=2 says this SDK answers every command it reads, so Keploy can read
+    // a close with no answer as a command not taken: on macOS a connection
+    // closed with its command unread gives Keploy no error, only the close.
+    static final String UNIX_REPLY_TAKEN = "ACK proto=2";
+    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=2";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
     // The active transport worker: a CommandServer (unix, local/docker) or a
-    // CoverageTcpClient (TCP, k8s). Both are Closeable so stop() is transport-agnostic.
-    private static volatile Closeable coverageWorker;
+    // CoverageTcpClient (TCP, k8s), so stop() is transport-agnostic.
+    private static volatile CoverageWorker coverageWorker;
+    // The worker's thread. stop() waits for it to end, and start() does too
+    // when stop() gave up waiting (a command still running): until it ends it
+    // owns its socket, and a second worker on the same path would lose its
+    // socket file to the first one's close. Before the first start() it is a
+    // thread never started, which join() does not wait for.
+    private static volatile Thread coverageThread = new Thread("keploy-java-dedup-none");
+    // How long stop(), and a start() after it, wait for the worker's thread.
+    // Not final: the tests shorten it.
+    static volatile long workerStopWaitMillis = 5000;
 
     private KeployDedupAgent() {
     }
@@ -139,12 +163,17 @@ public final class KeployDedupAgent {
         if (!STARTED.compareAndSet(false, true)) {
             return true;
         }
+        if (!awaitWorkerThread()) {
+            STARTED.set(false);
+            log(Level.SEVERE, "Java dedup is not started: the worker stopped before is still running a command", null);
+            return false;
+        }
 
         CoverageCollector collector = new CoverageCollector(
                 new JacocoClient(resolveHost(), resolvePort()),
                 new CoverageIndex());
 
-        Runnable worker;
+        CoverageWorker worker;
         String threadName;
         String endpoint = resolveEndpoint();
         if (endpoint != null) {
@@ -185,12 +214,12 @@ public final class KeployDedupAgent {
             // up after the app answered and Keploy had fired its first tests,
             // whose START and END then reached no one: their coverage was lost.
             CommandServer server = new CommandServer(collector,
-                    new CoveragePublisher(new File(DATA_SOCKET_PATH)), new File(controlSocketPath));
+                    new CoveragePublisher(new File(dataSocketPath)), new File(controlSocketPath));
             try {
                 server.bind();
             } catch (Throwable t) {
                 // Never let premain fail the app's start: run it without dedup.
-                server.close();
+                // bind() has closed the socket it opened.
                 STARTED.set(false);
                 log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
                 return false;
@@ -202,6 +231,7 @@ public final class KeployDedupAgent {
 
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
+        coverageThread = thread;
         thread.start();
         registerShutdownHook();
         return true;
@@ -220,16 +250,37 @@ public final class KeployDedupAgent {
      * Stops the background control socket listener.
      */
     public static void stop() {
-        Closeable worker = coverageWorker;
+        CoverageWorker worker = coverageWorker;
+        coverageWorker = null;
         if (worker != null) {
-            try {
-                worker.close();
-            } catch (IOException e) {
-                log(Level.FINE, "Failed to close Java dedup coverage worker", e);
+            worker.close();
+            // Wait for the worker to end, so that a start() after this one
+            // does not overlap it. Still running after the wait, it is in a
+            // command or in an accept close()'s wake-up did not reach (the
+            // socket file was bound again by someone else). Either way it is
+            // past the point where closing its socket from here races its
+            // accept, so close it: an accept ends, and a command ends on its
+            // own once it is answered. A start() waits for it too.
+            if (!awaitWorkerThread()) {
+                worker.closeNow();
+                log(Level.WARNING, "Java dedup worker did not stop within " + workerStopWaitMillis
+                        + " ms (a command still running, or its socket file bound again by another process);"
+                        + " its socket is closed, and it stops once its command ends", null);
             }
         }
-        coverageWorker = null;
         STARTED.set(false);
+    }
+
+    // awaitWorkerThread waits up to workerStopWaitMillis for the last
+    // worker's thread to end and says whether it has.
+    private static boolean awaitWorkerThread() {
+        Thread thread = coverageThread;
+        try {
+            thread.join(workerStopWaitMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return !thread.isAlive();
     }
 
     private static boolean isDisabled() {
@@ -316,6 +367,17 @@ public final class KeployDedupAgent {
         private int probeCount;
     }
 
+    // fileKey is the file's identity (its device and inode on Linux and
+    // macOS), or null when it is gone or the platform has none.
+    private static Object fileKey(File file) {
+        try {
+            return Files.readAttributes(file.toPath(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS)
+                    .fileKey();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private static void deleteSocketFile(File file) {
         if (file.exists() && !file.delete()) {
             log(Level.FINE, "Failed to delete socket file " + file.getAbsolutePath(), null);
@@ -352,7 +414,18 @@ public final class KeployDedupAgent {
         LOGGER.log(Level.INFO, formatted);
     }
 
-    private static final class CommandServer implements Runnable, Closeable {
+    // A transport worker: run() serves Keploy's commands until close().
+    private interface CoverageWorker extends Runnable, Closeable {
+        // close asks run() to end; it does not wait for it.
+        @Override
+        void close();
+
+        // closeNow closes the worker's socket from the caller's thread, for
+        // stop() once run() has outlived close().
+        void closeNow();
+    }
+
+    private static final class CommandServer implements CoverageWorker {
 
         private final CoverageCollector collector;
         private final CoveragePublisher publisher;
@@ -360,6 +433,9 @@ public final class KeployDedupAgent {
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Object testCaseLock = new Object();
         private volatile AFUNIXServerSocket serverSocket;
+        // The socket file's identity once bound (fileKey), so that run()
+        // deletes the file only while it is still this socket's.
+        private volatile Object socketFileKey;
         private String activeTestId = "";
 
         CommandServer(CoverageCollector collector, CoveragePublisher publisher, File controlSocket) {
@@ -371,97 +447,148 @@ public final class KeployDedupAgent {
         // bind replaces a stale socket file and listens on the control socket.
         // start() calls it before it returns, so a command sent once start()
         // has returned waits in the backlog for run() instead of being refused.
-        // On a failure the caller closes this server, which closes the socket.
+        // On a failure it closes the socket it opened, as no run() will.
         void bind() throws IOException {
             deleteSocketFile(controlSocket);
-            serverSocket = AFUNIXServerSocket.newInstance();
-            serverSocket.bind(AFUNIXSocketAddress.of(controlSocket), SOCKET_BACKLOG);
-            relaxSocketPermissions(controlSocket);
+            AFUNIXServerSocket socket = AFUNIXServerSocket.newInstance();
+            // Not junixsocket's delete on close: it deletes by path, so it
+            // deleted the file of a server that had bound the path since.
+            socket.setDeleteOnClose(false);
+            try {
+                socket.bind(AFUNIXSocketAddress.of(controlSocket), SOCKET_BACKLOG);
+                socketFileKey = fileKey(controlSocket);
+                relaxSocketPermissions(controlSocket);
+            } catch (Throwable t) {
+                closeQuietly(socket);
+                throw t;
+            }
+            serverSocket = socket;
         }
 
+        // run accepts commands until close(). Only this thread closes the
+        // server socket, and it does so once it has left accept: junixsocket's
+        // accept holds the socket's raw fd number, and when it finds the
+        // socket file gone it closes that number. Closed from another thread
+        // while this one was inside accept, the number could already belong
+        // to the next server's socket (start() after stop()), which was then
+        // closed with its file still there: every command was refused.
         @Override
         public void run() {
             try (AFUNIXServerSocket localServer = serverSocket) {
                 while (running.get()) {
+                    Socket accepted;
                     try {
-                        handle(localServer.accept());
+                        accepted = localServer.accept();
                     } catch (IOException e) {
-                        if (running.get()) {
-                            log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
+                        if (!running.get()) {
+                            break;
                         }
+                        if (localServer.isClosed()) {
+                            // junixsocket closes the socket when its file was
+                            // deleted or bound again by someone else: no
+                            // command can reach it. Said once; looping on it
+                            // spun a core and logged without end.
+                            STARTED.set(false);
+                            log(Level.SEVERE, "Java dedup control socket " + controlSocket.getAbsolutePath()
+                                    + " was closed: its file was deleted or replaced, so Keploy's coverage"
+                                    + " commands no longer reach this app", e);
+                            break;
+                        }
+                        log(Level.SEVERE, "Failed to accept Java dedup coverage command", e);
+                        continue;
                     }
+                    // close()'s wake-up is a connection with nothing sent:
+                    // handle() answers none, and the loop ends.
+                    handle(accepted);
                 }
             } catch (Throwable t) {
                 STARTED.set(false);
                 log(Level.SEVERE, "Java dedup control socket server is unavailable", t);
-            } finally {
+            }
+            // The socket file goes once the socket is closed, only if it is
+            // still this socket's: deleted or bound again by someone else, it
+            // is theirs. A start() after stop() binds only once this thread
+            // has ended (awaitWorkerThread), so it is never the next server's.
+            if (Objects.equals(socketFileKey, fileKey(controlSocket))) {
                 deleteSocketFile(controlSocket);
             }
         }
 
+        // handle reads one command and answers it before the close: ACK if it
+        // was taken, IGNORED if not. Only a connection closed with nothing sent
+        // gets no answer, as there is no command to answer.
         private void handle(Socket socket) {
             try (Socket commandSocket = socket;
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(commandSocket.getInputStream(), StandardCharsets.UTF_8))) {
                 String line = reader.readLine();
-                if (line == null || line.trim().isEmpty()) {
+                if (line == null) {
                     return;
                 }
 
-                CoverageCommand command = CoverageCommand.parse(line.trim());
-                if (command == null) {
-                    return;
+                boolean taken;
+                try {
+                    taken = run(line.trim());
+                } catch (RuntimeException e) {
+                    // Not taken, and the server goes on: thrown past here, it
+                    // would end the accept loop and every later test's command.
+                    log(Level.SEVERE, "Failed to run Java dedup coverage command: " + line.trim(), e);
+                    taken = false;
                 }
-
-                dispatch(command, commandSocket.getOutputStream());
+                writeReply(commandSocket.getOutputStream(), taken ? UNIX_REPLY_TAKEN : UNIX_REPLY_IGNORED);
             } catch (IOException e) {
                 log(Level.SEVERE, "Failed to handle Java dedup coverage command", e);
             }
         }
 
-        private void dispatch(CoverageCommand command, OutputStream outputStream) {
+        // run runs one command line ("START id", "END id") and says whether it
+        // was taken.
+        private boolean run(String line) {
+            CoverageCommand command = CoverageCommand.parse(line);
+            if (command == null) {
+                return false;
+            }
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
-                    activeTestId = command.testId;
+                    // Set only once the counters are reset: counters not reset
+                    // hold the lines of the tests before this one, so this START
+                    // is not taken and its END is ignored too.
+                    activeTestId = "";
                     // Warm up app classes once before the first measured window so
                     // one-time <clinit> lines aren't charged to the first test.
                     collector.warmup();
-                    collector.reset();
-                    writeAck(outputStream);
-                    return;
+                    if (!collector.reset()) {
+                        return false;
+                    }
+                    activeTestId = command.testId;
+                    return true;
                 }
 
-                if (command.action == CommandAction.END) {
-                    if (!command.testId.equals(activeTestId)) {
-                        log(Level.SEVERE,
-                                "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
-                                        + command.testId,
-                                null);
-                        // Not ACK: this END publishes nothing, and an ACK told
-                        // Keploy it had, so it waited for a record that never came.
-                        writeReply(outputStream, IGNORED_REPLY);
-                        return;
-                    }
+                if (!command.testId.equals(activeTestId)) {
+                    log(Level.SEVERE,
+                            "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
+                                    + command.testId,
+                            null);
+                    // Not ACK: this END publishes nothing, and an ACK told
+                    // Keploy it had, so it waited for a record that never came.
+                    return false;
+                }
 
-                    try {
-                        Map<String, List<Integer>> executedProbesByClass = collector.capture();
-                        if (executedProbesByClass.isEmpty()) {
-                            log(Level.FINE, "No Java coverage collected for " + command.testId, null);
-                        }
-                        publisher.publish(command.testId, executedProbesByClass);
-                    } catch (Exception e) {
-                        log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
-                    } finally {
-                        activeTestId = "";
-                        writeAck(outputStream);
+                try {
+                    Map<String, List<Integer>> executedProbesByClass = collector.capture();
+                    if (executedProbesByClass.isEmpty()) {
+                        log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
-                    return;
+                    publisher.publish(command.testId, executedProbesByClass);
+                    return true;
+                } catch (Exception e) {
+                    // Not ACK for the same reason: nothing reached Keploy.
+                    log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
+                    return false;
+                } finally {
+                    activeTestId = "";
                 }
             }
-        }
-
-        private void writeAck(OutputStream outputStream) {
-            writeReply(outputStream, "ACK");
         }
 
         private void writeReply(OutputStream outputStream, String reply) {
@@ -473,17 +600,33 @@ public final class KeployDedupAgent {
             }
         }
 
+        // close stops run() and leaves the socket for run() to close: it
+        // wakes run()'s accept with a connection of its own. Only when that
+        // connection cannot be made (the file is gone, so no command can come
+        // either) does it close the socket from here, as nothing else can
+        // wake that accept.
         @Override
         public void close() {
             running.set(false);
-            AFUNIXServerSocket localServer = serverSocket;
-            if (localServer != null) {
-                try {
-                    localServer.close();
-                } catch (IOException e) {
-                    log(Level.FINE, "Failed to close Java dedup control socket", e);
-                }
+            try (AFUNIXSocket wake = AFUNIXSocket.newInstance()) {
+                wake.connect(AFUNIXSocketAddress.of(controlSocket), SOCKET_TIMEOUT_MILLIS);
+            } catch (IOException e) {
+                log(Level.FINE, "Could not wake the Java dedup control socket; closing it", e);
+                closeNow();
             }
+        }
+
+        @Override
+        public void closeNow() {
+            closeQuietly(serverSocket);
+        }
+    }
+
+    private static void closeQuietly(Closeable closeable) {
+        try {
+            closeable.close();
+        } catch (IOException e) {
+            log(Level.FINE, "Failed to close a Java dedup socket", e);
         }
     }
 
@@ -495,12 +638,14 @@ public final class KeployDedupAgent {
      *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
      *   SDK -&gt; collector : "ACK"                        (after START reset)
      *                      "COV &lt;compact-json&gt;" + "ACK" (after END dump)
-     *                      "IGNORED &lt;id&gt;" + "ACK"         (after END with no START)
+     *                      "IGNORED &lt;id&gt;" + "ACK"         (after a START whose reset
+     *                                                     failed, an END with no START,
+     *                                                     or an END whose dump failed)
      * </pre>
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
      */
-    private static final class CoverageTcpClient implements Runnable, Closeable {
+    private static final class CoverageTcpClient implements CoverageWorker {
 
         private static final long RECONNECT_DELAY_MILLIS = 1000;
 
@@ -581,11 +726,31 @@ public final class KeployDedupAgent {
         private void dispatch(CoverageCommand command, OutputStream out) throws IOException {
             synchronized (testCaseLock) {
                 if (command.action == CommandAction.START) {
-                    activeTestId = command.testId;
-                    // Warm up app classes once before the first measured window so
-                    // one-time <clinit> lines aren't charged to the first test.
-                    collector.warmup();
-                    collector.reset();
+                    // As on the unix socket, the test is set only once the
+                    // counters are reset: counters not reset hold the lines of
+                    // the tests before this one, so this START is not taken and
+                    // its END is ignored too.
+                    activeTestId = "";
+                    boolean reset;
+                    try {
+                        // Warm up app classes once before the first measured window so
+                        // one-time <clinit> lines aren't charged to the first test.
+                        collector.warmup();
+                        reset = collector.reset();
+                    } catch (RuntimeException e) {
+                        // Not taken, and the connection goes on: thrown past
+                        // here, it ended this thread, and no later command
+                        // was answered.
+                        log(Level.SEVERE, "Failed to reset Java coverage for " + command.testId, e);
+                        reset = false;
+                    }
+                    if (reset) {
+                        activeTestId = command.testId;
+                    } else {
+                        // Said before the ACK, as for an END not taken: the
+                        // collector has no other sign this test went unmeasured.
+                        writeLine(out, IGNORED_REPLY + " " + command.testId);
+                    }
                     writeLine(out, "ACK");
                     return;
                 }
@@ -613,8 +778,13 @@ public final class KeployDedupAgent {
                     try {
                         executedProbesByClass = collector.capture();
                     } catch (Exception e) {
+                        // Not taken, as on the unix socket: an empty COV is
+                        // the frame of a test that ran no line of the app.
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
-                        executedProbesByClass = Collections.emptyMap();
+                        activeTestId = "";
+                        writeLine(out, IGNORED_REPLY + " " + command.testId);
+                        writeLine(out, "ACK");
+                        return;
                     }
                     if (executedProbesByClass.isEmpty()) {
                         log(Level.FINE, "No Java coverage collected for " + command.testId, null);
@@ -659,6 +829,12 @@ public final class KeployDedupAgent {
                     log(Level.FINE, "Failed to close Java dedup TCP socket", e);
                 }
             }
+        }
+        // closeNow is close(): it already closes the socket from the caller's
+        // thread, which no accept races here.
+        @Override
+        public void closeNow() {
+            close();
         }
     }
 
@@ -735,11 +911,14 @@ public final class KeployDedupAgent {
             this.coverageIndex = coverageIndex;
         }
 
-        private void reset() {
+        // reset zeroes JaCoCo's counters and says whether it did.
+        private boolean reset() {
             try {
                 jacocoClient.dump(false, true);
+                return true;
             } catch (IOException e) {
-                log(Level.FINE, "Failed to reset JaCoCo counters", e);
+                log(Level.WARNING, "Failed to reset JaCoCo counters", e);
+                return false;
             }
         }
 
