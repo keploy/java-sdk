@@ -50,7 +50,7 @@ jobs:
     env:
       # Public key id of the Keploy release signing key. Selects the right
       # secret key when more than one is present in the keyring.
-      GPG_KEY_ID: 8541784E4EC36FB8
+      GPG_KEY_ID: F844278E3B5F9051
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,6 +83,28 @@ jobs:
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the release secrets are set
+        # Fail before anything is built or signed, naming each secret that is
+        # missing (as keploy-junit5-release.yml does). Without it a missing
+        # private key surfaced only as maven-gpg-plugin's "No secret key"
+        # (setup-java skips the import when the secret is empty), and a
+        # missing passphrase as gpg's "No passphrase given".
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          missing=()
+          for s in CENTRAL_USERNAME CENTRAL_PASSWORD MAVEN_GPG_PRIVATE_KEY MAVEN_GPG_PASSPHRASE; do
+            [[ -n "${!s}" ]] || missing+=("$s")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::the secret(s) ${missing[*]} are not set; refusing to publish"
+            exit 1
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
