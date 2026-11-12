@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
@@ -17,7 +18,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -26,6 +30,9 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import org.jacoco.core.data.ExecutionData;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -50,6 +57,8 @@ public class ControlSocketTest {
 
     private static final String JACOCO_PORT_PROPERTY = "keploy.jacoco.port";
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
+    private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
+    private static final String BUILD_TAG_PROPERTY = "keploy.build.tag";
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
 
@@ -104,6 +113,8 @@ public class ControlSocketTest {
         KeployDedupAgent.dataSocketPath = savedDataPath;
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
+        System.clearProperty(CLASS_DIRS_PROPERTY);
+        System.clearProperty(BUILD_TAG_PROPERTY);
         if (jacoco != null) {
             jacoco.close();
         }
@@ -206,6 +217,61 @@ public class ControlSocketTest {
         assertNull(data.poll());
         assertEquals(TAKEN, send("START test-set-0/test-2"));
         assertEquals(TAKEN, send("END test-set-0/test-2"));
+    }
+
+    // Keploy's agent keeps the app's class bytecode for the coverage report
+    // from a frame after a record, on the record's own data connection: the
+    // record says one follows. The class zip goes once per JVM, then only a
+    // grown manifest, and again after a send that failed.
+    @Test(timeout = 60000)
+    public void theClassZipFollowsATakenEndsRecordOncePerJvmAndAgainAfterAFailedSend() throws Exception {
+        File classes = new File(dir, "classes");
+        writeClass(classes, "com/acme/Orders.class", "orders-bytes");
+        writeClass(classes, "com/acme/Billing.class", "billing-bytes");
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getAbsolutePath());
+        System.setProperty(BUILD_TAG_PROPERTY, "build-7");
+        startWithJacoco();
+        jacoco.hits.add(new ExecutionData(0x11L, "com/acme/Orders", new boolean[] {true, false}));
+
+        // No one listens on the data socket: the zip polled for test-1 is not delivered.
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(IGNORED, send("END test-set-0/test-1"));
+
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-2"));
+        assertEquals(TAKEN, send("END test-set-0/test-2"));
+        String[] sent = recordThenFrame(data.next());
+        assertTrue(sent[0], sent[0].contains("\"id\":\"test-set-0/test-2\""));
+        assertTrue("the record says a frame follows: " + sent[0], sent[0].contains("\"bytecodeFrame\":true"));
+        String[] frame = sent[1].split(" ", -1);
+        assertEquals(sent[1], 4, frame.length);
+        assertEquals("CLASSES", frame[0]);
+        assertEquals("build-7", base64(frame[1]));
+        assertTrue(base64(frame[2]), base64(frame[2]).contains("\"com/acme/Orders\""));
+        Map<String, String> zip = unzip(frame[3]);
+        assertEquals("orders-bytes", zip.get("com/acme/Orders.class"));
+        assertEquals("billing-bytes", zip.get("com/acme/Billing.class"));
+
+        // Sent: the next record, with the same classes hit, has no frame.
+        assertEquals(TAKEN, send("START test-set-0/test-3"));
+        assertEquals(TAKEN, send("END test-set-0/test-3"));
+        String alone = data.next();
+        assertNotNull(alone);
+        assertTrue(alone, alone.contains("\"id\":\"test-set-0/test-3\""));
+        assertFalse("no frame, so the record says none: " + alone, alone.contains("bytecodeFrame"));
+        assertFalse("nothing follows the record: " + alone, alone.contains("\n"));
+
+        // A class hit for the first time: only the grown manifest follows.
+        jacoco.hits.add(new ExecutionData(0x22L, "com/acme/Billing", new boolean[] {true}));
+        assertEquals(TAKEN, send("START test-set-0/test-4"));
+        assertEquals(TAKEN, send("END test-set-0/test-4"));
+        sent = recordThenFrame(data.next());
+        assertTrue(sent[0], sent[0].contains("\"bytecodeFrame\":true"));
+        frame = sent[1].split(" ", -1);
+        assertEquals(sent[1], 3, frame.length);
+        assertEquals("MANIFEST", frame[0]);
+        assertEquals("build-7", base64(frame[1]));
+        assertTrue(base64(frame[2]), base64(frame[2]).contains("\"com/acme/Billing\""));
     }
 
     @Test
@@ -440,6 +506,37 @@ public class ControlSocketTest {
         } catch (IOException e) {
             throw new AssertionError(what + ": " + e, e);
         }
+    }
+
+    private static void writeClass(File root, String key, String bytes) throws IOException {
+        File file = new File(root, key);
+        assertTrue(file.getParentFile().isDirectory() || file.getParentFile().mkdirs());
+        Files.write(file.toPath(), bytes.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // recordThenFrame splits a data connection's bytes into the record and the
+    // bytecode frame after it, one line each.
+    private static String[] recordThenFrame(String payload) {
+        assertNotNull("the END's coverage reached the data socket", payload);
+        int nl = payload.indexOf('\n');
+        assertTrue("a newline ends the record before its frame: " + payload, nl > 0);
+        String frame = payload.substring(nl + 1);
+        assertFalse("one frame, on one line: " + frame, frame.isEmpty() || frame.contains("\n"));
+        return new String[] {payload.substring(0, nl), frame};
+    }
+
+    private static String base64(String field) {
+        return new String(Base64.getDecoder().decode(field), StandardCharsets.UTF_8);
+    }
+
+    private static Map<String, String> unzip(String field) throws IOException {
+        Map<String, String> entries = new HashMap<>();
+        try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(Base64.getDecoder().decode(field)))) {
+            for (ZipEntry entry = in.getNextEntry(); entry != null; entry = in.getNextEntry()) {
+                entries.put(entry.getName(), readAll(in));
+            }
+        }
+        return entries;
     }
 
     private int jacocoConnections() {

@@ -579,7 +579,17 @@ public final class KeployDedupAgent {
                     if (executedProbesByClass.isEmpty()) {
                         log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
-                    publisher.publish(command.testId, executedProbesByClass);
+                    // The class zip rides the record's connection, once per
+                    // JVM, so Keploy's agent has it for the coverage report.
+                    String frame = collector.pollBytecodeFrame();
+                    try {
+                        publisher.publish(command.testId, executedProbesByClass, frame);
+                    } catch (IOException e) {
+                        // The zip may be lost, or a new agent listens now:
+                        // the next test sends it again.
+                        collector.resetBytecodeSentForNewConnection();
+                        throw e;
+                    }
                     return true;
                 } catch (Exception e) {
                     // Not ACK for the same reason: nothing reached Keploy.
@@ -895,6 +905,8 @@ public final class KeployDedupAgent {
         // connection receives the zip again — preserving the reconnect
         // self-healing the old re-send-on-every-growth path gave for free, without
         // the redundant resends or the 16 MiB single-line blow-up on large apps.
+        // On the unix data socket, a connection per test, it is once per JVM
+        // until a send fails.
         private volatile boolean bytecodeSentThisConnection = false;
 
         // resetBytecodeSentForNewConnection re-arms the one-time zip send for a
@@ -1094,7 +1106,8 @@ public final class KeployDedupAgent {
         }
 
         // pollBytecodeFrame returns a "CLASSES <b64tag> <b64manifest> <b64zip>"
-        // line to send over the collector channel (:36340) IF the coverage manifest
+        // line to send over the collector channel (:36340), or after a record on
+        // the unix data socket, IF the coverage manifest
         // has grown since the last send, else null. The raw-TCP collector channel
         // is the ONLY app->proxy path that survives the replay agent's mock
         // interception (an HTTPS upload gets 502'd as an unmatched outbound mock),
@@ -1639,15 +1652,23 @@ public final class KeployDedupAgent {
             this.socketFile = socketFile;
         }
 
-        private void publish(String testId, Map<String, List<Integer>> executedProbesByClass) throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass))
+        // publish sends the test's record and, when frame is set, the bytecode
+        // frame after it on the same connection: the record says one follows.
+        private void publish(String testId, Map<String, List<Integer>> executedProbesByClass, String frame)
+                throws IOException {
+            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass, frame != null))
                     .getBytes(StandardCharsets.UTF_8);
 
             try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
                 socket.connect(AFUNIXSocketAddress.of(socketFile), SOCKET_TIMEOUT_MILLIS);
                 socket.setSoTimeout(SOCKET_TIMEOUT_MILLIS);
-                socket.getOutputStream().write(payload);
-                socket.getOutputStream().flush();
+                OutputStream out = socket.getOutputStream();
+                out.write(payload);
+                if (frame != null) {
+                    out.write('\n');
+                    out.write(frame.getBytes(StandardCharsets.UTF_8));
+                }
+                out.flush();
             }
         }
     }
@@ -1666,10 +1687,18 @@ public final class KeployDedupAgent {
         private final String id;
         // Probes-by-class (see class note); serialized under the historical key.
         private final Map<String, List<Integer>> executedLinesByFile;
+        // True when the bytecode frame follows the record on its unix data
+        // connection; null (left out) otherwise.
+        private final Boolean bytecodeFrame;
 
         private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass) {
+            this(id, executedProbesByClass, false);
+        }
+
+        private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass, boolean frameFollows) {
             this.id = id;
             this.executedLinesByFile = executedProbesByClass;
+            this.bytecodeFrame = frameFollows ? Boolean.TRUE : null;
         }
     }
 

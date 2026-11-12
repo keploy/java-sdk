@@ -2,6 +2,7 @@ package io.keploy.dedup;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -42,6 +43,8 @@ public class DedupWireFormatTest {
         assertTrue("vm class-name key (not a source file)", json.contains("\"com/foo/Bar\""));
         assertTrue("second class key", json.contains("\"smoke/Work\""));
         assertTrue("probe indices for Bar", json.contains("[0,1,5]"));
+        // Only a record on the unix data socket with a frame after it says so.
+        assertFalse("no bytecode frame follows: " + json, json.contains("bytecodeFrame"));
     }
 
     @Test
