@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -13,6 +14,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.Reader;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -45,10 +47,11 @@ import org.newsclub.net.unix.AFUNIXSocketChannel;
  * The unix control socket Keploy sends START and END on. Keploy fires its first
  * test as soon as the app answers its health check, so the socket must listen
  * by the time start() (premain, before the app's main) returns. Every command
- * the SDK reads gets one answer line before the close: "ACK proto=2" if it was
- * taken, "IGNORED proto=2" if not. Keploy reads a close with no answer from an
- * SDK that says proto=2 as a command not taken, so only a connection closed
- * with nothing sent may go unanswered.
+ * the SDK reads gets one answer line before the close: "ACK proto=3" if it was
+ * taken, "IGNORED proto=3" if not. Keploy reads a close with no answer from an
+ * SDK that says proto=2 or later as a command not taken, so only a connection
+ * closed with nothing sent may go unanswered; proto=3 says the SDK reads the
+ * agent's ask for the class zip on the line after the command.
  *
  * <p>The answers are compared with literals, not the SDK's constants: Keploy
  * reads the words, so a change to them must fail here.
@@ -59,8 +62,8 @@ public class ControlSocketTest {
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
     private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
     private static final String BUILD_TAG_PROPERTY = "keploy.build.tag";
-    private static final String TAKEN = "ACK proto=2\n";
-    private static final String IGNORED = "IGNORED proto=2\n";
+    private static final String TAKEN = "ACK proto=3\n";
+    private static final String IGNORED = "IGNORED proto=3\n";
 
     private String savedControlPath;
     private String savedDataPath;
@@ -272,6 +275,51 @@ public class ControlSocketTest {
         assertEquals("MANIFEST", frame[0]);
         assertEquals("build-7", base64(frame[1]));
         assertTrue(base64(frame[2]), base64(frame[2]).contains("\"com/acme/Billing\""));
+    }
+
+    // A Keploy agent that started after this JVM has no class zip, and asks
+    // for it on the line after a command, in the same write: the next record
+    // carries the zip again, though this JVM sent it before. Any other line
+    // after a command is no ask.
+    @Test(timeout = 60000)
+    public void anAgentsAskAfterACommandSendsTheClassZipAgainWithTheNextRecord() throws Exception {
+        File classes = new File(dir, "classes");
+        writeClass(classes, "com/acme/Orders.class", "orders-bytes");
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getAbsolutePath());
+        System.setProperty(BUILD_TAG_PROPERTY, "build-7");
+        startWithJacoco();
+        jacoco.hits.add(new ExecutionData(0x11L, "com/acme/Orders", new boolean[] {true}));
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        assertEquals("CLASSES", recordThenFrame(data.next())[1].split(" ", -1)[0]);
+
+        // Asked with a START: that test's record carries the zip.
+        assertEquals(TAKEN, send("START test-set-0/test-2\nSEND CLASSES"));
+        assertEquals(TAKEN, send("END test-set-0/test-2"));
+        assertClassZip(recordThenFrame(data.next()));
+        // Asked with an END: its own record carries it.
+        assertEquals(TAKEN, send("START test-set-0/test-3"));
+        assertEquals(TAKEN, send("END test-set-0/test-3\nSEND CLASSES"));
+        assertClassZip(recordThenFrame(data.next()));
+        // Another line is no ask, and the zip is not sent again.
+        assertEquals(TAKEN, send("START test-set-0/test-4\nSEND MANIFEST"));
+        assertEquals(TAKEN, send("END test-set-0/test-4\nSEND CLASSES AGAIN"));
+        String alone = data.next();
+        assertTrue(alone, alone.contains("\"id\":\"test-set-0/test-4\""));
+        assertFalse("no ask, so no frame: " + alone, alone.contains("bytecodeFrame"));
+    }
+
+    // The ask is read only when the command's write brought it: the SDK never
+    // waits for a line after a command, as an agent that asks for nothing
+    // sends none and waits for the answer.
+    @Test
+    public void theAskIsReadOnlyWhenItCameWithTheCommand() throws Exception {
+        assertTrue(KeployDedupAgent.asksForClasses(commandThen("START test-set-0/test-1\nSEND CLASSES\n")));
+        assertTrue(KeployDedupAgent.asksForClasses(commandThen("END test-set-0/test-1\r\nSEND CLASSES\r\n")));
+        assertFalse(KeployDedupAgent.asksForClasses(commandThen("START test-set-0/test-1\n")));
+        assertFalse(KeployDedupAgent.asksForClasses(commandThen("START test-set-0/test-1\nSEND CLASSES NOW\n")));
+        assertFalse(KeployDedupAgent.asksForClasses(commandThen("START test-set-0/test-1\n\nSEND CLASSES\n")));
     }
 
     @Test
@@ -550,6 +598,46 @@ public class ControlSocketTest {
             }
         }
         return false;
+    }
+
+    // assertClassZip fails unless the frame after the record is the class zip.
+    private static void assertClassZip(String[] sent) throws IOException {
+        assertTrue("the record says a frame follows: " + sent[0], sent[0].contains("\"bytecodeFrame\":true"));
+        String[] frame = sent[1].split(" ", -1);
+        assertEquals(sent[1], 4, frame.length);
+        assertEquals("CLASSES", frame[0]);
+        assertEquals("orders-bytes", unzip(frame[3]).get("com/acme/Orders.class"));
+    }
+
+    // commandThen is a reader that has read the command on the first line of
+    // sent, as the SDK has before it looks for the ask. Read past sent, it
+    // fails at once: the SDK would wait there for a line that never comes.
+    private static BufferedReader commandThen(String sent) throws IOException {
+        BufferedReader reader = new BufferedReader(new Reader() {
+            private int at;
+
+            @Override
+            public int read(char[] buf, int off, int len) {
+                if (at == sent.length()) {
+                    throw new AssertionError("read past what came with the command: the SDK would wait here");
+                }
+                int n = Math.min(len, sent.length() - at);
+                sent.getChars(at, at + n, buf, off);
+                at += n;
+                return n;
+            }
+
+            @Override
+            public boolean ready() {
+                return at < sent.length();
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+        assertNotNull(reader.readLine());
+        return reader;
     }
 
     private void startWithJacoco() throws IOException {

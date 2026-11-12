@@ -107,11 +107,24 @@ public final class KeployDedupAgent {
     // SDK reads, written before it closes the connection. ACK says it took the
     // command: it reset the counters for a START, or sent the test's coverage
     // for an END. IGNORED says it read the command and did not take it.
-    // proto=2 says this SDK answers every command it reads, so Keploy can read
-    // a close with no answer as a command not taken: on macOS a connection
-    // closed with its command unread gives Keploy no error, only the close.
-    static final String UNIX_REPLY_TAKEN = "ACK proto=2";
-    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=2";
+    // proto=2 or later says this SDK answers every command it reads, so
+    // Keploy can read a close with no answer as a command not taken: on macOS
+    // a connection closed with its command unread gives Keploy no error, only
+    // the close. proto=3 says it also reads CLASSES_ASK.
+    static final String UNIX_REPLY_TAKEN = "ACK proto=3";
+    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=3";
+    // CLASSES_ASK is the line a Keploy agent that started after this JVM, so
+    // has no class zip, sends after its command, in the same write: the next
+    // record carries the zip again. An SDK that reads one line per
+    // connection never reads it.
+    static final String CLASSES_ASK = "SEND CLASSES";
+
+    // asksForClasses reads the line after a command and says whether it is
+    // CLASSES_ASK. The ask comes in the command's write, so it is read only
+    // when already here: a command without one is not kept waiting.
+    static boolean asksForClasses(BufferedReader reader) throws IOException {
+        return reader.ready() && CLASSES_ASK.equals(reader.readLine());
+    }
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -524,6 +537,9 @@ public final class KeployDedupAgent {
                 String line = reader.readLine();
                 if (line == null) {
                     return;
+                }
+                if (asksForClasses(reader)) {
+                    collector.resetBytecodeSentForNewConnection();
                 }
 
                 boolean taken;

@@ -132,7 +132,7 @@ public final class SmokeHarness {
             // The whole answer: one line saying the command was taken, then
             // the close.
             String ack = readAll(socket.getInputStream());
-            if (!"ACK proto=2\n".equals(ack)) {
+            if (!"ACK proto=3\n".equals(ack)) {
                 throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
         }
