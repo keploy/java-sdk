@@ -1669,7 +1669,8 @@ public final class KeployDedupAgent {
         }
 
         // publish sends the test's record and, when frame is set, the bytecode
-        // frame after it on the same connection: the record says one follows.
+        // frame after it on the same connection: the record says one follows,
+        // and a newline ends the frame, so a frame cut short is told apart.
         private void publish(String testId, Map<String, List<Integer>> executedProbesByClass, String frame)
                 throws IOException {
             byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass, frame != null))
@@ -1683,6 +1684,7 @@ public final class KeployDedupAgent {
                 if (frame != null) {
                     out.write('\n');
                     out.write(frame.getBytes(StandardCharsets.UTF_8));
+                    out.write('\n');
                 }
                 out.flush();
             }

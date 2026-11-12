@@ -563,12 +563,15 @@ public class ControlSocketTest {
     }
 
     // recordThenFrame splits a data connection's bytes into the record and the
-    // bytecode frame after it, one line each.
+    // bytecode frame after it, one line each: the frame ends with its newline,
+    // so Keploy's agent tells a frame the connection cut from a whole one.
     private static String[] recordThenFrame(String payload) {
         assertNotNull("the END's coverage reached the data socket", payload);
         int nl = payload.indexOf('\n');
         assertTrue("a newline ends the record before its frame: " + payload, nl > 0);
         String frame = payload.substring(nl + 1);
+        assertTrue("a newline ends the frame: " + frame, frame.endsWith("\n"));
+        frame = frame.substring(0, frame.length() - 1);
         assertFalse("one frame, on one line: " + frame, frame.isEmpty() || frame.contains("\n"));
         return new String[] {payload.substring(0, nl), frame};
     }
