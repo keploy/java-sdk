@@ -214,6 +214,16 @@ public class ControlSocketTest {
         assertEquals("{\"v\":1,\"part\":\"table\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
                 + "\"records\":5,\"sha256\":\"" + sha256(golden) + "\"}\n", frame.substring(header, body));
         assertEquals(new String(golden, StandardCharsets.UTF_8), frame.substring(body));
+        // The probe map follows the table, as its own stream with the same build.
+        String probes = data.next();
+        assertNotNull("the probe map followed the table", probes);
+        byte[] map = BuildTableTest.resource("java-dedup.probes.ndjson");
+        header = probes.indexOf("{\"v\":1,");
+        body = probes.indexOf('\n', header) + 1;
+        assertEquals("{\"v\":1,\"part\":\"probes\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
+                + "\"records\":5,\"sha256\":\"" + sha256(map) + "\"}\n", probes.substring(header, body));
+        assertEquals(new String(map, StandardCharsets.UTF_8), probes.substring(body));
+        assertNull("nothing more", data.payloads.poll(1, TimeUnit.SECONDS));
     }
 
     @Test(timeout = 60000)
@@ -672,6 +682,10 @@ public class ControlSocketTest {
                 try (Socket socket = server.accept()) {
                     socket.setSoTimeout(30000);
                     String payload = readAll(socket.getInputStream());
+                    if (payload.startsWith("KTB1")) {
+                        // A TABLE frame waits for OK before the next one goes.
+                        socket.getOutputStream().write("OK\n".getBytes(StandardCharsets.UTF_8));
+                    }
                     all.add(payload);
                     (payload.startsWith(INDEX_START) ? indexes : payloads).add(payload);
                 } catch (IOException e) {
