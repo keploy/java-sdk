@@ -20,6 +20,10 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <jacoco.version>0.8.15</jacoco.version>
+        <!-- The test JVM's heap. Left to the JVM, it is a quarter of the machine's RAM (of the host's when the
+             JVM does not see its container's limit), and the build table rows allocate enough for JDK 8's
+             collector to grow the heap past a 4 GiB container's limit. -DargLine=... overrides it. -->
+        <argLine>-Xmx1g</argLine>
     </properties>
 
     <licenses>

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Consumer;
 
 import org.jacoco.core.analysis.ICounter;
 import org.jacoco.core.analysis.ILine;
@@ -16,6 +17,8 @@ import org.jacoco.core.internal.analysis.filter.IFilter;
 import org.jacoco.core.internal.analysis.filter.IFilterOutput;
 import org.jacoco.core.internal.analysis.filter.Replacements;
 import org.jacoco.core.internal.flow.ClassProbesAdapter;
+import org.jacoco.core.internal.flow.IProbeIdGenerator;
+import org.jacoco.core.internal.flow.MethodProbesAdapter;
 import org.jacoco.core.internal.flow.MethodProbesVisitor;
 import org.jacoco.core.internal.instr.InstrSupport;
 import org.objectweb.asm.ClassReader;
@@ -71,34 +74,66 @@ public final class KeployBranchCoverage {
 
     /**
      * analyze runs JaCoCo's analysis over the class bytes with the given probes (null: none executed) and puts
-     * each method that has code into out, keyed by name + descriptor. With only non-null, only the methods
-     * named there are analyzed (the others still take their probe ids, as JaCoCo's analyzer does). It returns
+     * each method that has code into out, keyed by name + descriptor. It returns
      * the class's probe count, or -1 for a class JaCoCo's Analyzer does not analyze (module-info,
      * package-info). It throws when the bytes are not a class JaCoCo reads, or when a method's per-line sums
      * differ from JaCoCo's coverage of it.
      */
-    public static int analyze(byte[] bytes, boolean[] probes, Set<String> only, Map<String, Method> out) {
+    public static int analyze(byte[] bytes, boolean[] probes, Map<String, Method> out) {
+        return analyze(bytes, probes, out, null);
+    }
+
+    /** What {@link #analyze(byte[], Map, EachProbe)} hands over for each probe of each method with code. */
+    public interface EachProbe {
+        /**
+         * probe gets method (as analyze with no probe executed puts it in out), the index r of one of its
+         * probes in method.probes, and the method's coverage when that probe alone was executed.
+         */
+        void probe(Method method, int r, Method got);
+
+        /**
+         * wants says whether method's probes are replayed at all: a method it declines costs no replay, and
+         * probe gets none of its probes. Every method with code is wanted unless this is overridden.
+         */
+        default boolean wants(Method method) {
+            return true;
+        }
+    }
+
+    /**
+     * analyze is {@link #analyze(byte[], boolean[], Map)} with no probe executed, and it also hands each
+     * probe's own coverage to each, method by method, as a class analysis with only that probe executed gives
+     * it. It parses the class and runs the filters once: each probe replays only its method's instructions
+     * through JaCoCo's probe adapter, instruction builder and coverage calculator, with the filters' output of
+     * that one pass. So a class costs, summed over its methods, each method's probes times that method's size,
+     * not the whole class once per probe. A replay that meets other probes than the pass did throws.
+     */
+    public static int analyze(byte[] bytes, Map<String, Method> out, EachProbe each) {
+        return analyze(bytes, null, out, each);
+    }
+
+    private static int analyze(byte[] bytes, boolean[] probes, Map<String, Method> out, EachProbe each) {
         ClassReader reader = InstrSupport.classReaderFor(bytes);
         if ((reader.getAccess() & Opcodes.ACC_MODULE) != 0 || reader.getClassName().endsWith("/package-info")) {
             return -1;
         }
-        Visitor v = new Visitor(reader.getClassName(), probes, only, out);
+        Visitor v = new Visitor(reader.getClassName(), probes, out, each);
         reader.accept(new ClassProbesAdapter(v, false), 0);
         return v.total;
     }
 
     private static final class Visitor extends ClassAnalyzer {
         private final boolean[] probes;
-        private final Set<String> only;
         private final Map<String, Method> out;
+        private final EachProbe each;
         private final IFilter filter = Filters.all();
         int total;
 
-        Visitor(String name, boolean[] probes, Set<String> only, Map<String, Method> out) {
+        Visitor(String name, boolean[] probes, Map<String, Method> out, EachProbe each) {
             super(new ClassCoverageImpl(name, 0, false), probes, new StringPool());
             this.probes = probes;
-            this.only = only;
             this.out = out;
+            this.each = each;
         }
 
         @Override
@@ -110,14 +145,6 @@ public final class KeployBranchCoverage {
         @Override
         public MethodProbesVisitor visitMethod(int access, final String name, final String desc,
                 final String signature, String[] exceptions) {
-            // Leaving a method out keeps the others' results only while JaCoCo's filters carry nothing from one
-            // method to the next that changes them. One does: KotlinSerializableFilter keeps the line of a
-            // $Companion's <init>()V for serializer(). That method has one probe, so it is only ever mapped in
-            // the first round, which analyzes every method (only is null). Any other difference fails the
-            // class: the caller checks each method's lines and branches against the table in every round.
-            if (only != null && !only.contains(name + desc)) {
-                return null;
-            }
             InstrSupport.assertNotInstrumented(name, getClassName());
             final Method m = new Method(name, desc);
             final Builder builder = new Builder(probes, m);
@@ -131,14 +158,61 @@ public final class KeployBranchCoverage {
         }
 
         private void collect(Method m, Builder builder, MethodNode node, String signature) {
+            Output output = new Output();
+            filter.filter(node, this, output);
+            if (!fill(m, builder, node, signature, output)) {
+                return;
+            }
+            out.put(m.name + m.desc, m);
+            if (each != null && each.wants(m)) {
+                replay(m, node, signature, output);
+            }
+        }
+
+        /**
+         * replay hands each of m's probes to each with m's coverage when that probe alone is executed: the
+         * method's node again through a new probe adapter (its probe ids from the method's first) and analyzer,
+         * and the filters' output of the pass that made m.
+         */
+        private void replay(Method m, MethodNode node, String signature, Output output) {
+            if (m.probes.length == 0) {
+                return;
+            }
+            int first = Integer.MAX_VALUE;
+            int last = -1;
+            for (int id : m.probes) {
+                first = Math.min(first, id);
+                last = Math.max(last, id);
+            }
+            boolean[] one = new boolean[last + 1];
+            for (int r = 0; r < m.probes.length; r++) {
+                one[m.probes[r]] = true;
+                Method got = new Method(m.name, m.desc);
+                Builder builder = new Builder(one, got);
+                MethodAnalyzer analyzer = new MethodAnalyzer(builder);
+                analyzer.accept(node, new MethodProbesAdapter(analyzer, new Ids(first)));
+                one[m.probes[r]] = false;
+                if (!fill(got, builder, node, signature, output) || !Arrays.equals(got.probes, m.probes)) {
+                    throw new IllegalStateException("JaCoCo's replay of " + getClassName() + "#" + m.name + m.desc
+                            + " met probes " + Arrays.toString(got.probes) + ", its analysis "
+                            + Arrays.toString(m.probes));
+                }
+                each.probe(m, r, got);
+            }
+        }
+
+        /**
+         * fill sets m's counted instructions from builder's graph and the filters' output, as ClassAnalyzer
+         * computes a method's coverage. It returns false for a method without code.
+         */
+        private boolean fill(Method m, Builder builder, MethodNode node, String signature, Output output) {
             Map<AbstractInsnNode, Instruction> instructions = builder.getInstructions();
             MethodCoverageCalculator calculator = new MethodCoverageCalculator(instructions);
-            Output output = new Output(calculator);
-            filter.filter(node, this, output);
+            output.applyTo(calculator);
             MethodCoverageImpl coverage = new MethodCoverageImpl(m.name, m.desc, signature);
             calculator.calculate(coverage);
             if (!coverage.containsCode()) {
-                return;
+                return false;
             }
             int[] p = new int[m.probeCount];
             System.arraycopy(m.probes, 0, p, 0, m.probeCount);
@@ -210,7 +284,7 @@ public final class KeployBranchCoverage {
                 m.covered[k] = covered.get(k);
                 m.branches[k] = branches.get(k);
             }
-            out.put(m.name + m.desc, m);
+            return true;
         }
 
         private static boolean same(ICounter c, int total, int covered) {
@@ -279,24 +353,40 @@ public final class KeployBranchCoverage {
         }
     }
 
+    /** Ids counts probe ids up from a method's first, as ClassProbesAdapter counted them for the class. */
+    private static final class Ids implements IProbeIdGenerator {
+        private int next;
+
+        Ids(int first) {
+            next = first;
+        }
+
+        @Override
+        public int nextId() {
+            return next++;
+        }
+    }
+
     /**
-     * Output passes the filters' decisions on to JaCoCo's calculator and keeps the instructions it leaves out:
-     * the ignored ones and those merged into another (the calculator's own rule, findRepresentative).
+     * Output keeps what the filters said of one method, in their order, to be given to the coverage calculator
+     * of each analysis of that method: the filters read only the method's code and the class, never coverage.
      */
     private static final class Output implements IFilterOutput {
-        private final MethodCoverageCalculator calculator;
+        private final List<Consumer<IFilterOutput>> calls = new ArrayList<>();
         final Set<AbstractInsnNode> ignored = new HashSet<>();
         private final Map<AbstractInsnNode, AbstractInsnNode> merged = new HashMap<>();
         // Instructions a filter replaced the branches of, with how many new branches each has.
         final Map<AbstractInsnNode, Integer> replaced = new HashMap<>();
 
-        Output(MethodCoverageCalculator calculator) {
-            this.calculator = calculator;
+        void applyTo(IFilterOutput calculator) {
+            for (Consumer<IFilterOutput> call : calls) {
+                call.accept(calculator);
+            }
         }
 
         @Override
         public void ignore(AbstractInsnNode fromInclusive, AbstractInsnNode toInclusive) {
-            calculator.ignore(fromInclusive, toInclusive);
+            calls.add(c -> c.ignore(fromInclusive, toInclusive));
             for (AbstractInsnNode i = fromInclusive; i != toInclusive; i = i.getNext()) {
                 ignored.add(i);
             }
@@ -305,7 +395,9 @@ public final class KeployBranchCoverage {
 
         @Override
         public void merge(AbstractInsnNode i1, AbstractInsnNode i2) {
-            calculator.merge(i1, i2);
+            final AbstractInsnNode a = i1;
+            final AbstractInsnNode b = i2;
+            calls.add(c -> c.merge(a, b));
             i1 = representative(i1);
             i2 = representative(i2);
             if (i1 != i2) {
@@ -324,7 +416,7 @@ public final class KeployBranchCoverage {
 
         @Override
         public void replaceBranches(AbstractInsnNode source, Replacements replacements) {
-            calculator.replaceBranches(source, replacements);
+            calls.add(c -> c.replaceBranches(source, replacements));
             int n = 0;
             for (Object ignoredValue : replacements.values()) {
                 n++;

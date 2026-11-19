@@ -11,6 +11,7 @@ import org.jacoco.core.analysis.IMethodCoverage;
 import org.jacoco.core.data.ExecutionData;
 import org.jacoco.core.data.ExecutionDataStore;
 import org.jacoco.core.instr.Instrumenter;
+import org.jacoco.core.internal.analysis.KeployBranchCoverage;
 import org.jacoco.core.internal.data.CRC64;
 import org.jacoco.core.runtime.IExecutionDataAccessorGenerator;
 import org.junit.Test;
@@ -22,6 +23,7 @@ import org.objectweb.asm.Opcodes;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -37,6 +39,8 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -104,6 +108,117 @@ public class ProbeMapTest {
             assertEquals(String.format("%016x", CRC64.classId(files.get(i).bytes)), r.get("id").getAsString());
             assertEquals(files.get(i).name, instrumentedProbes(files.get(i)), r.getAsJsonArray("probes").size());
         }
+    }
+
+    @Test
+    public void aMethodTheCallerDeclinesIsNotReplayed() {
+        // The map declines the methods the table has no line of (a class built without -g): their probes cover
+        // no leaf, so their replays would be thrown away. The class pass still analyzes them.
+        byte[] bytes = BuildTableBudgetTest.gen("gen/app/Declined", 0, 40);
+        Map<String, KeployBranchCoverage.Method> shape = new HashMap<>();
+        List<String> replayed = new ArrayList<>();
+        int total = KeployBranchCoverage.analyze(bytes, shape, new KeployBranchCoverage.EachProbe() {
+            @Override
+            public boolean wants(KeployBranchCoverage.Method m) {
+                return !m.name.equals("run");
+            }
+
+            @Override
+            public void probe(KeployBranchCoverage.Method m, int r, KeployBranchCoverage.Method got) {
+                replayed.add(m.name);
+            }
+        });
+        assertTrue(shape.containsKey("run(I)I"));
+        assertTrue("run has probes to replay", shape.get("run(I)I").probes.length > 40);
+        assertEquals(total - shape.get("run(I)I").probes.length, replayed.size());
+        assertFalse("a declined method is not replayed", replayed.contains("run"));
+        assertTrue(replayed.contains("<init>"));
+    }
+
+    @Test(timeout = 300000)
+    public void eachProbesReplayIsTheClassAnalyzedWithThatProbeExecuted() throws Exception {
+        // The oracle is the class analyzed whole, once per round r, with the r-th probe of every method executed
+        // (a method's coverage reads only its own probes). Against it, each probe's one-pass replay, on real
+        // libraries' classes: JaCoCo core's and Gson's, the jars on this test's classpath.
+        int classes = 0;
+        int probes = 0;
+        for (Class<?> c : new Class<?>[] {Analyzer.class, JsonParser.class}) {
+            File jar = new File(c.getProtectionDomain().getCodeSource().getLocation().toURI());
+            assertTrue(jar + " is a jar", jar.isFile());
+            for (BuildTable.ClassFile f : jarClasses(jar)) {
+                Map<String, KeployBranchCoverage.Method> shape = new HashMap<>();
+                Map<String, List<KeployBranchCoverage.Method>> replayed = new HashMap<>();
+                int total = KeployBranchCoverage.analyze(f.bytes, shape, (m, r, got) -> {
+                    List<KeployBranchCoverage.Method> l = replayed.computeIfAbsent(m.name + m.desc,
+                            k -> new ArrayList<>());
+                    assertEquals(f.name + "#" + m.name + m.desc, r, l.size());
+                    l.add(got);
+                });
+                if (total < 0) {
+                    continue;
+                }
+                classes++;
+                int rounds = 0;
+                int replays = 0;
+                for (Map.Entry<String, KeployBranchCoverage.Method> e : shape.entrySet()) {
+                    int n = e.getValue().probes.length;
+                    rounds = Math.max(rounds, n);
+                    replays += n;
+                    List<KeployBranchCoverage.Method> l = replayed.get(e.getKey());
+                    assertEquals(f.name + "#" + e.getKey(), n, l == null ? 0 : l.size());
+                }
+                // A method whose code the filters leave out entirely (an enum's values()) keeps its probes: no leaf.
+                assertTrue(f.name + ": " + replays + " probes replayed of " + total, replays <= total);
+                for (int r = 0; r < rounds; r++) {
+                    boolean[] set = new boolean[total];
+                    for (KeployBranchCoverage.Method m : shape.values()) {
+                        if (m.probes.length > r) {
+                            set[m.probes[r]] = true;
+                        }
+                    }
+                    Map<String, KeployBranchCoverage.Method> run = new HashMap<>();
+                    KeployBranchCoverage.analyze(f.bytes, set, run);
+                    for (Map.Entry<String, KeployBranchCoverage.Method> e : shape.entrySet()) {
+                        if (e.getValue().probes.length <= r) {
+                            continue;
+                        }
+                        KeployBranchCoverage.Method want = run.get(e.getKey());
+                        KeployBranchCoverage.Method got = replayed.get(e.getKey()).get(r);
+                        String at = f.name + "#" + e.getKey() + " probe " + r;
+                        assertArrayEquals(at, want.lines, got.lines);
+                        assertArrayEquals(at, want.covered, got.covered);
+                        assertEquals(at, want.branches.length, got.branches.length);
+                        for (int k = 0; k < want.branches.length; k++) {
+                            assertArrayEquals(at, want.branches[k], got.branches[k]);
+                        }
+                        probes++;
+                    }
+                }
+            }
+        }
+        assertTrue("classes: " + classes, classes > 300);
+        assertTrue("probes: " + probes, probes > 5000);
+    }
+
+    static List<BuildTable.ClassFile> jarClasses(File jar) throws IOException {
+        List<BuildTable.ClassFile> out = new ArrayList<>();
+        try (ZipFile z = new ZipFile(jar)) {
+            for (ZipEntry e : Collections.list(z.entries())) {
+                String name = e.getName();
+                if (!name.endsWith(".class") || name.startsWith("META-INF/")) {
+                    continue;
+                }
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                try (InputStream in = z.getInputStream(e)) {
+                    byte[] buf = new byte[8192];
+                    for (int k; (k = in.read(buf)) > 0; ) {
+                        b.write(buf, 0, k);
+                    }
+                }
+                out.add(new BuildTable.ClassFile(name.substring(0, name.length() - 6), b.toByteArray()));
+            }
+        }
+        return out;
     }
 
     @Test

@@ -72,6 +72,19 @@ final class BuildTable {
 
     private static final Logger LOGGER = Logger.getLogger(BuildTable.class.getName());
 
+    /**
+     * log never throws. java.util.logging does not catch what a Handler throws (an app's logging bridge, an OOM
+     * while formatting), and a log that throws would end a send, or leave {@link Sends} running with no thread:
+     * every later TABLE would be ACKed and never sent.
+     */
+    static void log(Level level, String message, Throwable thrown) {
+        try {
+            LOGGER.log(level, message, thrown);
+        } catch (Throwable ignored) {
+            // Nowhere left to say it: the log is what failed.
+        }
+    }
+
     /** The control-socket command Keploy sends for the build table. */
     static final String COMMAND = "TABLE";
     /** A TABLE frame's size cap, magic and length included. */
@@ -118,7 +131,7 @@ final class BuildTable {
 
     /**
      * request answers Keploy's TABLE command: true (ACK) once the table's send is started on its own thread,
-     * or, when a send runs already, once that send is set to run once more after it. It never blocks.
+     * or, when a send runs already, once this request is set to run after it. It never blocks.
      * When no thread can start it answers false (IGNORED) and does not throw; the agent's command hook catches
      * anything else. The classes are read on that thread.
      */
@@ -140,14 +153,18 @@ final class BuildTable {
     }
 
     /**
-     * Sends runs one send at a time; a request while one runs has it run once more after it. It assumes one
-     * caller at a time (the control server handles one command at a time): a reset below clears {@code again},
-     * which would drop a request that raced in from a second caller.
+     * Sends runs one send at a time. Requests made while one runs are run once after it, as the newest of them:
+     * each request names its own index and data socket, and only the newest is the agent's now (a stop() and
+     * start() during a send makes a new index and socket). A send that throws is logged, and the request made
+     * while it ran still runs. It assumes one caller at a time (the control server handles one command at a
+     * time): a thread that fails to start clears {@code pending}, which would drop a request that raced in from
+     * a second caller.
      */
     static final class Sends {
         private final ThreadFactory threads;
         private boolean running;
-        private boolean again;
+        /** The newest request made while a send ran, to run after it; null for none. */
+        private Runnable pending;
         private int requests;
 
         Sends(ThreadFactory threads) {
@@ -162,7 +179,7 @@ final class BuildTable {
             synchronized (this) {
                 requests++;
                 if (running) {
-                    again = true;
+                    pending = send;
                     return true;
                 }
                 running = true;
@@ -175,31 +192,31 @@ final class BuildTable {
                 // must not end the control server. Keploy reads IGNORED as no table from this SDK.
                 synchronized (this) {
                     running = false;
-                    again = false;
+                    pending = null;
                 }
-                LOGGER.log(Level.WARNING, "Keploy coverage: the build table's thread did not start", t);
+                log(Level.WARNING, "Keploy coverage: the build table's thread did not start", t);
                 return false;
             }
         }
 
-        private void loop(Runnable send) {
-            try {
-                while (true) {
+        private void loop(Runnable first) {
+            Runnable send = first;
+            while (true) {
+                try {
                     send.run();
-                    synchronized (this) {
-                        if (!again) {
-                            running = false;
-                            return;
-                        }
-                        again = false;
-                    }
+                } catch (Throwable t) {
+                    // A failed send does not drop the request made while it ran: that one names the newest
+                    // index and socket.
+                    log(Level.WARNING, "Keploy coverage: the build table was not sent", t);
                 }
-            } catch (Throwable t) {
                 synchronized (this) {
-                    running = false;
-                    again = false;
+                    if (pending == null) {
+                        running = false;
+                        return;
+                    }
+                    send = pending;
+                    pending = null;
                 }
-                LOGGER.log(Level.WARNING, "Keploy coverage: the build table was not sent", t);
             }
         }
     }
@@ -238,13 +255,13 @@ final class BuildTable {
             m.append("; probe map of ").append(s.probes.size()).append(" class files; ").append(frames.seq + maps.seq)
                     .append(" frames, ").append((System.nanoTime() - t0) / 1_000_000)
                     .append(" ms, cpu ").append((threadCpuNanos() - cpu0) / 1_000_000).append(" ms)");
-            LOGGER.log(Level.INFO, m.toString());
+            log(Level.INFO, m.toString(), null);
         } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Keploy coverage: the build table was not sent: " + e.getMessage()
-                    + "; it goes again when Keploy asks for it again");
+            log(Level.WARNING, "Keploy coverage: the build table was not sent: " + e.getMessage()
+                    + "; it goes again when Keploy asks for it again", null);
         } catch (Throwable t) {
             // Never let the table take the app down: Keploy names the coverage it did not get.
-            LOGGER.log(Level.WARNING, "Keploy coverage: the build table was not sent", t);
+            log(Level.WARNING, "Keploy coverage: the build table was not sent", t);
         }
     }
 
@@ -305,7 +322,7 @@ final class BuildTable {
         int n = 0;
         int unnamed = 0;
         for (ClassFile in : classes) {
-            if (in == null || in.bytes == null) {
+            if (in == null) {
                 continue;
             }
             // Every indexed class is in the build id, named or not: the INDEX record's, by the same function.
@@ -371,14 +388,6 @@ final class BuildTable {
         } catch (RuntimeException e) {
             return f.name;
         }
-    }
-
-    static String hex(byte[] b) {
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte x : b) {
-            sb.append(Character.forDigit((x >> 4) & 0xf, 16)).append(Character.forDigit(x & 0xf, 16));
-        }
-        return sb.toString();
     }
 
     /** Units by package path, segment by segment ('/' sorts first), then by id: Go's comparePkg order. */
@@ -534,7 +543,7 @@ final class BuildTable {
                 try {
                     got = analyze(f.file);
                 } catch (Exception | LinkageError e) {
-                    LOGGER.log(Level.FINE, "Keploy coverage: JaCoCo could not analyze " + f.file.name, e);
+                    log(Level.FINE, "Keploy coverage: JaCoCo could not analyze " + f.file.name, e);
                     failed = true;
                     return notMeasured("analyzer_failed");
                 }
@@ -585,7 +594,7 @@ final class BuildTable {
                 }
             } catch (Exception | LinkageError e) {
                 // A class whose probes cannot be mapped exactly is not measured: its hits could not be read.
-                LOGGER.log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
+                log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
                 failed = true;
                 notMapped = true;
                 return notMeasured("analyzer_failed");
@@ -831,9 +840,9 @@ final class BuildTable {
      * covered branch edge's leaf. A probe covers more than its own line: JaCoCo marks every instruction on the
      * path that ends at the probe, so a test's leaves are the union of its probes' leaves.
      *
-     * <p>A method's probes never reach another method's instructions, so one analysis maps the k-th probe of
-     * every method at once: the map takes one analysis of the class file more than its largest method has
-     * probes, on top of the table's own analysis of it.
+     * <p>A method's probes never reach another method's instructions, so the class file is analyzed once and
+     * each probe replays only its own method (KeployBranchCoverage): the map costs, summed over the methods
+     * with a line, each method's probes times that method's size, on top of the table's own analysis.
      */
     static final class ProbeMap {
         private ProbeMap() {
@@ -857,16 +866,32 @@ final class BuildTable {
          * probes is the class file's probe map as JSON: one entry per probe (the class's probe count), each the
          * probe's leaves as half-open ranges of the unit's leaf indices, [start,end,start,end,...] ascending, no
          * two ranges touching. It throws when the class's lines or branches differ from the unit's methods (the
-         * same name under two roots), when a method with lines is in one and not in the other, or when a round
-         * leaves a method out.
+         * same name under two roots), when a method with lines is in one and not in the other, or when a probe's
+         * replay meets other probes than the class's analysis did.
          */
         static String probes(UnitFile f, Map<String, Method> byId) {
             Map<String, KeployBranchCoverage.Method> shape = new HashMap<>();
-            int total = Math.max(0, KeployBranchCoverage.analyze(f.file.bytes, null, null, shape));
-            Map<String, Method> table = new HashMap<>();
-            int rounds = 0;
+            Map<Integer, BitSet> hits = new HashMap<>();
+            String prefix = "m:" + f.file.name + "#";
+            // One analysis of the class; each probe's coverage replays only its own method (KeployBranchCoverage).
+            int total = Math.max(0, KeployBranchCoverage.analyze(f.file.bytes, shape,
+                    new KeployBranchCoverage.EachProbe() {
+                        @Override
+                        public boolean wants(KeployBranchCoverage.Method s) {
+                            // Checked below: a method with no line has no leaf for its probes to cover.
+                            return byId.containsKey(prefix + s.name + s.desc);
+                        }
+
+                        @Override
+                        public void probe(KeployBranchCoverage.Method s, int r, KeployBranchCoverage.Method got) {
+                            Method m = byId.get(prefix + s.name + s.desc);
+                            m.check(got);
+                            hits.put(s.probes[r], m.hits(got));
+                        }
+                    }));
+            int inShape = 0;
             for (Map.Entry<String, KeployBranchCoverage.Method> e : shape.entrySet()) {
-                Method m = byId.get("m:" + f.file.name + "#" + e.getKey());
+                Method m = byId.get(prefix + e.getKey());
                 if (m == null) {
                     for (int l : e.getValue().lines) {
                         if (l >= 1) {
@@ -874,53 +899,27 @@ final class BuildTable {
                                     + " has lines but no method in the table");
                         }
                     }
-                    continue; // no line: no leaf for its probes to cover
+                    continue;
                 }
                 m.check(e.getValue());
-                table.put(e.getKey(), m);
-                rounds = Math.max(rounds, e.getValue().probes.length);
+                inShape++;
             }
             // And the other way: each of the table's methods of this class file has its probes mapped here.
-            String prefix = "m:" + f.file.name + "#";
             int inTable = 0;
             for (String id : byId.keySet()) {
                 if (id.startsWith(prefix)) {
                     inTable++;
                 }
             }
-            if (inTable != table.size()) {
+            if (inTable != inShape) {
                 throw new IllegalStateException(f.file.name + ": " + inTable + " methods in the table, "
-                        + table.size() + " in the probe analysis");
-            }
-            BitSet[] hits = new BitSet[total];
-            for (int r = 0; r < rounds; r++) {
-                boolean[] probes = new boolean[total];
-                Set<String> only = new HashSet<>();
-                for (Map.Entry<String, Method> e : table.entrySet()) {
-                    int[] ids = shape.get(e.getKey()).probes;
-                    if (ids.length > r) {
-                        probes[ids[r]] = true;
-                        only.add(e.getKey());
-                    }
-                }
-                Map<String, KeployBranchCoverage.Method> run = new HashMap<>();
-                // The first round analyzes every method, as the table's analysis does; see KeployBranchCoverage.
-                KeployBranchCoverage.analyze(f.file.bytes, probes, r == 0 ? null : only, run);
-                for (String key : only) {
-                    KeployBranchCoverage.Method got = run.get(key);
-                    if (got == null) {
-                        throw new IllegalStateException(f.file.name + "#" + key + " has no coverage in round " + r);
-                    }
-                    Method m = table.get(key);
-                    m.check(got);
-                    hits[shape.get(key).probes[r]] = m.hits(got);
-                }
+                        + inShape + " in the probe analysis");
             }
             StringBuilder sb = new StringBuilder(2 + 8 * total);
             sb.append('[');
             for (int p = 0; p < total; p++) {
                 sb.append(p > 0 ? ",[" : "[");
-                BitSet b = hits[p];
+                BitSet b = hits.get(p);
                 int at = b == null ? -1 : b.nextSetBit(0);
                 boolean first = true;
                 while (at >= 0) {
@@ -1198,8 +1197,8 @@ final class BuildTable {
             Json.string(h, build);
             h.append(",\"seq\":").append(seq).append(",\"last\":").append(last);
             if (last) {
-                h.append(",\"records\":").append(records).append(",\"sha256\":\"").append(hex(digest.digest()))
-                        .append('"');
+                h.append(",\"records\":").append(records)
+                        .append(",\"sha256\":\"").append(IndexReport.hex(digest.digest())).append('"');
             }
             h.append("}\n");
             byte[] header = h.toString().getBytes(StandardCharsets.UTF_8);

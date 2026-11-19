@@ -51,7 +51,7 @@ public class IndexReportTest {
     @Test
     public void theUnitHashIsTheWholeSumAndTheBuildIdItsFirstHalf() {
         assertEquals(IDS_SUM, IndexReport.classIdsSum(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
-        assertEquals(GO_BUILD_ID, "jv1-" + IDS_SUM.substring(0, 32));
+        assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
     }
 
     @Test

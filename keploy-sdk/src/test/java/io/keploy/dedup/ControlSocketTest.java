@@ -273,6 +273,73 @@ public class ControlSocketTest {
                 probesDone |= last;
             }
         }
+        assertNull("nothing more", data.payloads.poll(1, TimeUnit.SECONDS));
+    }
+
+    @Test(timeout = 300000)
+    public void startAndEndAreAnsweredWhileTheTableIsAnalyzed() throws Exception {
+        // Keploy sends TABLE after the first ACK and goes on with its tests: the table's analysis runs on its own
+        // thread, so no START or END waits for it. The index is a generated app large enough that its analysis
+        // outlasts many START/END pairs.
+        File classes = new File(dir, "classes");
+        int n = 5000;
+        for (int i = 0; i < n; i++) {
+            String name = BuildTableBudgetTest.name(i);
+            File out = new File(classes, name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), BuildTableBudgetTest.gen(name, i, BuildTableBudgetTest.BRANCHES));
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
+        assertNotNull("the INDEX record (the index is read)", data.indexes.poll(60, TimeUnit.SECONDS));
+        assertEquals(TAKEN, send("START test-set-0/test-0"));
+        assertEquals(TAKEN, send("END test-set-0/test-0"));
+        assertNotNull(data.next());
+
+        long t0 = System.nanoTime();
+        assertEquals(TAKEN, send("TABLE"));
+        long tableAck = System.nanoTime() - t0;
+        boolean tableDone = false;
+        boolean probesDone = false;
+        int during = 0;
+        long worst = 0;
+        for (int k = 1; !tableDone || !probesDone; k++) {
+            long s = System.nanoTime();
+            assertEquals(TAKEN, send("START test-set-0/test-" + k));
+            assertEquals(TAKEN, send("END test-set-0/test-" + k));
+            worst = Math.max(worst, System.nanoTime() - s);
+            boolean ended = false;
+            for (String p; (p = data.payloads.poll(ended ? 0 : 30, TimeUnit.SECONDS)) != null; ) {
+                if (!p.startsWith("KTB1")) {
+                    assertTrue(p, p.contains("\"id\":\"test-set-0/test-" + k + "\""));
+                    ended = true;
+                    continue;
+                }
+                int at = p.indexOf("{\"v\":1,");
+                String header = p.substring(at, p.indexOf('\n', at));
+                boolean last = header.contains("\"last\":true");
+                tableDone |= last && header.contains("\"part\":\"table\"");
+                probesDone |= last && header.contains("\"part\":\"probes\"");
+            }
+            assertTrue("the END's coverage reached the data socket", ended);
+            if (!tableDone || !probesDone) {
+                during++;
+            }
+        }
+        long table = System.nanoTime() - t0;
+        System.out.printf("START/END pairs answered while the table of %d classes was analyzed and sent: %d in %d ms;"
+                + " slowest pair %d ms; TABLE answered in %d ms%n", n, during, table / 1_000_000, worst / 1_000_000,
+                tableAck / 1_000_000);
+        assertTrue("START and END were answered while the table was analyzed: " + during + " pairs in "
+                + table / 1_000_000 + " ms", during >= 3);
+        // The bounds are generous (a pair takes about 0.1 s): they fail when a START/END or TABLE waits on a
+        // slow analysis. A fast runner can finish the analysis inside them; during >= 3 above is what fails
+        // when the control thread does the analysis itself.
+        assertTrue("TABLE itself was answered at once: " + tableAck / 1_000_000 + " ms",
+                tableAck < TimeUnit.SECONDS.toNanos(5));
+        assertTrue("no START/END pair waited on the analysis: the slowest took " + worst / 1_000_000 + " ms",
+                worst < TimeUnit.SECONDS.toNanos(5));
     }
 
     // field is the string value of name in one JSON object's text.
