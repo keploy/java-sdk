@@ -19,6 +19,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -52,6 +54,7 @@ public class ControlSocketTest {
 
     private static final String JACOCO_PORT_PROPERTY = "keploy.jacoco.port";
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
+    private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
 
@@ -107,19 +110,24 @@ public class ControlSocketTest {
         KeployDedupAgent.dataSocketPath = savedDataPath;
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
+        System.clearProperty(CLASS_DIRS_PROPERTY);
         if (jacoco != null) {
             jacoco.close();
         }
         if (data != null) {
             data.close();
         }
-        File[] left = dir.listFiles();
+        delete(dir);
+    }
+
+    private static void delete(File f) {
+        File[] left = f.listFiles();
         if (left != null) {
-            for (File f : left) {
-                f.delete();
+            for (File c : left) {
+                delete(c);
             }
         }
-        dir.delete();
+        f.delete();
     }
 
     @Test
@@ -168,6 +176,67 @@ public class ControlSocketTest {
         String payload = data.next();
         assertNotNull("the END's coverage reached the data socket", payload);
         assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+    }
+
+    @Test(timeout = 60000)
+    public void theBuildTableGoesOnlyWhenKeployAsksForIt() throws Exception {
+        // The index is the java-dedup sample's classes, so the table is the Go encoder's golden for them.
+        File classes = new File(dir, "classes");
+        for (BuildTable.ClassFile f : BuildTableTest.javaDedup()) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        int asked = BuildTable.requests();
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull("the END's coverage reached the data socket", payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+        // Commands are handled one at a time, so once END is answered all START and END asked for is asked.
+        // An older Keploy never sends TABLE: it never gets a frame.
+        assertEquals("START and END never ask for the table", asked, BuildTable.requests());
+        assertNull("no table frame without TABLE", data.poll());
+
+        assertEquals("answered at once; the table goes on its own thread", TAKEN, send("TABLE"));
+        assertEquals(asked + 1, BuildTable.requests());
+        String frame = data.next();
+        assertNotNull("the TABLE's frame reached the data socket", frame);
+        assertTrue(frame, frame.startsWith("KTB1"));
+        int header = frame.indexOf("{\"v\":1,");
+        int body = frame.indexOf('\n', header) + 1;
+        assertTrue(frame, header > 0 && body > header);
+        byte[] golden = BuildTableTest.resource("java-dedup.table.ndjson");
+        String build = new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim();
+        assertEquals("{\"v\":1,\"part\":\"table\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
+                + "\"records\":5,\"sha256\":\"" + sha256(golden) + "\"}\n", frame.substring(header, body));
+        assertEquals(new String(golden, StandardCharsets.UTF_8), frame.substring(body));
+    }
+
+    @Test(timeout = 60000)
+    public void aTableThatFailsToStartIsIgnoredAndTheServerGoesOn() throws Exception {
+        startWithJacoco();
+        String dataPath = KeployDedupAgent.dataSocketPath;
+        data = new DataReceiver(dataPath);
+        KeployDedupAgent.dataSocketPath = null; // new File(null) throws on the control thread
+        assertEquals(IGNORED, send("TABLE"));
+        KeployDedupAgent.dataSocketPath = dataPath;
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull("the END's coverage reached the data socket", payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+    }
+
+    private static String sha256(byte[] b) throws NoSuchAlgorithmException {
+        StringBuilder hex = new StringBuilder();
+        for (byte x : MessageDigest.getInstance("SHA-256").digest(b)) {
+            hex.append(String.format("%02x", x));
+        }
+        return hex.toString();
     }
 
     @Test
