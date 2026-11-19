@@ -31,6 +31,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,7 +104,11 @@ public class BuildTableTest {
     /** sha256Hex is the sha256 of b as 64 lowercase hex, as a frame's "sha256" says it. */
     static String sha256Hex(byte[] b) {
         try {
-            return BuildTable.hex(MessageDigest.getInstance("SHA-256").digest(b));
+            StringBuilder hex = new StringBuilder();
+            for (byte x : MessageDigest.getInstance("SHA-256").digest(b)) {
+                hex.append(String.format("%02x", x));
+            }
+            return hex.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
@@ -574,8 +579,14 @@ public class BuildTableTest {
                             byte[] body = new byte[d.readInt()];
                             d.readFully(body);
                             read = body;
+                            // Kept before the OK, as Keploy keeps a frame before it answers: once the sender has
+                            // its OK, count() holds the frame.
+                            synchronized (got) {
+                                got.add(read);
+                            }
                             s.getOutputStream().write("OK\n".getBytes(StandardCharsets.UTF_8));
                             s.getOutputStream().flush();
+                            continue;
                         } else if (mode == Mode.READ_512_AND_CLOSE) {
                             byte[] b = new byte[512];
                             int n = in.read(b);
@@ -735,6 +746,127 @@ public class BuildTableTest {
             assertTrue(last, last.contains("\"records\":5,"));
             assertTrue(lastProbes, lastProbes.startsWith("{\"v\":1,\"part\":\"probes\",\"build\":\"" + build + "\","));
             assertTrue(lastProbes, lastProbes.contains("\"records\":5,"));
+        }
+    }
+
+    @Test(timeout = 30_000)
+    public void theRunAfterASendIsTheNewestRequests() throws Exception {
+        // A request names its index and data socket: after KeployDedupAgent.stop() and start() during a send, the
+        // new server's TABLE must be served from the new index to the new socket, not the first request's again.
+        CountDownLatch inFirst = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        List<String> ran = Collections.synchronizedList(new ArrayList<>());
+        BuildTable.Sends sends = new BuildTable.Sends(BuildTable::thread);
+        assertTrue(sends.request(() -> {
+            ran.add("old");
+            inFirst.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertTrue(inFirst.await(10, TimeUnit.SECONDS));
+        assertTrue(sends.request(() -> ran.add("middle")));
+        assertTrue(sends.request(() -> ran.add("new")));
+        release.countDown();
+        while (ran.size() < 2) {
+            Thread.sleep(10);
+        }
+        Thread.sleep(300);
+        assertEquals(Arrays.asList("old", "new"), new ArrayList<>(ran));
+    }
+
+    @Test(timeout = 30_000)
+    public void aRequestMadeWhileASendFailsStillRuns() throws Exception {
+        // A send that throws is logged; the request made while it ran names the agent's newest index and data
+        // socket, so it must still run, and Sends must take requests again after it.
+        CountDownLatch inFirst = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch next = new CountDownLatch(1);
+        CountDownLatch after = new CountDownLatch(1);
+        List<String> ran = Collections.synchronizedList(new ArrayList<>());
+        BuildTable.Sends sends = new BuildTable.Sends(BuildTable::thread);
+        assertTrue(sends.request(() -> {
+            ran.add("failing");
+            inFirst.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IllegalStateException("a send that fails (this row's own)");
+        }));
+        assertTrue(inFirst.await(10, TimeUnit.SECONDS));
+        assertTrue(sends.request(() -> {
+            ran.add("next");
+            next.countDown();
+        }));
+        release.countDown();
+        assertTrue("the request made while the send failed ran", next.await(10, TimeUnit.SECONDS));
+        assertTrue(sends.request(() -> {
+            ran.add("after");
+            after.countDown();
+        }));
+        assertTrue("a request after them runs", after.await(10, TimeUnit.SECONDS));
+        assertEquals(Arrays.asList("failing", "next", "after"), new ArrayList<>(ran));
+    }
+
+    /** Throwing is a JUL handler on BuildTable's logger that throws on every record, as an app's bridge can. */
+    static final class Throwing extends Handler implements AutoCloseable {
+        final AtomicInteger published = new AtomicInteger();
+        private final Logger logger = Logger.getLogger(BuildTable.class.getName());
+
+        Throwing() {
+            logger.addHandler(this);
+        }
+
+        @Override
+        public void publish(LogRecord record) {
+            published.incrementAndGet();
+            throw new IllegalStateException("a log handler that throws (this row's own)");
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(this);
+        }
+    }
+
+    @Test(timeout = 60_000)
+    public void aLogHandlerThatThrowsNeitherFailsASendNorWedgesSends() throws Exception {
+        List<BuildTable.ClassFile> classes = javaDedup();
+        try (Throwing h = new Throwing()) {
+            // send logs what it sent (INFO) or why it stopped (WARNING), and never throws.
+            List<byte[]> frames = Collections.synchronizedList(new ArrayList<>());
+            BuildTable.send(() -> classes, frames::add);
+            assertFalse("the table was sent", frames.isEmpty());
+            BuildTable.send(() -> {
+                throw new IllegalStateException("classes that cannot be read (this row's own)");
+            }, f -> fail("nothing to send"));
+            assertEquals("both sends logged through the handler", 2, h.published.get());
+            // Sends logs a send that throws through the same handler: the request made after it still runs.
+            BuildTable.Sends sends = new BuildTable.Sends(BuildTable::thread);
+            CountDownLatch failing = new CountDownLatch(1);
+            assertTrue(sends.request(() -> {
+                failing.countDown();
+                throw new IllegalStateException("a send that fails (this row's own)");
+            }));
+            assertTrue(failing.await(10, TimeUnit.SECONDS));
+            CountDownLatch next = new CountDownLatch(1);
+            assertTrue(sends.request(next::countDown));
+            assertTrue("a request after a send that failed runs", next.await(10, TimeUnit.SECONDS));
+            // The production send through Sends, then one more request.
+            CountDownLatch sent = new CountDownLatch(1);
+            assertTrue(sends.request(() -> BuildTable.send(() -> classes, frame -> sent.countDown())));
+            assertTrue(sent.await(20, TimeUnit.SECONDS));
+            CountDownLatch last = new CountDownLatch(1);
+            assertTrue(sends.request(last::countDown));
+            assertTrue("a request after the production send runs", last.await(20, TimeUnit.SECONDS));
         }
     }
 

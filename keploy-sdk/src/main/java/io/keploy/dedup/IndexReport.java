@@ -184,9 +184,14 @@ final class IndexReport {
             // Every Java platform has SHA-256.
             throw new IllegalStateException(e);
         }
-        StringBuilder hex = new StringBuilder(sum.length * 2);
-        for (byte b : sum) {
-            hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+        return hex(sum);
+    }
+
+    /** hex is b as lowercase hex, two digits a byte: the build id's and a TABLE frame's sha256. */
+    static String hex(byte[] b) {
+        StringBuilder hex = new StringBuilder(b.length * 2);
+        for (byte x : b) {
+            hex.append(Character.forDigit((x >> 4) & 0xf, 16)).append(Character.forDigit(x & 0xf, 16));
         }
         return hex.toString();
     }
