@@ -73,6 +73,10 @@ public final class SmokeHarness {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length == 0 ? "unknown" : args[0];
+        // What the INDEX report must say: where the app's classes came from,
+        // and which JaCoCo measures them.
+        String wantSource = args.length > 1 ? args[1] : "";
+        String wantJacoco = args.length > 2 ? args[2] : "";
 
         // Keploy fires its first test as soon as the app answers a health
         // check, so the agent has to be listening before main runs. This START
@@ -82,17 +86,29 @@ public final class SmokeHarness {
 
         delete(DATA_SOCKET);
 
+        // Keploy's receiver: one record per connection. This one is bound
+        // after the START: no socket file was there when the SDK bound its
+        // control socket, so it sent no INDEX report then, and it must send
+        // it here first, before the test's coverage.
+        AtomicReference<String> index = new AtomicReference<String>();
         AtomicReference<String> payload = new AtomicReference<String>();
         CountDownLatch received = new CountDownLatch(1);
         Thread receiver = new Thread(new Runnable() {
             @Override
             public void run() {
                 try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
-                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 1);
-                    try (AFUNIXSocket socket = server.accept()) {
-                        payload.set(readAll(socket.getInputStream()));
-                        received.countDown();
+                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
+                    for (int n = 0; payload.get() == null; n++) {
+                        try (AFUNIXSocket socket = server.accept()) {
+                            String record = readAll(socket.getInputStream());
+                            if (n == 0 && record.startsWith("{\"kind\":\"index\",")) {
+                                index.set(record);
+                            } else {
+                                payload.set(record);
+                            }
+                        }
                     }
+                    received.countDown();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -120,6 +136,15 @@ public final class SmokeHarness {
                 || !json.contains("smoke/Work")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
+        String report = index.get();
+        if (report == null
+                || !report.contains("\"source\":\"" + wantSource + "\"")
+                || !report.contains("\"jacoco\":\"" + wantJacoco + "\"")
+                || ("embedded".equals(wantJacoco) != report.matches(".*\"includes\":\"[^\"]*smoke\\.Work.*"))) {
+            throw new IllegalStateException("the first record on the data socket was no INDEX report with source "
+                    + wantSource + " and jacoco " + wantJacoco + " in " + mode + ": " + report);
+        }
+        System.out.println(mode + ": " + report);
         System.out.println(mode + ": " + json);
     }
 
@@ -213,7 +238,7 @@ cp -R "${work_dir}/classes/." "${work_dir}/gradle/build/classes/java/main/"
   run_smoke "maven-classes" \
     java_with_agents "maven-classes" \
       -cp "target/classes:${agent_jar}" \
-      smoke.SmokeHarness "maven-classes"
+      smoke.SmokeHarness "maven-classes" derived attached
 )
 
 (
@@ -221,13 +246,16 @@ cp -R "${work_dir}/classes/." "${work_dir}/gradle/build/classes/java/main/"
   run_smoke "gradle-classes" \
     java_with_agents "gradle-classes" \
       -cp "build/classes/java/main:${agent_jar}" \
-      smoke.SmokeHarness "gradle-classes"
+      smoke.SmokeHarness "gradle-classes" derived attached
 )
 
+# Named for the whole-classpath fallback this layout once took: the agent now
+# takes the dir that holds the main class (its package, smoke, has one part,
+# so the INDEX lists no package root).
 run_smoke "classpath-fallback" \
   java_with_agents "classpath-fallback" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "classpath-fallback"
+    smoke.SmokeHarness "classpath-fallback" derived attached
 
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
@@ -242,7 +270,7 @@ jar cfm "${work_dir}/jar/plain-app.jar" "${work_dir}/jar/MANIFEST.MF" -C "${work
   cd "${work_dir}/jar"
   run_smoke "plain-jar" \
     java_with_agents "plain-jar" \
-      -jar plain-app.jar "plain-jar"
+      -jar plain-app.jar "plain-jar" derived attached
 )
 
 # keploy-sdk.jar alone: it starts the JaCoCo agent it carries, with includes=
@@ -264,14 +292,14 @@ java_with_sdk_only() {
   run_smoke "sdk-only-maven-classes" \
     java_with_sdk_only "sdk-only-maven-classes" \
       -cp "target/classes:${agent_jar}" \
-      smoke.SmokeHarness "sdk-only-maven-classes"
+      smoke.SmokeHarness "sdk-only-maven-classes" derived embedded
 )
 
 (
   cd "${work_dir}/jar"
   run_smoke "sdk-only-plain-jar" \
     java_with_sdk_only "sdk-only-plain-jar" \
-      -jar plain-app.jar "sdk-only-plain-jar"
+      -jar plain-app.jar "sdk-only-plain-jar" derived embedded
 )
 
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
@@ -284,13 +312,13 @@ KEPLOY_JAVA_CLASS_DIRS="${work_dir}/spring-boot-layout.jar" \
 run_smoke "spring-boot-layout" \
   java_with_agents "spring-boot-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "spring-boot-layout"
+    smoke.SmokeHarness "spring-boot-layout" override attached
 
 KEPLOY_JAVA_CLASS_DIRS="${work_dir}/servlet-layout.war" \
 run_smoke "servlet-war-layout" \
   java_with_agents "servlet-war-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "servlet-war-layout"
+    smoke.SmokeHarness "servlet-war-layout" override attached
 
 # The agent binds the control socket in premain, so junixsocket's native
 # library loads there, before main runs. A JVM that cannot load it must still

@@ -108,7 +108,12 @@ public class EmbeddedJacocoTest {
 
     @Test
     public void theSdkAloneStartsJacocoOnTheAppsClassesOnly() throws Exception {
-        String output = runApp(new Run(SDK));
+        Run run = new Run(SDK);
+        run.env.put("EMBEDDED_APP_INDEX", "1");
+        String output = runApp(run);
+        // The INDEX report says what measures the app, and with what includes=.
+        assertTrue(output, output.contains("\"source\":\"override\""));
+        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"org.example.embedded.*\",\"jacoco\":\"embedded\"}"));
         assertTrue(output, output.contains("agent=true"));
         assertTrue(output, output.contains("app=true"));
         // Loaded after JaCoCo started, outside its includes=.
@@ -122,6 +127,14 @@ public class EmbeddedJacocoTest {
         // showed: its premain has not run when the SDK's does, and the SDK
         // must not start a second one, whose premain fails the JVM's start.
         assertLeftAlone(runApp(new Run(SDK, JACOCO)));
+    }
+
+    @Test
+    public void theIndexReportNamesAJacocoAgentTheCommandAttached() throws Exception {
+        Run run = new Run(SDK, JACOCO);
+        run.env.put("EMBEDDED_APP_INDEX", "1");
+        String output = runApp(run);
+        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"\",\"jacoco\":\"attached\"}"));
     }
 
     @Test
@@ -158,11 +171,14 @@ public class EmbeddedJacocoTest {
         // measured.
         Run run = new Run(SDK);
         run.tmpdir = tmp.newFile("not-a-dir");
+        run.env.put("EMBEDDED_APP_INDEX", "1");
         String output = runApp(run);
         assertTrue(output, output.contains("agent=false"));
         assertTrue(output, output.contains("app=false"));
         assertTrue(output, output.contains("could not start the JaCoCo agent keploy-sdk.jar carries"));
         assertFalse(output, output.contains("started JaCoCo"));
+        // The INDEX report says nothing measures the app.
+        assertTrue(output, output.contains("\"includes\":\"\",\"jacoco\":\"none\"}"));
     }
 
     private static void assertLeftAlone(String output) {

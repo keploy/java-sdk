@@ -33,6 +33,8 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
@@ -123,6 +125,8 @@ public final class KeployDedupAgent {
     // socket file to the first one's close. Before the first start() it is a
     // thread never started, which join() does not wait for.
     private static volatile Thread coverageThread = new Thread("keploy-java-dedup-none");
+    // The index the running agent was started on, for indexReport.
+    private static volatile CoverageIndex startedIndex;
     // How long stop(), and a start() after it, wait for the worker's thread.
     // Not final: the tests shorten it.
     static volatile long workerStopWaitMillis = 5000;
@@ -179,6 +183,7 @@ public final class KeployDedupAgent {
             return false;
         }
 
+        startedIndex = index;
         CoverageCollector collector = new CoverageCollector(
                 new JacocoClient(resolveHost(), resolvePort()), index);
 
@@ -223,7 +228,7 @@ public final class KeployDedupAgent {
             // up after the app answered and Keploy had fired its first tests,
             // whose START and END then reached no one: their coverage was lost.
             CommandServer server = new CommandServer(collector,
-                    new CoveragePublisher(new File(dataSocketPath)), new File(controlSocketPath));
+                    new CoveragePublisher(new File(dataSocketPath), index), new File(controlSocketPath));
             try {
                 server.bind();
             } catch (Throwable t) {
@@ -257,8 +262,10 @@ public final class KeployDedupAgent {
     // bytes, which the first START read before.
     private static void startJacoco(Instrumentation instrumentation, CoverageIndex index) {
         try {
+            index.jacoco = IndexReport.JACOCO_NONE;
             if (EmbeddedJacoco.attached(ClassLoader.getSystemClassLoader(),
                     ManagementFactory.getRuntimeMXBean().getInputArguments())) {
+                index.jacoco = IndexReport.JACOCO_ATTACHED;
                 log(Level.INFO, "Keploy dedup: this JVM has a JaCoCo agent attached, so Keploy reads coverage"
                         + " from it, and it instruments every class its own options take in. Attach only"
                         + " keploy-sdk.jar to have JaCoCo instrument the app's own classes alone", null);
@@ -276,6 +283,8 @@ public final class KeployDedupAgent {
                 return;
             }
             String version = EmbeddedJacoco.start(instrumentation, EmbeddedJacoco.options(includes));
+            index.includes = includes;
+            index.jacoco = IndexReport.JACOCO_EMBEDDED;
             log(Level.INFO, "Keploy dedup: started JaCoCo " + version + (includes.isEmpty()
                     ? " on every class"
                     : " on the app's " + names.size() + " classes alone (includes="
@@ -287,6 +296,13 @@ public final class KeployDedupAgent {
             log(Level.WARNING, "Keploy dedup could not start the JaCoCo agent keploy-sdk.jar carries, so no"
                     + " test's coverage is measured: attach jacocoagent.jar with -javaagent to measure it", t);
         }
+    }
+
+    // indexReport is the INDEX report of the index the agent was last started
+    // on, as sent to Keploy, or null before any start (tests).
+    static String indexReport() {
+        CoverageIndex index = startedIndex;
+        return index == null ? null : index.report().toJson();
     }
 
     /**
@@ -430,6 +446,22 @@ public final class KeployDedupAgent {
         }
     }
 
+    // receiverKey tells apart the receivers Keploy binds, one after another,
+    // on the data socket's path: the socket file's identity and the time it
+    // was made, as a file system can give a new file the inode of one just
+    // removed (and nothing but a new bind changes a socket file's times).
+    // Where the platform has no file key, the time alone. Null when there is
+    // no file: no receiver to reach.
+    static Object receiverKey(File file) {
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(file.toPath(), BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+            return Arrays.asList(attributes.fileKey(), attributes.lastModifiedTime());
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private static void deleteSocketFile(File file) {
         if (file.exists() && !file.delete()) {
             log(Level.FINE, "Failed to delete socket file " + file.getAbsolutePath(), null);
@@ -527,6 +559,11 @@ public final class KeployDedupAgent {
         @Override
         public void run() {
             try (AFUNIXServerSocket localServer = serverSocket) {
+                // Before any command, when Keploy's receiver is already
+                // bound: a START sent meanwhile waits in the socket's
+                // backlog. Off premain, as it reads the index's bytes when
+                // nothing has yet.
+                publisher.sendIndex();
                 while (running.get()) {
                     Socket accepted;
                     try {
@@ -1440,6 +1477,46 @@ public final class KeployDedupAgent {
         // came from. Set by loadEntries, before entries() returns.
         private volatile boolean appOnly;
         private volatile String source = "";
+        // For the INDEX report: how the index was found (IndexReport's
+        // SOURCE_*), how the JVM was launched or why the app's classes could
+        // not be told apart, and the app's package roots when derived. Set by
+        // loadEntries, before entries() returns.
+        private volatile String sourceKind = IndexReport.SOURCE_NONE;
+        private volatile String launch = "";
+        private volatile List<String> packages = Collections.emptyList();
+        // What measures the classes, and the includes= of the JaCoCo agent
+        // the SDK started (IndexReport's JACOCO_*). Set by premain's
+        // startJacoco before the worker that sends the report starts.
+        private volatile String jacoco = IndexReport.JACOCO_UNCHECKED;
+        private volatile String includes = "";
+        private volatile IndexReport report;
+
+        // report is the INDEX report of this index: computed once, on the
+        // first call, from entries() (so it reads the index if nothing has).
+        private IndexReport report() {
+            IndexReport cached = report;
+            if (cached != null) {
+                return cached;
+            }
+            synchronized (lock) {
+                if (report == null) {
+                    List<ClassEntry> all = entries();
+                    long[] ids = new long[all.size()];
+                    Set<String> roots = new LinkedHashSet<>();
+                    for (int i = 0; i < ids.length; i++) {
+                        ClassEntry entry = all.get(i);
+                        ids[i] = IndexReport.classId(entry.bytes);
+                        String root = IndexReport.rootOf(entry.location, entry.className);
+                        if (root != null) {
+                            roots.add(root);
+                        }
+                    }
+                    report = new IndexReport(IndexReport.buildId(ids), sourceKind, launch, roots, packages,
+                            all.size(), includes, jacoco);
+                }
+                return report;
+            }
+        }
 
         // isAppOnly says whether the index holds only the app's own classes.
         // When it does not (a whole jar or the whole classpath), fingerprints
@@ -1451,18 +1528,35 @@ public final class KeployDedupAgent {
 
         private List<ClassEntry> loadEntries() {
             LinkedHashMap<String, ClassEntry> collected = new LinkedHashMap<>();
+            List<File> configuredRoots = configuredClassRoots();
             List<File> applicationRoots = applicationRoots();
             List<File> executableArchiveRoots = Collections.emptyList();
             List<File> classpathRoots = Collections.emptyList();
 
-            scanRoots(applicationRoots, collected);
+            // KEPLOY_JAVA_CLASS_DIRS's own roots first: the index is the
+            // override's only when they hold a class, not when the build
+            // output under the working dir does.
+            scanRoots(configuredRoots, collected);
+            boolean overridden = !collected.isEmpty();
+            if (!configuredRoots.isEmpty() && !overridden) {
+                log(Level.WARNING, "Keploy dedup found no class in KEPLOY_JAVA_CLASS_DIRS "
+                        + summarizeFiles(configuredRoots, 5) + ", so it looks for the app's classes itself."
+                        + " Set it to the app's class dirs and jars", null);
+            }
+            List<File> defaultRoots = new ArrayList<>(applicationRoots);
+            defaultRoots.removeAll(configuredRoots);
+            scanRoots(defaultRoots, collected);
             List<File> foundRoots = new ArrayList<>();
-            for (File root : applicationRoots) {
+            // An override that held no class is not where the classes came from.
+            for (File root : overridden ? applicationRoots : defaultRoots) {
                 if (root.exists()) {
                     foundRoots.add(root);
                 }
             }
             String from = "the class dirs " + summarizeFiles(foundRoots, 5);
+            String kind = overridden ? IndexReport.SOURCE_OVERRIDE : IndexReport.SOURCE_DERIVED;
+            String how = from;
+            List<String> pkgRoots = Collections.emptyList();
             boolean onlyApp = true;
             // why says why the index is not the app's own classes alone.
             String why = "";
@@ -1478,20 +1572,31 @@ public final class KeployDedupAgent {
                 from = derived.root == null ? derived.launch
                         : "the package " + derived.root + " (" + derived.launch + ")";
                 why = derived.failed ? derived.launch : "no class found from " + from;
+                kind = IndexReport.SOURCE_DERIVED;
+                how = derived.launch;
+                pkgRoots = derived.root == null ? Collections.<String>emptyList()
+                        : Collections.singletonList(derived.root);
             }
             if (collected.isEmpty()) {
                 onlyApp = false;
                 executableArchiveRoots = executableArchiveRoots();
                 scanRoots(executableArchiveRoots, collected);
                 from = "the whole jar " + summarizeFiles(executableArchiveRoots, 5);
+                kind = IndexReport.SOURCE_WHOLE_JAR;
+                how = why;
+                pkgRoots = Collections.emptyList();
             }
             if (collected.isEmpty() && isClasspathFallbackEnabled()) {
                 classpathRoots = classpathRoots();
                 scanRoots(classpathRoots, collected);
                 from = "the whole classpath";
+                kind = IndexReport.SOURCE_CLASSPATH;
             }
             appOnly = onlyApp;
             source = collected.isEmpty() ? "no class" : from;
+            sourceKind = collected.isEmpty() ? IndexReport.SOURCE_NONE : kind;
+            launch = how;
+            packages = collected.isEmpty() ? Collections.<String>emptyList() : pkgRoots;
             if (collected.isEmpty()) {
                 // Said at WARNING: no test's coverage is measured at all.
                 log(Level.WARNING, "Keploy dedup found none of the app's classes (" + why + "), nor any class"
@@ -1530,20 +1635,24 @@ public final class KeployDedupAgent {
             return sorted;
         }
 
-        private String summarizeFiles(Iterable<File> values, int limit) {
+        // summarizeFiles lists the first limit of values, and how many more
+        // there are.
+        private String summarizeFiles(Collection<File> values, int limit) {
             List<String> sample = new ArrayList<>();
             for (File value : values) {
-                sample.add(value.getPath());
-                if (sample.size() >= limit) {
+                if (sample.size() == limit) {
+                    sample.add("and " + (values.size() - limit) + " more");
                     break;
                 }
+                sample.add(value.getPath());
             }
             return sample.toString();
         }
 
-        private List<File> applicationRoots() {
+        // configuredClassRoots is the dirs and jars KEPLOY_JAVA_CLASS_DIRS
+        // names, in its order.
+        private List<File> configuredClassRoots() {
             LinkedHashSet<File> roots = new LinkedHashSet<>();
-
             String configured = envOrProperty("KEPLOY_JAVA_CLASS_DIRS", "keploy.java.class.dirs", "");
             if (!configured.trim().isEmpty()) {
                 for (String part : configuredRoots(configured)) {
@@ -1552,6 +1661,11 @@ public final class KeployDedupAgent {
                     }
                 }
             }
+            return new ArrayList<>(roots);
+        }
+
+        private List<File> applicationRoots() {
+            LinkedHashSet<File> roots = new LinkedHashSet<>(configuredClassRoots());
 
             roots.add(new File(System.getProperty("user.dir"), "target/classes"));
             roots.add(new File(System.getProperty("user.dir"), "build/classes/java/main"));
@@ -1723,15 +1837,49 @@ public final class KeployDedupAgent {
     private static final class CoveragePublisher {
 
         private final File socketFile;
+        private final CoverageIndex index;
+        // The receiver (receiverKey) the INDEX report last reached, null
+        // before the first: one Keploy binds anew on the data socket's path (a
+        // new run, a docker-compose test set, a restarted Keploy) gets it
+        // again before its first record.
+        private Object indexSentTo;
 
-        private CoveragePublisher(File socketFile) {
+        private CoveragePublisher(File socketFile, CoverageIndex index) {
             this.socketFile = socketFile;
+            this.index = index;
+        }
+
+        // sendIndex sends the INDEX report unless the receiver on the data
+        // socket has it: once right after the control socket is bound, and
+        // again before a test's coverage when the receiver there is new. With
+        // no socket file there is no receiver to reach, and the report (which
+        // reads every indexed class) is not made: a JVM that runs with no
+        // Keploy never reads its index for it. A send that fails is tried
+        // again before the next test's coverage. It never fails the caller:
+        // Keploy then says only that it has no INDEX report.
+        synchronized void sendIndex() {
+            try {
+                Object key = receiverKey(socketFile);
+                if (key == null || key.equals(indexSentTo)) {
+                    return;
+                }
+                send(index.report().toJson().getBytes(StandardCharsets.UTF_8));
+                indexSentTo = key;
+            } catch (Throwable t) {
+                // Throwable: an Error here (the class ids' JaCoCo classes
+                // missing) must not end the worker, nor fail a test's END.
+                log(Level.FINE, "Could not send the Java dedup INDEX report to " + socketFile.getAbsolutePath(), t);
+            }
         }
 
         private void publish(String testId, Map<String, List<Integer>> executedProbesByClass) throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass))
-                    .getBytes(StandardCharsets.UTF_8);
+            sendIndex();
+            send(GSON.toJson(new DedupPayload(testId, executedProbesByClass)).getBytes(StandardCharsets.UTF_8));
+        }
 
+        // send writes payload on a connection of its own to the data socket:
+        // one record per connection, ended by its close.
+        private void send(byte[] payload) throws IOException {
             try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
                 socket.connect(AFUNIXSocketAddress.of(socketFile), SOCKET_TIMEOUT_MILLIS);
                 socket.setSoTimeout(SOCKET_TIMEOUT_MILLIS);

@@ -10,6 +10,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +23,10 @@ import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.zip.ZipEntry;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.jacoco.core.internal.data.CRC64;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -110,6 +118,8 @@ public class AppIndexTest {
 
         assertLogged("INFO Keploy dedup: fingerprinting the app's 2 classes, from the package com.acme.shop"
                 + " (java -cp ... com.acme.shop.Main)");
+        assertIndex("derived", "java -cp ... com.acme.shop.Main", "[\"com.acme.shop\"]", 2,
+                classes.getPath());
         // The fake classes cannot be loaded: the warmup tried them both.
         assertLogged("INFO Keploy dedup: warmed up application classes (initialized=0, skipped=2)");
         assertNotLogged("no warmup");
@@ -126,7 +136,26 @@ public class AppIndexTest {
         startAndSendStart();
 
         assertLogged("INFO Keploy dedup: fingerprinting the app's 1 classes, from the class dirs [" + classes.getPath() + "].");
+        assertIndex("override", "the class dirs [" + classes.getPath() + "]", "[]", 1, classes.getPath());
         assertLogged("INFO Keploy dedup: warmed up application classes (initialized=0, skipped=1)");
+        assertNotLogged("found no class in KEPLOY_JAVA_CLASS_DIRS");
+    }
+
+    @Test
+    public void manyClassDirsAreSaidWithHowManyMore() throws Exception {
+        List<String> dirs = new ArrayList<>();
+        for (int i = 0; i < 7; i++) {
+            dirs.add(tmp.newFolder("module" + i).getPath());
+        }
+        write(new File(dirs.get(6), "Main.class"));
+        System.setProperty("keploy.java.class.dirs", String.join(File.pathSeparator, dirs));
+        System.setProperty("java.class.path", dirs.get(6));
+        System.setProperty("sun.java.command", "Main");
+
+        startAndSendStart();
+
+        assertIndex("override", "the class dirs [" + String.join(", ", dirs.subList(0, 5)) + ", and 2 more]", "[]",
+                1, dirs.get(6));
     }
 
     @Test
@@ -201,6 +230,9 @@ public class AppIndexTest {
 
         assertLogged("INFO Keploy dedup: fingerprinting the app's 3 classes, from the package com.acme.shop"
                 + " (java -jar " + boot.getPath() + ")");
+        // No source, no git: the roots are inside the jar.
+        assertIndex("derived", "java -jar " + boot.getPath(), "[\"com.acme.shop\"]", 3,
+                boot.getAbsolutePath() + "!BOOT-INF/classes", boot.getAbsolutePath() + "!BOOT-INF/lib/shop-model.jar");
     }
 
     @Test
@@ -246,6 +278,8 @@ public class AppIndexTest {
         assertLogged("WARNING Keploy dedup could not tell the app's own classes from its libraries (java -cp ..."
                 + " org.apache.catalina.startup.Bootstrap, the launcher of org.apache.catalina.startup, not the"
                 + " app), so it fingerprints all 2 classes of the whole classpath");
+        assertIndex("classpath", "java -cp ... org.apache.catalina.startup.Bootstrap, the launcher of"
+                + " org.apache.catalina.startup, not the app", "[]", 2, bootstrap.getAbsolutePath(), classes.getPath());
         assertLogged("INFO Keploy dedup: no warmup, as the index is not the app's own classes alone"
                 + " (from the whole classpath)");
         assertNotLogged("warmed up");
@@ -266,6 +300,8 @@ public class AppIndexTest {
                 + " org.apache.catalina.startup.Bootstrap, the launcher of org.apache.catalina.startup, not the"
                 + " app), nor any class in the jar, and KEPLOY_JAVA_CLASSPATH_FALLBACK=false keeps it off the"
                 + " classpath, so no test's coverage is measured. Set KEPLOY_JAVA_CLASS_DIRS");
+        assertIndex("none", "java -cp ... org.apache.catalina.startup.Bootstrap, the launcher of"
+                + " org.apache.catalina.startup, not the app", "[]", 0);
         assertNotLogged("fingerprint");
         assertNotLogged("warmed up");
     }
@@ -283,6 +319,8 @@ public class AppIndexTest {
                 + " com.acme.shop.Main, but no dir or jar on the classpath holds com/acme/shop/Main.class), so it"
                 + " fingerprints all 1 classes of the whole jar [" + jar.getPath() + "]");
         assertLogged("INFO Keploy dedup: no warmup");
+        assertIndex("whole-jar", "java -cp ... com.acme.shop.Main, but no dir or jar on the classpath holds"
+                + " com/acme/shop/Main.class", "[]", 1, jar.getPath());
     }
 
     @Test
@@ -299,11 +337,97 @@ public class AppIndexTest {
         assertLogged("WARNING Keploy dedup could not tell the app's own classes from its libraries (no class found"
                 + " from the package com.acme.shop (java -cp ... com.acme.shop.MainTest)), so it fingerprints all 1"
                 + " classes of the whole classpath");
+        assertIndex("classpath", "no class found from the package com.acme.shop (java -cp ..."
+                + " com.acme.shop.MainTest)", "[]", 1, other.getPath());
+    }
+
+    @Test
+    public void theBuildOutputUnderTheWorkingDirIsDerived() throws Exception {
+        // mvn's target/classes under the dir the app runs from, no override.
+        File classes = new File(System.getProperty("user.dir"), "target/classes");
+        write(new File(classes, "com/acme/shop/Main.class"));
+        System.setProperty("java.class.path", classes.getPath());
+        System.setProperty("sun.java.command", "com.acme.shop.Main");
+
+        startAndSendStart();
+
+        assertIndex("derived", "the class dirs [" + classes.getPath() + "]", "[]", 1, classes.getPath());
+        assertNotLogged("found no class in KEPLOY_JAVA_CLASS_DIRS");
+    }
+
+    @Test
+    public void anOverrideWithNoClassIsSaidAndIsNotTheSource() throws Exception {
+        // KEPLOY_JAVA_CLASS_DIRS names a dir with no class; the build output
+        // under the working dir holds the app.
+        File wrong = tmp.newFolder("wrong");
+        File classes = new File(System.getProperty("user.dir"), "target/classes");
+        write(new File(classes, "com/acme/shop/Main.class"));
+        System.setProperty("keploy.java.class.dirs", wrong.getPath());
+        System.setProperty("java.class.path", classes.getPath());
+        System.setProperty("sun.java.command", "com.acme.shop.Main");
+
+        startAndSendStart();
+
+        assertLogged("WARNING Keploy dedup found no class in KEPLOY_JAVA_CLASS_DIRS [" + wrong.getPath()
+                + "], so it looks for the app's classes itself. Set it to the app's class dirs and jars");
+        assertIndex("derived", "the class dirs [" + classes.getPath() + "]", "[]", 1, classes.getPath());
+    }
+
+    @Test
+    public void aJvmWithNoReceiverNeverReadsItsIndexForTheReport() throws Exception {
+        // Keploy has bound no data socket: the INDEX report sent at the
+        // control socket's bind reaches no one, so it is not made, and the
+        // index (every class's bytes) is not read for it.
+        File classes = tmp.newFolder("app", "classes");
+        write(new File(classes, "com/acme/shop/Main.class"));
+        System.setProperty("java.class.path", classes.getPath());
+        System.setProperty("sun.java.command", "com.acme.shop.Main");
+
+        assertTrue(KeployDedupAgent.start());
+        // Answered after the send at the bind: the worker runs it before its
+        // first accept.
+        assertEquals("IGNORED proto=2\n", send("END test-set-0/test-0"));
+        assertNotLogged("fingerprint");
     }
 
     private void startAndSendStart() throws IOException {
         assertTrue(KeployDedupAgent.start());
         assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+    }
+
+    // assertIndex checks the INDEX report of the index the agent started on.
+    // Every fake class here is the one byte 1, so a build has one class id.
+    private static void assertIndex(String source, String launch, String packages, int classes, String... roots) {
+        JsonObject index = JsonParser.parseString(KeployDedupAgent.indexReport()).getAsJsonObject();
+        assertEquals(index.toString(), source, index.get("source").getAsString());
+        assertEquals(index.toString(), launch, index.get("launch").getAsString());
+        assertEquals(index.toString(), packages, index.get("packages").toString());
+        assertEquals(index.toString(), classes, index.get("classes").getAsInt());
+        List<String> want = new ArrayList<>(Arrays.asList(roots));
+        Collections.sort(want);
+        assertEquals(index.toString(), new Gson().toJson(want), index.get("roots").toString());
+        assertEquals(index.toString(), want.size(), index.get("rootCount").getAsInt());
+        String build = "";
+        if (classes > 0) {
+            String hex = String.format("%016x", CRC64.classId(new byte[] {1}));
+            build = "jv1-" + sha256(hex).substring(0, 32);
+        }
+        assertEquals(index.toString(), build, index.get("build").getAsString());
+        // start() is not premain: it starts no JaCoCo and looks for none.
+        assertEquals(index.toString(), "unchecked", index.get("jacoco").getAsString());
+        assertEquals(index.toString(), "", index.get("includes").getAsString());
+    }
+
+    private static String sha256(String text) {
+        try {
+            StringBuilder hex = new StringBuilder();
+            for (byte b : MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.US_ASCII))) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private void assertLogged(String prefix) {
