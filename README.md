@@ -173,9 +173,52 @@ ceiling does not quietly fall behind again.
 
 - `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
 - `KEPLOY_JACOCO_PORT`: JaCoCo TCP port used when the in-process runtime API is unavailable. Default: `36320`
-- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations to analyze for executed lines when your build output lives outside the standard locations
-- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath if standard class roots and the executable archive do not provide application classes. Default: `true`
+- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations of the app's own classes. You rarely need it: see "Which classes count as the app's" below
+- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath when neither the app's own classes nor the executable jar give any class. `false` leaves the index empty then, and no test's coverage is measured. Default: `true`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
+
+## Which classes count as the app's
+
+Dedup fingerprints a test by the app's own code it runs, not by library code
+(Spring, Hibernate, Jetty), which runs on nearly every request. The agent finds
+the app's classes, in this order:
+
+1. `KEPLOY_JAVA_CLASS_DIRS`, and `target/classes` or `build/classes/java/main`
+   under the working dir.
+2. From how the JVM was launched. The dir or jar that holds the main class is
+   the app's own and counts whole, so generated code outside its package
+   (OpenAPI, jOOQ, protobuf) counts too. Other jars give only the classes under
+   the main class's package root: its package cut to three parts
+   (`org.apache.fineract` for `org.apache.fineract.ServerApplication`), or a
+   longer Maven groupId that the package is in.
+   - `java -cp ... Main` (Jib's `/app/classes` and `/app/libs`, or any other
+     classpath): every class in the classpath's directories and in the jar
+     that holds the main class, and the classes under the root in its other
+     jars.
+   - A Spring Boot jar or war, or the dir it was extracted to: every class in
+     `BOOT-INF/classes`, and the classes under the root in `BOOT-INF/lib`'s
+     jars. A thin jar counts by its `Start-Class`.
+   - A Vert.x app: its `Main-Verticle`, or the verticle its command runs, is
+     the main class.
+   - Any other jar: all of it, and the classes under the root in the jars its
+     manifest's `Class-Path` names. A shaded jar (one that holds other
+     projects' `META-INF/maven` metadata) gives only the classes under the root.
+     A jar shaded of libraries that carry no such metadata (as Gradle's shadow
+     often is) counts whole, library classes too.
+   A launch the agent cannot read this way is not guessed at: a main class in
+   none of the jars or dirs launched (a launcher stub, as Quarkus runs), a
+   known server's, framework's or test runner's launcher (Tomcat, Jetty,
+   WildFly, Play, Helidon MP, Karaf, Felix, Equinox, Maven, Gradle), or
+   `java -m`. The list is of known launchers: a launcher it does not know is
+   taken for the app, so set `KEPLOY_JAVA_CLASS_DIRS` for one.
+3. Failing those, the whole executable jar, then the whole classpath
+   (`KEPLOY_JAVA_CLASSPATH_FALLBACK`). The agent then logs a WARNING: library
+   code makes duplicate tests look different, so dedup keeps more tests than
+   it should, and the startup warmup is skipped. When even those give no
+   class, the WARNING says no test's coverage is measured. Either way, set
+   `KEPLOY_JAVA_CLASS_DIRS`.
+
+The agent logs where its classes came from, and how many, at the first test.
 
 ## Sample
 

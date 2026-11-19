@@ -38,7 +38,6 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -50,7 +49,6 @@ import java.util.zip.ZipOutputStream;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 /**
  * Collects per-testcase JaCoCo coverage and streams the executed probe set per
@@ -940,6 +938,15 @@ public final class KeployDedupAgent {
             if (isWarmupDisabled() || !warmed.compareAndSet(false, true)) {
                 return;
             }
+            // Only the app's own classes: a library's static initializer can
+            // start threads, open connections or self-attach an agent (Mockito
+            // through byte-buddy), and the whole classpath of a large app took
+            // the warmup to 54 s (105k classes on Fineract).
+            if (!coverageIndex.isAppOnly()) {
+                log(Level.INFO, "Keploy dedup: no warmup, as the index is not the app's own classes alone"
+                        + " (from " + coverageIndex.source + ")", null);
+                return;
+            }
             ClassLoader[] loaders = warmupLoaders();
             int initialized = 0;
             int failed = 0;
@@ -1374,6 +1381,20 @@ public final class KeployDedupAgent {
             }
         }
 
+        // Whether the index holds only the app's own classes (named in
+        // KEPLOY_JAVA_CLASS_DIRS, or derived from the launch), and where it
+        // came from. Set by loadEntries, before entries() returns.
+        private volatile boolean appOnly;
+        private volatile String source = "";
+
+        // isAppOnly says whether the index holds only the app's own classes.
+        // When it does not (a whole jar or the whole classpath), fingerprints
+        // and the warmup take in library code too.
+        private boolean isAppOnly() {
+            entries();
+            return appOnly;
+        }
+
         private List<ClassEntry> loadEntries() {
             LinkedHashMap<String, ClassEntry> collected = new LinkedHashMap<>();
             List<File> applicationRoots = applicationRoots();
@@ -1381,21 +1402,68 @@ public final class KeployDedupAgent {
             List<File> classpathRoots = Collections.emptyList();
 
             scanRoots(applicationRoots, collected);
+            List<File> foundRoots = new ArrayList<>();
+            for (File root : applicationRoots) {
+                if (root.exists()) {
+                    foundRoots.add(root);
+                }
+            }
+            String from = "the class dirs " + summarizeFiles(foundRoots, 5);
+            boolean onlyApp = true;
+            // why says why the index is not the app's own classes alone.
+            String why = "";
             if (collected.isEmpty()) {
+                AppClasses derived = AppClasses.derive(System.getProperty("java.class.path", ""),
+                        System.getProperty("sun.java.command", ""), System.getProperty("user.dir"));
+                Map<String, AppClasses.Found> found = new LinkedHashMap<>();
+                derived.scan(found, this::shouldSkipClass);
+                for (Map.Entry<String, AppClasses.Found> entry : found.entrySet()) {
+                    collected.put(entry.getKey(), new ClassEntry(classNameFromKey(entry.getKey()),
+                            normalizePath(entry.getValue().location), entry.getValue().bytes));
+                }
+                from = derived.root == null ? derived.launch
+                        : "the package " + derived.root + " (" + derived.launch + ")";
+                why = derived.failed ? derived.launch : "no class found from " + from;
+            }
+            if (collected.isEmpty()) {
+                onlyApp = false;
                 executableArchiveRoots = executableArchiveRoots();
                 scanRoots(executableArchiveRoots, collected);
+                from = "the whole jar " + summarizeFiles(executableArchiveRoots, 5);
             }
             if (collected.isEmpty() && isClasspathFallbackEnabled()) {
                 classpathRoots = classpathRoots();
                 scanRoots(classpathRoots, collected);
+                from = "the whole classpath";
             }
-            if (collected.isEmpty() && diagnosticsEnabled()) {
-                diagnostic("no application classes indexed"
-                        + ", applicationRoots=" + summarizeFiles(applicationRoots, 5)
-                        + ", executableArchiveRoots=" + summarizeFiles(executableArchiveRoots, 5)
-                        + ", classpathFallbackRoots=" + summarizeFiles(classpathRoots, 5)
-                        + ", java.class.path=" + System.getProperty("java.class.path", "")
-                        + ", sun.java.command=" + System.getProperty("sun.java.command", ""));
+            appOnly = onlyApp;
+            source = collected.isEmpty() ? "no class" : from;
+            if (collected.isEmpty()) {
+                // Said at WARNING: no test's coverage is measured at all.
+                log(Level.WARNING, "Keploy dedup found none of the app's classes (" + why + "), nor any class"
+                        + (isClasspathFallbackEnabled() ? " in the jar or on the classpath"
+                        : " in the jar, and KEPLOY_JAVA_CLASSPATH_FALLBACK=false keeps it off the classpath")
+                        + ", so no test's coverage is measured. Set KEPLOY_JAVA_CLASS_DIRS to the app's class"
+                        + " dirs and jars", null);
+                if (diagnosticsEnabled()) {
+                    diagnostic("no application classes indexed"
+                            + ", applicationRoots=" + summarizeFiles(applicationRoots, 5)
+                            + ", executableArchiveRoots=" + summarizeFiles(executableArchiveRoots, 5)
+                            + ", classpathFallbackRoots=" + summarizeFiles(classpathRoots, 5)
+                            + ", java.class.path=" + System.getProperty("java.class.path", "")
+                            + ", sun.java.command=" + System.getProperty("sun.java.command", ""));
+                }
+            } else if (onlyApp) {
+                log(Level.INFO, "Keploy dedup: fingerprinting the app's " + collected.size()
+                        + " classes, from " + from + ". Set KEPLOY_JAVA_CLASS_DIRS to the app's class dirs"
+                        + " and jars if that is not the app's own code", null);
+            } else {
+                // Said at WARNING: dedup still runs, but on library code too.
+                log(Level.WARNING, "Keploy dedup could not tell the app's own classes from its libraries ("
+                        + why + "), so it fingerprints all " + collected.size() + " classes of " + from
+                        + ": library code makes duplicate tests look different, so dedup keeps more tests"
+                        + " than it should, and the startup warmup is skipped. Set KEPLOY_JAVA_CLASS_DIRS"
+                        + " to the app's class dirs and jars", null);
             }
 
             List<ClassEntry> sorted = new ArrayList<>(collected.values());
@@ -1444,7 +1512,7 @@ public final class KeployDedupAgent {
         private List<File> executableArchiveRoots() {
             LinkedHashSet<File> roots = new LinkedHashSet<>();
 
-            addArchiveRoot(roots, firstCommandToken(System.getProperty("sun.java.command", "")));
+            addArchiveRoot(roots, AppClasses.firstToken(System.getProperty("sun.java.command", "")));
 
             String classpath = System.getProperty("java.class.path", "");
             if (classpath.trim().isEmpty()) {
@@ -1472,40 +1540,9 @@ public final class KeployDedupAgent {
             if (!file.isAbsolute()) {
                 file = new File(System.getProperty("user.dir"), path);
             }
-            if (file.isFile() && isArchive(file)) {
+            if (file.isFile() && AppClasses.isArchive(file)) {
                 roots.add(file);
             }
-        }
-
-        private boolean isArchive(File file) {
-            String name = file.getName().toLowerCase(Locale.ROOT);
-            return name.endsWith(".jar")
-                    || name.endsWith(".war")
-                    || name.endsWith(".ear")
-                    || name.endsWith(".zip");
-        }
-
-        private String firstCommandToken(String command) {
-            if (command == null) {
-                return "";
-            }
-
-            String trimmed = command.trim();
-            if (trimmed.isEmpty()) {
-                return "";
-            }
-
-            char first = trimmed.charAt(0);
-            if (first == '"' || first == '\'') {
-                int end = trimmed.indexOf(first, 1);
-                return end > 0 ? trimmed.substring(1, end) : trimmed.substring(1);
-            }
-
-            int end = 0;
-            while (end < trimmed.length() && !Character.isWhitespace(trimmed.charAt(end))) {
-                end++;
-            }
-            return trimmed.substring(0, end);
         }
 
         private String[] configuredRoots(String configured) {
@@ -1523,7 +1560,7 @@ public final class KeployDedupAgent {
                 for (String part : parts) {
                     if (!part.trim().isEmpty()) {
                         File file = new File(part.trim());
-                        if (file.isDirectory() || isArchive(file)) {
+                        if (file.isDirectory() || AppClasses.isArchive(file)) {
                             roots.add(file);
                         }
                     }
@@ -1539,7 +1576,7 @@ public final class KeployDedupAgent {
                 }
                 if (root.isDirectory()) {
                     scanDirectory(root, output);
-                } else if (root.isFile() && isArchive(root)) {
+                } else if (root.isFile() && AppClasses.isArchive(root)) {
                     scanJar(root, output);
                 }
             }
@@ -1547,10 +1584,8 @@ public final class KeployDedupAgent {
 
         private void scanDirectory(File root, Map<String, ClassEntry> output) {
             Path base = root.toPath();
-            try (Stream<Path> stream = Files.walk(base)) {
-                stream.filter(Files::isRegularFile)
-                        .filter(path -> path.toString().endsWith(".class"))
-                        .forEach(path -> addClassFile(base, path, output));
+            try {
+                AppClasses.walkClassFiles(base, path -> addClassFile(base, path, output));
             } catch (IOException e) {
                 log(Level.FINE, "Failed to scan class directory " + root.getAbsolutePath(), e);
             }
