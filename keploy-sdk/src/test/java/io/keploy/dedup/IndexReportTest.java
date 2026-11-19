@@ -44,6 +44,16 @@ public class IndexReportTest {
         assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {0xff, 0xffffffffffffffffL, 0xff, 1}));
     }
 
+    // The whole sha256 over the same three ids: what a build table unit's
+    // hash is for a unit of those class ids. The build id is its first 32 hex.
+    private static final String IDS_SUM = "73ab094cbaa75db7d27e1cc885ca22604fb30a4555ebac8aae6e264612a027d0";
+
+    @Test
+    public void theUnitHashIsTheWholeSumAndTheBuildIdItsFirstHalf() {
+        assertEquals(IDS_SUM, IndexReport.classIdsSum(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
+        assertEquals(GO_BUILD_ID, "jv1-" + IDS_SUM.substring(0, 32));
+    }
+
     @Test
     public void noClassHasNoBuildId() {
         assertEquals("", IndexReport.buildId(new long[0]));

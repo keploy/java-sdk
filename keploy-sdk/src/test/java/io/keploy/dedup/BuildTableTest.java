@@ -27,6 +27,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -95,6 +97,15 @@ public class BuildTableTest {
                 b.write(buf, 0, n);
             }
             return b.toByteArray();
+        }
+    }
+
+    /** sha256Hex is the sha256 of b as 64 lowercase hex, as a frame's "sha256" says it. */
+    static String sha256Hex(byte[] b) {
+        try {
+            return BuildTable.hex(MessageDigest.getInstance("SHA-256").digest(b));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -322,7 +333,7 @@ public class BuildTableTest {
                 assertEquals(last, h.get("last").getAsBoolean());
                 if (last) {
                     assertEquals(5, h.get("records").getAsInt());
-                    assertEquals(BuildTable.sha256Hex(c.ndjson.toByteArray()), h.get("sha256").getAsString());
+                    assertEquals(sha256Hex(c.ndjson.toByteArray()), h.get("sha256").getAsString());
                 } else {
                     assertFalse(h.has("records"));
                 }
@@ -523,11 +534,11 @@ public class BuildTableTest {
         assertEquals("c:com/acme/Foo", u.get("id").getAsString());
         assertEquals("com/acme", u.get("pkg").getAsString());
         assertEquals("com/acme/Foo.java", u.get("path").getAsString());
-        assertEquals(BuildTable.classIdsSum(new long[] {CRC64.classId(foo), CRC64.classId(in)}),
+        assertEquals(IndexReport.classIdsSum(new long[] {CRC64.classId(foo), CRC64.classId(in)}),
                 u.get("hash").getAsString());
         // Every indexed class is in the build id, as in the index record's, named or not.
-        assertEquals("jv1-" + BuildTable.classIdsSum(new long[] {CRC64.classId(foo), CRC64.classId(in),
-                CRC64.classId(junk)}).substring(0, 32), s.build);
+        assertEquals(IndexReport.buildId(new long[] {CRC64.classId(foo), CRC64.classId(in), CRC64.classId(junk)}),
+                s.build);
         assertTrue(c.records.get(0), c.records.get(0).contains("\"id\":\"m:com/acme/Foo$In#run(I[Ljava/lang/String;)I\""));
     }
 

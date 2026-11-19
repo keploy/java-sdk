@@ -8,7 +8,6 @@ import org.jacoco.core.analysis.IMethodCoverage;
 import org.jacoco.core.analysis.ISourceNode;
 import org.jacoco.core.data.ExecutionDataStore;
 import org.jacoco.core.internal.analysis.KeployBranchCoverage;
-import org.jacoco.core.internal.data.CRC64;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 import org.objectweb.asm.ClassReader;
@@ -309,8 +308,8 @@ final class BuildTable {
             if (in == null || in.bytes == null) {
                 continue;
             }
-            // Every indexed class is in the build id, as in the index record's.
-            long id = CRC64.classId(in.bytes);
+            // Every indexed class is in the build id, named or not: the INDEX record's, by the same function.
+            long id = IndexReport.classId(in.bytes);
             ids[n++] = id;
             ClassFile f = new ClassFile(vmName(in), in.bytes);
             Unit u = f.name == null ? null : Unit.of(f.name);
@@ -334,7 +333,7 @@ final class BuildTable {
         if (n == 0) {
             return new Summary("", 0, 0, 0, unnamed, 0, Collections.<byte[]>emptyList());
         }
-        String build = "jv1-" + classIdsSum(Arrays.copyOf(ids, n)).substring(0, 32);
+        String build = IndexReport.buildId(Arrays.copyOf(ids, n));
         List<Unit> units = new ArrayList<>(byId.values());
         Collections.sort(units, UNIT_ORDER);
         int notMeasured = 0;
@@ -372,44 +371,6 @@ final class BuildTable {
         } catch (RuntimeException e) {
             return f.name;
         }
-    }
-
-    /** classIdsSum is sha256, as hex, over the sorted, de-duplicated class ids, each %016x, joined by \n. */
-    static String classIdsSum(long[] ids) {
-        long[] sorted = ids.clone();
-        // Go sorts them as uint64.
-        Long[] boxed = new Long[sorted.length];
-        for (int i = 0; i < sorted.length; i++) {
-            boxed[i] = sorted[i];
-        }
-        Arrays.sort(boxed, Long::compareUnsigned);
-        StringBuilder sb = new StringBuilder(boxed.length * 17);
-        Long prev = null;
-        for (Long id : boxed) {
-            if (prev != null && prev.longValue() == id.longValue()) {
-                continue;
-            }
-            if (prev != null) {
-                sb.append('\n');
-            }
-            String hex = Long.toHexString(id);
-            for (int i = hex.length(); i < 16; i++) {
-                sb.append('0');
-            }
-            sb.append(hex);
-            prev = id;
-        }
-        return sha256Hex(sb.toString().getBytes(StandardCharsets.UTF_8));
-    }
-
-    static String sha256Hex(byte[] b) {
-        MessageDigest md;
-        try {
-            md = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
-        return hex(md.digest(b));
     }
 
     static String hex(byte[] b) {
@@ -512,7 +473,7 @@ final class BuildTable {
             for (int i = 0; i < ids.length; i++) {
                 ids[i] = files.get(i).classId;
             }
-            return classIdsSum(ids);
+            return IndexReport.classIdsSum(ids);
         }
 
         byte[] notMeasured(String code) {

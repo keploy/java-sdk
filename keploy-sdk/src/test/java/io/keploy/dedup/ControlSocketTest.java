@@ -21,7 +21,9 @@ import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -30,6 +32,7 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import org.jacoco.core.internal.data.CRC64;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -224,6 +227,60 @@ public class ControlSocketTest {
                 + "\"records\":5,\"sha256\":\"" + sha256(map) + "\"}\n", probes.substring(header, body));
         assertEquals(new String(map, StandardCharsets.UTF_8), probes.substring(body));
         assertNull("nothing more", data.payloads.poll(1, TimeUnit.SECONDS));
+    }
+
+    @Test(timeout = 60000)
+    public void theIndexRecordAndTheTableNameOneBuild() throws Exception {
+        // Keploy finds the table under the build the INDEX record named. The index is the java-dedup sample's
+        // classes and one file no class reader reads: both builds take every class the index holds.
+        File classes = new File(dir, "classes");
+        List<BuildTable.ClassFile> files = new ArrayList<>(BuildTableTest.javaDedup());
+        files.add(new BuildTable.ClassFile("com/acme/Junk", "not a class".getBytes(StandardCharsets.UTF_8)));
+        TreeSet<String> ids = new TreeSet<>();
+        for (BuildTable.ClassFile f : files) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+            ids.add(String.format("%016x", CRC64.classId(f.bytes)));
+        }
+        // Keploy's codecoverage.JavaBuildID: the ids as 16 hex, sorted (as hex: unsigned), joined by newlines.
+        String build = "jv1-" + sha256(String.join("\n", ids).getBytes(StandardCharsets.UTF_8)).substring(0, 32);
+        assertNotEquals("the file no class reader reads is in the build",
+                new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim(), build);
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
+        String index = data.indexes.poll(30, TimeUnit.SECONDS);
+        assertNotNull("the INDEX record came once the data socket was bound", index);
+        assertTrue(index, index.contains("\"classes\":" + files.size() + ","));
+        assertEquals(index, build, field(index, "build"));
+
+        assertEquals(TAKEN, send("TABLE"));
+        boolean tableDone = false;
+        boolean probesDone = false;
+        while (!tableDone || !probesDone) {
+            String frame = data.next();
+            assertNotNull("the table and the probe map each reached their last frame", frame);
+            int at = frame.indexOf("{\"v\":1,");
+            assertTrue(frame, frame.startsWith("KTB1") && at > 0);
+            String header = frame.substring(at, frame.indexOf('\n', at));
+            assertEquals(header, build, field(header, "build"));
+            boolean last = header.contains("\"last\":true");
+            if (header.contains("\"part\":\"table\"")) {
+                tableDone |= last;
+            } else {
+                assertTrue(header, header.contains("\"part\":\"probes\""));
+                probesDone |= last;
+            }
+        }
+    }
+
+    // field is the string value of name in one JSON object's text.
+    private static String field(String json, String name) {
+        String key = "\"" + name + "\":\"";
+        int at = json.indexOf(key);
+        assertTrue(json, at >= 0);
+        return json.substring(at + key.length(), json.indexOf('"', at + key.length()));
     }
 
     @Test(timeout = 60000)
