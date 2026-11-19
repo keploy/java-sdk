@@ -48,6 +48,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.zip.ZipEntry;
@@ -117,6 +118,12 @@ public final class KeployDedupAgent {
     // closed with its command unread gives Keploy no error, only the close.
     static final String UNIX_REPLY_TAKEN = "ACK proto=2";
     static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=2";
+    // The unix control command a Keploy that reads BACKGROUND records sends
+    // to get them: ACK when this SDK will send them to the receiver on the
+    // data socket now, IGNORED when it sees no hits between tests (JaCoCo's
+    // probes not read in place) or no receiver is there. An older SDK
+    // answers IGNORED too, as to any line that is no command.
+    static final String BACKGROUND_COMMAND = "BACKGROUND";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -587,6 +594,17 @@ public final class KeployDedupAgent {
         // deletes the file only while it is still this socket's.
         private volatile Object socketFileKey;
         private String activeTestId = "";
+        // The id of the test whose END last sent its coverage, set once that
+        // record is sent and cleared by every START and every other END: what
+        // the next START clears then ran between two tests. BACKGROUND and
+        // lines that are no command leave it (a receiver may ask between an
+        // END and a START). Like activeTestId, only the worker thread uses it.
+        private String lastEndedTestId;
+        // The between-tests hits the last START cleared, for a receiver that
+        // asked for them: made into a record and sent once that START's
+        // answer is written and its connection closed, off the time Keploy
+        // waits for the answer.
+        private BackgroundWindow pendingBackground;
 
         CommandServer(CoverageCollector collector, CoveragePublisher publisher, File controlSocket) {
             this.collector = collector;
@@ -694,11 +712,20 @@ public final class KeployDedupAgent {
             } catch (IOException e) {
                 log(Level.SEVERE, "Failed to handle Java dedup coverage command", e);
             }
+            BackgroundWindow window = pendingBackground;
+            if (window != null) {
+                pendingBackground = null;
+                publisher.sendBackground(window.after, window.before,
+                        () -> collector.backgroundProbes(window.cleared));
+            }
         }
 
         // run runs one command line ("START id", "END id") and says whether it
         // was taken. With diagnostics on, it says how long each step took.
         private boolean run(String line) {
+            if (BACKGROUND_COMMAND.equals(line)) {
+                return askBackground();
+            }
             CoverageCommand command = CoverageCommand.parse(line);
             if (command == null) {
                 return false;
@@ -720,17 +747,31 @@ public final class KeployDedupAgent {
                 // cleared hold the lines of the tests before this one, so
                 // this START is not taken and its END is ignored too.
                 activeTestId = "";
+                String after = lastEndedTestId;
+                lastEndedTestId = null;
                 // Warm up app classes once before the first measured window so
                 // one-time <clinit> lines aren't charged to the first test.
                 collector.warmup();
                 phases.mark("warmup");
-                if (!collector.begin(phases)) {
+                List<ProbeScan.Hit> cleared = new ArrayList<>();
+                if (!collector.begin(phases, cleared)) {
                     return false;
                 }
                 activeTestId = command.testId;
+                // Only what ran since a test's coverage was read: before the
+                // first test it is the app's start and the warmup, and after
+                // a START with no END, or an END not taken, that test's own
+                // hits.
+                if (after != null && !cleared.isEmpty() && publisher.backgroundAsked()) {
+                    pendingBackground = new BackgroundWindow(after, command.testId, cleared);
+                }
                 return true;
             }
 
+            // Set again only once this END's record is sent: after an END not
+            // taken (another test's id, its hits lost, its send failed), what
+            // the next START clears may be a test's own hits.
+            lastEndedTestId = null;
             if (!command.testId.equals(activeTestId)) {
                 log(Level.SEVERE,
                         "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -747,6 +788,7 @@ public final class KeployDedupAgent {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
                 publisher.publish(command.testId, executedProbesByClass, phases);
+                lastEndedTestId = command.testId;
                 return true;
             } catch (Exception e) {
                 // Not ACK for the same reason: nothing reached Keploy.
@@ -755,6 +797,19 @@ public final class KeployDedupAgent {
             } finally {
                 activeTestId = "";
             }
+        }
+
+        // askBackground answers BACKGROUND: ACK when the hits each START
+        // clears are seen (the scan) and a receiver is on the data socket,
+        // which from then on gets them; IGNORED otherwise.
+        private boolean askBackground() {
+            if (collector.probeScan() == null) {
+                log(Level.INFO, "Keploy dedup: BACKGROUND is not taken: JaCoCo's probes are not read in place"
+                        + " (KEPLOY_JAVA_SCAN off, JaCoCo over TCP, or the scan failed), so the hits between"
+                        + " two tests are not seen", null);
+                return false;
+            }
+            return publisher.askBackground();
         }
 
         private void writeReply(OutputStream outputStream, String reply) {
@@ -909,7 +964,7 @@ public final class KeployDedupAgent {
                         // one-time <clinit> lines aren't charged to the first test.
                         collector.warmup();
                         phases.mark("warmup");
-                        reset = collector.begin(phases);
+                        reset = collector.begin(phases, new ArrayList<ProbeScan.Hit>());
                     } catch (RuntimeException e) {
                         // Not taken, and the connection goes on: thrown past
                         // here, it ended this thread, and no later command
@@ -1095,15 +1150,21 @@ public final class KeployDedupAgent {
         }
 
         // The one-pass scan of the app classes' probes, when JaCoCo's agent
-        // runs in this JVM and its runtime data could be read; null when it
-        // is reached over TCP, or the scan failed once. Looked up on the
-        // first command; both are guarded by the collector.
+        // runs in this JVM and its runtime data could be read; null with
+        // KEPLOY_JAVA_SCAN=off, when JaCoCo is reached over TCP, or once the
+        // scan failed. Looked up on the first START, END or BACKGROUND; both
+        // are guarded by the collector.
         private ProbeScan probeScan;
         private boolean probeScanLookedUp;
 
         private synchronized ProbeScan probeScan() {
             if (!probeScanLookedUp) {
                 probeScanLookedUp = true;
+                if (isScanTurnedOff()) {
+                    log(Level.INFO, "Keploy dedup: KEPLOY_JAVA_SCAN is off, so each test takes JaCoCo's dump"
+                            + " and reset, and no BACKGROUND record is sent", null);
+                    return null;
+                }
                 Object agent = jacocoClient.runtimeAgent();
                 if (agent != null) {
                     try {
@@ -1132,10 +1193,10 @@ public final class KeployDedupAgent {
         // so that none of it is charged to the next test, and says whether
         // it did. With the scan, that is one pass over the app's classes, and
         // what it clears is background (a scheduled job, a health check):
-        // counted in the diagnostics, never in a test's hits. Without it, or
-        // when the pass fails (in any way: a START only has to clear),
-        // JaCoCo resets every class.
-        private boolean begin(Phases phases) {
+        // added to cleared, counted in the diagnostics, never in a test's
+        // hits. Without it, or when the pass fails (in any way: a START only
+        // has to clear), JaCoCo resets every class, and cleared stays empty.
+        private boolean begin(Phases phases, List<ProbeScan.Hit> cleared) {
             ProbeScan scan = probeScan();
             if (scan != null) {
                 try {
@@ -1144,6 +1205,7 @@ public final class KeployDedupAgent {
                     if (diagnosticsEnabled() && !background.isEmpty()) {
                         diagnostic("background hits cleared at START: " + describe(background));
                     }
+                    cleared.addAll(background);
                     return true;
                 } catch (ReflectiveOperationException | RuntimeException e) {
                     dropProbeScan(e);
@@ -1262,6 +1324,12 @@ public final class KeployDedupAgent {
             }
         }
 
+        // isScanTurnedOff says whether KEPLOY_JAVA_SCAN (or keploy.java.scan)
+        // is off, in any case: the one-pass scan is then never used.
+        private boolean isScanTurnedOff() {
+            return "off".equalsIgnoreCase(envOrProperty("KEPLOY_JAVA_SCAN", "keploy.java.scan", ""));
+        }
+
         private boolean isWarmupDisabled() {
             return isTruthy(envOrProperty("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED",
                     "keploy.java.dedup.warmup.disabled", ""));
@@ -1373,20 +1441,8 @@ public final class KeployDedupAgent {
             Map<String, List<Integer>> byClass = new LinkedHashMap<>();
             for (int i = 0; i < hits.size(); ) {
                 String name = hits.get(i).name;
-                int end = i + 1;
-                while (end < hits.size() && hits.get(end).name.equals(name)) {
-                    end++;
-                }
-                ProbeScan.Hit chosen = hits.get(i);
-                ManifestEntry known = liveManifest.get(name);
-                if (known != null) {
-                    for (int k = i; k < end; k++) {
-                        if (Long.toHexString(hits.get(k).id).equals(known.id)) {
-                            chosen = hits.get(k);
-                            break;
-                        }
-                    }
-                }
+                int end = copiesEnd(hits, i);
+                ProbeScan.Hit chosen = chosenCopy(hits, i, end);
                 i = end;
                 final int probeCount = chosen.probeCount;
                 final long classId = chosen.id;
@@ -1396,11 +1452,7 @@ public final class KeployDedupAgent {
                     m.probeCount = probeCount;
                     return m;
                 });
-                List<Integer> probes = new ArrayList<>(chosen.probes.length);
-                for (int probe : chosen.probes) {
-                    probes.add(probe);
-                }
-                byClass.put(name, probes);
+                byClass.put(name, probeList(chosen));
             }
             phases.mark("filter");
             if (diagnosticsEnabled()) {
@@ -1408,6 +1460,55 @@ public final class KeployDedupAgent {
                         + ", sampleClasses=" + summarizeStrings(byClass.keySet(), 5));
             }
             return byClass;
+        }
+
+        // backgroundProbes turns the hits a START cleared into probes by
+        // class, of two copies of one class the one probesByClass would
+        // report, and adds none of them to the coverage manifest: no test
+        // ran them.
+        private Map<String, List<Integer>> backgroundProbes(List<ProbeScan.Hit> hits) {
+            Map<String, List<Integer>> byClass = new LinkedHashMap<>();
+            for (int i = 0; i < hits.size(); ) {
+                int end = copiesEnd(hits, i);
+                byClass.put(hits.get(i).name, probeList(chosenCopy(hits, i, end)));
+                i = end;
+            }
+            return byClass;
+        }
+
+        // copiesEnd returns the end of the run of hits, sorted by name, that
+        // share the name of hits[from]: the copies of one class loaded from
+        // different bytes.
+        private int copiesEnd(List<ProbeScan.Hit> hits, int from) {
+            String name = hits.get(from).name;
+            int end = from + 1;
+            while (end < hits.size() && hits.get(end).name.equals(name)) {
+                end++;
+            }
+            return end;
+        }
+
+        // chosenCopy picks, of the copies hits[from, to) of one class, the
+        // one whose id the coverage manifest holds, else the first (the
+        // lowest id).
+        private ProbeScan.Hit chosenCopy(List<ProbeScan.Hit> hits, int from, int to) {
+            ManifestEntry known = liveManifest.get(hits.get(from).name);
+            if (known != null) {
+                for (int k = from; k < to; k++) {
+                    if (Long.toHexString(hits.get(k).id).equals(known.id)) {
+                        return hits.get(k);
+                    }
+                }
+            }
+            return hits.get(from);
+        }
+
+        private List<Integer> probeList(ProbeScan.Hit hit) {
+            List<Integer> probes = new ArrayList<>(hit.probes.length);
+            for (int probe : hit.probes) {
+                probes.add(probe);
+            }
+            return probes;
         }
 
         // indexedClassNames returns the VM names of the app's own classes (from the
@@ -2120,6 +2221,15 @@ public final class KeployDedupAgent {
         // new run, a docker-compose test set, a restarted Keploy) gets it
         // again before its first record.
         private Object indexSentTo;
+        // The receiver that asked this JVM for BACKGROUND records, null when
+        // none has, or the receiver there now is another: a new run, a
+        // restarted Keploy, or an older Keploy, which would read the record
+        // as a test's coverage, get none until they ask. The ask lives in
+        // this JVM only: an app started again has none until Keploy asks it.
+        private Object backgroundAskedBy;
+        // The between-tests windows whose record could not be sent since the
+        // last one that was, told to the receiver in that next record.
+        private int backgroundLost;
 
         private CoveragePublisher(File socketFile, CoverageIndex index) {
             this.socketFile = socketFile;
@@ -2146,6 +2256,64 @@ public final class KeployDedupAgent {
                 // Throwable: an Error here (the class ids' JaCoCo classes
                 // missing) must not end the worker, nor fail a test's END.
                 log(Level.FINE, "Could not send the Java dedup INDEX report to " + socketFile.getAbsolutePath(), t);
+            }
+        }
+
+        // askBackground records that the receiver on the data socket now
+        // asked for BACKGROUND records, and says whether there is one.
+        synchronized boolean askBackground() {
+            Object key = receiverKey(socketFile);
+            if (key == null) {
+                log(Level.INFO, "Keploy dedup: BACKGROUND is not taken: no receiver is on "
+                        + socketFile.getAbsolutePath(), null);
+                return false;
+            }
+            if (!key.equals(backgroundAskedBy)) {
+                backgroundLost = 0;
+            }
+            backgroundAskedBy = key;
+            return true;
+        }
+
+        synchronized boolean backgroundAsked() {
+            return backgroundAskedBy != null;
+        }
+
+        // sendBackground sends a between-tests window's hits (classes makes
+        // them, only when they go out) to the receiver that asked for them,
+        // after the INDEX report when that receiver does not have it yet.
+        // When the receiver there is another (or none), nothing is sent and
+        // none goes to it until it asks. A record that could not be made or
+        // sent is not tried again: the next one that goes through counts it
+        // in "lost". It never fails the caller.
+        synchronized void sendBackground(String after, String before,
+                Supplier<Map<String, List<Integer>>> classes) {
+            Object key = receiverKey(socketFile);
+            if (key == null || !key.equals(backgroundAskedBy)) {
+                backgroundAskedBy = null;
+                backgroundLost = 0;
+                return;
+            }
+            try {
+                BackgroundRecord record = new BackgroundRecord(index.report().build, after, before, classes.get());
+                if (backgroundLost > 0) {
+                    record.lost = backgroundLost;
+                }
+                sendIndex();
+                send(GSON.toJson(record).getBytes(StandardCharsets.UTF_8));
+                backgroundLost = 0;
+                if (diagnosticsEnabled()) {
+                    diagnostic("BACKGROUND record sent: after=" + after + ", before=" + before
+                            + ", classes=" + record.executedLinesByFile.size());
+                }
+            } catch (Throwable t) {
+                // Throwable, as for the INDEX report: an Error here must not
+                // end the worker. Said once while the sends fail, not once
+                // per test.
+                backgroundLost++;
+                log(backgroundLost == 1 ? Level.WARNING : Level.FINE,
+                        "Keploy dedup: the BACKGROUND record of the hits before " + before
+                                + " could not be sent to " + socketFile.getAbsolutePath(), t);
             }
         }
 
@@ -2191,6 +2359,49 @@ public final class KeployDedupAgent {
         private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass) {
             this.id = id;
             this.executedLinesByFile = executedProbesByClass;
+        }
+    }
+
+    // BackgroundWindow is what a START cleared after the END of `after`
+    // sent that test's coverage, up to the START of `before`, until it is
+    // made into a BackgroundRecord.
+    private static final class BackgroundWindow {
+
+        private final String after;
+        private final String before;
+        private final List<ProbeScan.Hit> cleared;
+
+        private BackgroundWindow(String after, String before, List<ProbeScan.Hit> cleared) {
+            this.after = after;
+            this.before = before;
+            this.cleared = cleared;
+        }
+    }
+
+    // BackgroundRecord is what the app's classes ran between two tests: the
+    // hits the START of `before` cleared, made after the END of `after` read
+    // that test's. Sent on the data socket, one per connection, only to a
+    // receiver that asked with BACKGROUND, and only for a window with hits.
+    // build is the INDEX report's. executedLinesByFile is {vmClassName ->
+    // [probeIdx]} under a test's record's key and in its shape (DedupPayload),
+    // names in order and probes ascending, so that Keploy reads both alike.
+    // lost, when set, counts the windows before this one whose record could
+    // not be made or sent.
+    static final class BackgroundRecord {
+
+        final String kind = "background";
+        final int v = 1;
+        final String build;
+        final String after;
+        final String before;
+        final Map<String, List<Integer>> executedLinesByFile;
+        Integer lost;
+
+        BackgroundRecord(String build, String after, String before, Map<String, List<Integer>> classes) {
+            this.build = build;
+            this.after = after;
+            this.before = before;
+            this.executedLinesByFile = classes;
         }
     }
 
