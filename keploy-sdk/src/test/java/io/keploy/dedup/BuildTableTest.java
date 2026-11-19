@@ -372,15 +372,17 @@ public class BuildTableTest {
     }
 
     @Test
-    public void noClassesIsOneEmptyLastFrame() throws Exception {
+    public void noClassesIsOneEmptyLastFrameOfEachPart() throws Exception {
         BuildTable.Summary s = BuildTable.write(new ArrayList<BuildTable.ClassFile>(), new Collect());
         assertEquals("", s.build);
         assertEquals(0, s.records);
         Frames f = new Frames();
         BuildTable.send(ArrayList::new, f);
-        assertEquals(1, f.frames.size());
+        assertEquals(2, f.frames.size());
         assertEquals("{\"v\":1,\"part\":\"table\",\"build\":\"\",\"seq\":0,\"last\":true,\"records\":0,\"sha256\":"
                 + "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}", header(f.frames.get(0)));
+        assertEquals("{\"v\":1,\"part\":\"probes\",\"build\":\"\",\"seq\":0,\"last\":true,\"records\":0,\"sha256\":"
+                + "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}", header(f.frames.get(1)));
     }
 
     // ---------------------------------------------------------------- an edge set, against Go
@@ -700,12 +702,18 @@ public class BuildTableTest {
             assertTrue(sends.request(() -> BuildTable.send(BuildTableTest::javaDedupUnchecked,
                     new BuildTable.SocketSender(sock))));
             String last = null;
-            while (last == null) {
+            String lastProbes = null;
+            while (last == null || lastProbes == null) {
                 synchronized (r.got) {
                     for (byte[] b : r.got) {
                         String h = new String(b, StandardCharsets.UTF_8);
+                        h = h.substring(0, h.indexOf('\n'));
                         if (h.contains("\"last\":true")) {
-                            last = h.substring(0, h.indexOf('\n'));
+                            if (h.contains("\"part\":\"table\"")) {
+                                last = h;
+                            } else {
+                                lastProbes = h;
+                            }
                         }
                     }
                 }
@@ -714,6 +722,8 @@ public class BuildTableTest {
             String build = new String(resource("java-dedup.build"), StandardCharsets.UTF_8).trim();
             assertTrue(last, last.startsWith("{\"v\":1,\"part\":\"table\",\"build\":\"" + build + "\","));
             assertTrue(last, last.contains("\"records\":5,"));
+            assertTrue(lastProbes, lastProbes.startsWith("{\"v\":1,\"part\":\"probes\",\"build\":\"" + build + "\","));
+            assertTrue(lastProbes, lastProbes.contains("\"records\":5,"));
         }
     }
 

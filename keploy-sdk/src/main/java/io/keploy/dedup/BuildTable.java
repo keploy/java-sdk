@@ -7,6 +7,7 @@ import org.jacoco.core.analysis.ILine;
 import org.jacoco.core.analysis.IMethodCoverage;
 import org.jacoco.core.analysis.ISourceNode;
 import org.jacoco.core.data.ExecutionDataStore;
+import org.jacoco.core.internal.analysis.KeployBranchCoverage;
 import org.jacoco.core.internal.data.CRC64;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
@@ -26,6 +27,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -59,6 +61,13 @@ import java.util.logging.Logger;
  * class the stream is one frame: build "", last, 0 records. After each frame the SDK shuts its side's output
  * and waits for {@code OK} and a newline; a receiver that closes without it ends the stream, and the table
  * goes again only when Keploy sends TABLE again.
+ *
+ * <p>After the table's last frame the probe map follows as a second stream of the same frames, with
+ * {@code "part":"probes"} and seq from 0 again: one record per class file name of each measured class, giving
+ * for each JaCoCo probe the leaves (indices into its class's leaves, as ranges) that a hit of that probe
+ * covers. Keploy turns each test's probe hits, which name a class by its name, into its leaves with it; it is
+ * never uploaded. Two class files of one name whose bytes differ share the record when they map their probes
+ * alike, and fail their class closed (not measured) when not.
  */
 final class BuildTable {
 
@@ -72,6 +81,9 @@ final class BuildTable {
     static final int MAX_RECORD_BYTES = 8 << 20;
     /** The first 4 bytes of a TABLE frame. */
     static final String MAGIC = "KTB1";
+    /** The parts a TABLE answer streams, in this order: the table, then the probe map. */
+    static final String PART_TABLE = "table";
+    static final String PART_PROBES = "probes";
 
     private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
     private static final int REPLY_TIMEOUT_MILLIS = 30_000;
@@ -201,12 +213,22 @@ final class BuildTable {
         try {
             long cpu0 = threadCpuNanos();
             long t0 = System.nanoTime();
-            FrameWriter frames = new FrameWriter(sender);
+            FrameWriter frames = new FrameWriter(sender, PART_TABLE, MAX_FRAME_BYTES);
             Summary s = write(classes.get(), frames);
             frames.finish(s.build, s.records);
+            FrameWriter maps = new FrameWriter(sender, PART_PROBES, MAX_FRAME_BYTES);
+            for (byte[] p : s.probes) {
+                maps.record(s.build, p);
+            }
+            maps.finish(s.build, s.probes.size());
             StringBuilder m = new StringBuilder("Keploy coverage: build table ");
             m.append(s.build.isEmpty() ? "(no app classes)" : s.build).append(" sent (").append(s.records)
                     .append(" classes, ").append(s.notMeasured).append(" not measured");
+            if (s.notMapped > 0) {
+                // Two copies of a class that differ, or JaCoCo's own steps disagreeing with its public result.
+                m.append(" (").append(s.notMapped).append(" of them as their probes could not be mapped: two"
+                        + " different class files of one name, or a Keploy bug; the FINE log names each)");
+            }
             if (s.noLines > 0) {
                 m.append(", ").append(s.noLines)
                         .append(" class files without line numbers, so without lines: compile them with -g");
@@ -214,7 +236,8 @@ final class BuildTable {
             if (s.unnamed > 0) {
                 m.append(", ").append(s.unnamed).append(" index entries without a class name left out");
             }
-            m.append("; ").append(frames.seq).append(" frames, ").append((System.nanoTime() - t0) / 1_000_000)
+            m.append("; probe map of ").append(s.probes.size()).append(" class files; ").append(frames.seq + maps.seq)
+                    .append(" frames, ").append((System.nanoTime() - t0) / 1_000_000)
                     .append(" ms, cpu ").append((threadCpuNanos() - cpu0) / 1_000_000).append(" ms)");
             LOGGER.log(Level.INFO, m.toString());
         } catch (IOException e) {
@@ -246,13 +269,20 @@ final class BuildTable {
         final int notMeasured;
         final int noLines;
         final int unnamed;
+        /** How many of the not measured records JaCoCo analyzed but whose probes could not be mapped. */
+        final int notMapped;
+        /** The probe map's records, in the table's order: one per class name of each measured unit. */
+        final List<byte[]> probes;
 
-        Summary(String build, int records, int notMeasured, int noLines, int unnamed) {
+        Summary(String build, int records, int notMeasured, int noLines, int unnamed, int notMapped,
+                List<byte[]> probes) {
             this.build = build;
             this.records = records;
             this.notMeasured = notMeasured;
             this.noLines = noLines;
             this.unnamed = unnamed;
+            this.notMapped = notMapped;
+            this.probes = probes;
         }
     }
 
@@ -271,6 +301,7 @@ final class BuildTable {
 
     static Summary write(List<ClassFile> classes, RecordSink sink, int maxRecord) throws IOException {
         Map<String, Unit> byId = new HashMap<>();
+        Set<String> seen = new HashSet<>();
         long[] ids = new long[classes.size()];
         int n = 0;
         int unnamed = 0;
@@ -288,6 +319,11 @@ final class BuildTable {
                 unnamed++;
                 continue;
             }
+            if (!seen.add(f.name + "\n" + id)) {
+                // The same class file again (the index found it under two paths): it is one class file, and
+                // the build id and the unit's hash count its id once either way.
+                continue;
+            }
             Unit had = byId.get(u.id);
             if (had == null) {
                 byId.put(u.id, u);
@@ -296,13 +332,15 @@ final class BuildTable {
             had.files.add(new UnitFile(f, id));
         }
         if (n == 0) {
-            return new Summary("", 0, 0, 0, unnamed);
+            return new Summary("", 0, 0, 0, unnamed, 0, Collections.<byte[]>emptyList());
         }
         String build = "jv1-" + classIdsSum(Arrays.copyOf(ids, n)).substring(0, 32);
         List<Unit> units = new ArrayList<>(byId.values());
         Collections.sort(units, UNIT_ORDER);
         int notMeasured = 0;
         int noLines = 0;
+        int notMapped = 0;
+        List<byte[]> probes = new ArrayList<>();
         for (Unit u : units) {
             byte[] rec = u.record();
             if (rec.length + 1 > maxRecord) {
@@ -311,12 +349,16 @@ final class BuildTable {
             }
             if (u.failed) {
                 notMeasured++;
+                if (u.notMapped) {
+                    notMapped++;
+                }
             } else {
                 noLines += u.noLines;
+                probes.addAll(u.probes);
             }
             sink.record(build, rec);
         }
-        return new Summary(build, units.size(), notMeasured, noLines, unnamed);
+        return new Summary(build, units.size(), notMeasured, noLines, unnamed, notMapped, probes);
     }
 
     /**
@@ -439,8 +481,12 @@ final class BuildTable {
         final String id;
         final List<UnitFile> files = new ArrayList<>(1);
         boolean failed;
+        // Set when JaCoCo analyzed the unit but its probes could not be mapped (so failed is set too).
+        boolean notMapped;
         // Class files with code but no line numbers: their methods have no leaf, so they are left out.
         int noLines;
+        // The probe map's records for the unit's class files, in file order; set when record() succeeds.
+        List<byte[]> probes = Collections.emptyList();
 
         private Unit(String pkg, String name) {
             this.pkg = pkg;
@@ -549,6 +595,41 @@ final class BuildTable {
                 int c = Integer.compare(a.line, b.line);
                 return c != 0 ? c : compareCodePoints(a.id, b.id);
             });
+            Map<String, Method> byId = new HashMap<>();
+            int base = 0;
+            for (Method m : methods) {
+                m.base = base;
+                base += m.leaves.length / 3;
+                byId.put(m.id, m);
+            }
+            List<byte[]> maps = new ArrayList<>();
+            try {
+                String lastName = null;
+                String lastProbes = null;
+                for (UnitFile f : sortedFiles()) {
+                    String p = ProbeMap.probes(f, byId);
+                    if (f.file.name.equals(lastName)) {
+                        // Two class files of one name whose bytes differ (the index found both). Keploy finds a
+                        // class's map by its name, as a test's hits name it, so they share one record: exact
+                        // only when a hit of either one covers the same leaves.
+                        if (!p.equals(lastProbes)) {
+                            throw new IllegalStateException(f.file.name + ": two class files of this name map"
+                                    + " their probes differently");
+                        }
+                        continue;
+                    }
+                    maps.add(ProbeMap.record(id, f, p));
+                    lastName = f.file.name;
+                    lastProbes = p;
+                }
+            } catch (Exception | LinkageError e) {
+                // A class whose probes cannot be mapped exactly is not measured: its hits could not be read.
+                LOGGER.log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
+                failed = true;
+                notMapped = true;
+                return notMeasured("analyzer_failed");
+            }
+            probes = maps;
             StringBuilder sb = head(sourcePath(infos));
             sb.append(",\"state\":\"ok\",\"methods\":[");
             for (int i = 0; i < methods.size(); i++) {
@@ -610,24 +691,45 @@ final class BuildTable {
         final String display;
         final int line;
         final int[] leaves; // flat: line, count, kind per leaf
+        // The unit-relative index of the method's first leaf (the unit's leaves in record order).
+        int base;
+        // The lines of the method's code leaves, ascending, and each one's method-relative leaf index.
+        private final int[] codeLines;
+        private final int[] codeLeaves;
 
         private Method(String id, String display, int line, int[] leaves) {
             this.id = id;
             this.display = display;
             this.line = line;
             this.leaves = leaves;
+            int n = 0;
+            for (int i = 0; i < leaves.length; i += 3) {
+                if (leaves[i + 2] == 0) {
+                    n++;
+                }
+            }
+            codeLines = new int[n];
+            codeLeaves = new int[n];
+            n = 0;
+            for (int i = 0; i < leaves.length; i += 3) {
+                if (leaves[i + 2] == 0) {
+                    codeLines[n] = leaves[i];
+                    codeLeaves[n++] = i / 3;
+                }
+            }
         }
 
         /**
          * of makes the method's record from JaCoCo's per-method lines: one code leaf per line with
-         * instructions (n = their count), then one branch leaf per branch edge on that line. A method with no
-         * line (a class built without line numbers) has no leaf to show and is left out, as the contract's
-         * method count leaves out a method with no code leaf.
+         * instructions (n = their count), then one branch leaf per branch edge on that line. Lines below 1
+         * have no leaf (javac never writes line 0; some bytecode tools do), and the method's line is its first
+         * line with a leaf. A method with no such line (a class built without line numbers) has no leaf to
+         * show and is left out, as the contract's method count leaves out a method with no code leaf.
          */
         static Method of(String vmClass, String nested, String unitName, IMethodCoverage mc, ClassInfo info) {
-            int first = mc.getFirstLine();
+            int first = Math.max(1, mc.getFirstLine());
             int last = mc.getLastLine();
-            if (first < 1 || last < first) {
+            if (last < first) {
                 return null;
             }
             int[] buf = new int[16];
@@ -652,9 +754,12 @@ final class BuildTable {
                     buf[k++] = 1;
                 }
             }
+            if (k == 0) {
+                return null;
+            }
             boolean varargs = info != null && info.varargs.contains(mc.getName() + mc.getDesc());
             return new Method("m:" + vmClass + "#" + mc.getName() + mc.getDesc(),
-                    Names.method(unitName, nested, mc.getName(), mc.getDesc(), varargs), first,
+                    Names.method(unitName, nested, mc.getName(), mc.getDesc(), varargs), buf[0],
                     Arrays.copyOf(buf, k));
         }
 
@@ -673,6 +778,199 @@ final class BuildTable {
                         .append(leaves[i + 2]).append(']');
             }
             sb.append("]}");
+        }
+
+        /** codeLeaf is the method-relative index of line l's code leaf, or -1 when the method has none there. */
+        int codeLeaf(int l) {
+            int at = Arrays.binarySearch(codeLines, l);
+            return at < 0 ? -1 : codeLeaves[at];
+        }
+
+        /**
+         * check throws unless the analysis has the method's leaves: on each line, the code leaf's instruction
+         * count and the line's branch edges (lines below 1 have no leaf).
+         */
+        void check(KeployBranchCoverage.Method a) {
+            Map<Integer, int[]> lines = new HashMap<>(); // line -> instructions, branches
+            for (int k = 0; k < a.lines.length; k++) {
+                if (a.lines[k] < 1) {
+                    continue;
+                }
+                int[] s = lines.get(a.lines[k]);
+                if (s == null) {
+                    s = new int[2];
+                    lines.put(a.lines[k], s);
+                }
+                s[0]++;
+                s[1] += a.branches[k].length;
+            }
+            Map<Integer, int[]> mine = new HashMap<>();
+            for (int i = 0; i < leaves.length; i += 3) {
+                int[] s = mine.get(leaves[i]);
+                if (s == null) {
+                    s = new int[2];
+                    mine.put(leaves[i], s);
+                }
+                if (leaves[i + 2] == 0) {
+                    s[0] += leaves[i + 1];
+                } else {
+                    s[1]++;
+                }
+            }
+            if (lines.size() != mine.size()) {
+                throw new IllegalStateException(id + ": " + lines.size() + " lines in the analysis, " + mine.size()
+                        + " in the table");
+            }
+            for (Map.Entry<Integer, int[]> e : lines.entrySet()) {
+                int[] t = mine.get(e.getKey());
+                if (t == null || !Arrays.equals(t, e.getValue())) {
+                    throw new IllegalStateException(id + ": line " + e.getKey() + " differs from the table");
+                }
+            }
+        }
+
+        /**
+         * hits is the set of unit-relative leaf indices the analysis covers: a line's code leaf when one of its
+         * instructions is covered, and the leaf of each covered branch edge. A line's edges are its leaves after
+         * its code leaf, in the order of the instructions and of each instruction's branches.
+         */
+        BitSet hits(KeployBranchCoverage.Method a) {
+            BitSet out = new BitSet();
+            Map<Integer, Integer> edges = new HashMap<>(); // line -> edges met so far
+            for (int k = 0; k < a.lines.length; k++) {
+                int l = a.lines[k];
+                if (l < 1) {
+                    continue;
+                }
+                int leaf = codeLeaf(l);
+                if (leaf < 0) {
+                    throw new IllegalStateException(id + ": line " + l + " has no code leaf");
+                }
+                int code = base + leaf;
+                if (a.covered[k]) {
+                    out.set(code);
+                }
+                Integer met = edges.get(l);
+                int e = met == null ? 0 : met;
+                for (boolean covered : a.branches[k]) {
+                    if (covered) {
+                        out.set(code + 1 + e);
+                    }
+                    e++;
+                }
+                edges.put(l, e);
+            }
+            return out;
+        }
+    }
+
+    /**
+     * ProbeMap maps each JaCoCo probe of a class file to the leaves a hit of that probe covers, from JaCoCo's
+     * own analysis (KeployBranchCoverage): a line's code leaf when an instruction of it is covered, and each
+     * covered branch edge's leaf. A probe covers more than its own line: JaCoCo marks every instruction on the
+     * path that ends at the probe, so a test's leaves are the union of its probes' leaves.
+     *
+     * <p>A method's probes never reach another method's instructions, so one analysis maps the k-th probe of
+     * every method at once: the map takes one analysis of the class file more than its largest method has
+     * probes, on top of the table's own analysis of it.
+     */
+    static final class ProbeMap {
+        private ProbeMap() {
+        }
+
+        /**
+         * record is the class file's probe-map record: {"class":vmName,"id":crc64,"unit":unitId,"probes":[...]},
+         * with probes as {@link #probes} gives them.
+         */
+        static byte[] record(String unitId, UnitFile f, String probes) {
+            StringBuilder sb = new StringBuilder(64 + probes.length());
+            sb.append("{\"class\":");
+            Json.string(sb, f.file.name);
+            sb.append(",\"id\":\"").append(String.format("%016x", f.classId)).append("\",\"unit\":");
+            Json.string(sb, unitId);
+            sb.append(",\"probes\":").append(probes).append('}');
+            return sb.toString().getBytes(StandardCharsets.UTF_8);
+        }
+
+        /**
+         * probes is the class file's probe map as JSON: one entry per probe (the class's probe count), each the
+         * probe's leaves as half-open ranges of the unit's leaf indices, [start,end,start,end,...] ascending, no
+         * two ranges touching. It throws when the class's lines or branches differ from the unit's methods (the
+         * same name under two roots), when a method with lines is in one and not in the other, or when a round
+         * leaves a method out.
+         */
+        static String probes(UnitFile f, Map<String, Method> byId) {
+            Map<String, KeployBranchCoverage.Method> shape = new HashMap<>();
+            int total = Math.max(0, KeployBranchCoverage.analyze(f.file.bytes, null, null, shape));
+            Map<String, Method> table = new HashMap<>();
+            int rounds = 0;
+            for (Map.Entry<String, KeployBranchCoverage.Method> e : shape.entrySet()) {
+                Method m = byId.get("m:" + f.file.name + "#" + e.getKey());
+                if (m == null) {
+                    for (int l : e.getValue().lines) {
+                        if (l >= 1) {
+                            throw new IllegalStateException(f.file.name + "#" + e.getKey()
+                                    + " has lines but no method in the table");
+                        }
+                    }
+                    continue; // no line: no leaf for its probes to cover
+                }
+                m.check(e.getValue());
+                table.put(e.getKey(), m);
+                rounds = Math.max(rounds, e.getValue().probes.length);
+            }
+            // And the other way: each of the table's methods of this class file has its probes mapped here.
+            String prefix = "m:" + f.file.name + "#";
+            int inTable = 0;
+            for (String id : byId.keySet()) {
+                if (id.startsWith(prefix)) {
+                    inTable++;
+                }
+            }
+            if (inTable != table.size()) {
+                throw new IllegalStateException(f.file.name + ": " + inTable + " methods in the table, "
+                        + table.size() + " in the probe analysis");
+            }
+            BitSet[] hits = new BitSet[total];
+            for (int r = 0; r < rounds; r++) {
+                boolean[] probes = new boolean[total];
+                Set<String> only = new HashSet<>();
+                for (Map.Entry<String, Method> e : table.entrySet()) {
+                    int[] ids = shape.get(e.getKey()).probes;
+                    if (ids.length > r) {
+                        probes[ids[r]] = true;
+                        only.add(e.getKey());
+                    }
+                }
+                Map<String, KeployBranchCoverage.Method> run = new HashMap<>();
+                // The first round analyzes every method, as the table's analysis does; see KeployBranchCoverage.
+                KeployBranchCoverage.analyze(f.file.bytes, probes, r == 0 ? null : only, run);
+                for (String key : only) {
+                    KeployBranchCoverage.Method got = run.get(key);
+                    if (got == null) {
+                        throw new IllegalStateException(f.file.name + "#" + key + " has no coverage in round " + r);
+                    }
+                    Method m = table.get(key);
+                    m.check(got);
+                    hits[shape.get(key).probes[r]] = m.hits(got);
+                }
+            }
+            StringBuilder sb = new StringBuilder(2 + 8 * total);
+            sb.append('[');
+            for (int p = 0; p < total; p++) {
+                sb.append(p > 0 ? ",[" : "[");
+                BitSet b = hits[p];
+                int at = b == null ? -1 : b.nextSetBit(0);
+                boolean first = true;
+                while (at >= 0) {
+                    int end = b.nextClearBit(at);
+                    sb.append(first ? "" : ",").append(at).append(',').append(end);
+                    first = false;
+                    at = b.nextSetBit(end);
+                }
+                sb.append(']');
+            }
+            return sb.append(']').toString();
         }
     }
 
@@ -875,6 +1173,7 @@ final class BuildTable {
      */
     static final class FrameWriter implements RecordSink {
         private final FrameSender sender;
+        private final String part;
         private final int bodyCap;
         private final ByteArrayOutputStream body = new ByteArrayOutputStream();
         private final MessageDigest digest;
@@ -882,11 +1181,16 @@ final class BuildTable {
         private String build;
 
         FrameWriter(FrameSender sender) {
-            this(sender, MAX_FRAME_BYTES);
+            this(sender, PART_TABLE, MAX_FRAME_BYTES);
         }
 
         FrameWriter(FrameSender sender, int maxFrame) {
+            this(sender, PART_TABLE, maxFrame);
+        }
+
+        FrameWriter(FrameSender sender, String part, int maxFrame) {
             this.sender = sender;
+            this.part = part;
             this.bodyCap = maxFrame - HEADER_ROOM;
             if (bodyCap < 1) {
                 throw new IllegalArgumentException("frame cap " + maxFrame + " leaves no room for a body");
@@ -929,7 +1233,7 @@ final class BuildTable {
 
         private void flush(boolean last, int records) throws IOException {
             StringBuilder h = new StringBuilder(160);
-            h.append("{\"v\":1,\"part\":\"table\",\"build\":");
+            h.append("{\"v\":1,\"part\":\"").append(part).append("\",\"build\":");
             Json.string(h, build);
             h.append(",\"seq\":").append(seq).append(",\"last\":").append(last);
             if (last) {
@@ -951,7 +1255,8 @@ final class BuildTable {
             try {
                 sender.send(frame);
             } catch (IOException e) {
-                throw new IOException("TABLE frame " + seq + ": " + e.getMessage(), e);
+                throw new IOException("TABLE frame " + (PART_TABLE.equals(part) ? "" : part + " ") + seq + ": "
+                        + e.getMessage(), e);
             }
             body.reset();
             seq++;
