@@ -3,6 +3,7 @@ package io.keploy.dedup;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -14,17 +15,20 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import org.jacoco.core.data.ExecutionDataWriter;
 import org.jacoco.core.runtime.RuntimeData;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -49,10 +53,14 @@ public class InProcessScanTest {
 
     private static final String[] PROPERTIES = {"keploy.java.dedup.diagnostics", "keploy.java.class.dirs",
             "keploy.jacoco.port", "keploy.coverage.endpoint", "keploy.java.dedup.warmup.disabled",
-            "keploy.build.tag"};
+            "keploy.build.tag", "keploy.java.scan"};
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
     private static final String SHOP = "com/acme/Shop";
+    private static final String CART = "com/acme/Cart";
+    // The build id of the two classes setUp writes, as the INDEX report has it.
+    private static final String BUILD = IndexReport.buildId(
+            new long[] {IndexReport.classId(new byte[] {1}), IndexReport.classId(new byte[] {2})});
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -108,6 +116,7 @@ public class InProcessScanTest {
         File shop = new File(classes, SHOP + ".class");
         shop.getParentFile().mkdirs();
         Files.write(shop.toPath(), new byte[] {1});
+        Files.write(new File(classes, CART + ".class").toPath(), new byte[] {2});
         System.setProperty("keploy.java.class.dirs", classes.getPath());
         // A port nothing listens on: no command may reach JaCoCo over TCP.
         System.setProperty("keploy.jacoco.port", "1");
@@ -200,6 +209,354 @@ public class InProcessScanTest {
             assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
                     data.next());
             assertEquals(0, count("Java dedup diagnostics"));
+        }
+    }
+
+    @Test
+    public void betweenTwoTestsTheHitsGoOnceToAReceiverThatAskedAndNeverIntoATest() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] cart = agent.probes(0x4321L, CART, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            // The app's start: not between two tests.
+            shop[0] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            shop[2] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[2]}}",
+                    data.next());
+            assertNull("no window before the first test", data.background.poll());
+
+            // A scheduled job between the tests.
+            shop[1] = true;
+            cart[2] = true;
+            cart[0] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertEquals(background("test-set-0/test-1", "test-set-0/test-2",
+                    probes(CART, "0,2") + "," + probes(SHOP, "1")), data.nextBackground());
+            assertFalse("cleared", shop[1] || cart[0] || cart[2]);
+            shop[3] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
+                    data.next());
+
+            // Nothing between these two: no record.
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            assertEquals(TAKEN, send("END test-set-0/test-3"));
+            assertEquals("{\"id\":\"test-set-0/test-3\",\"executedLinesByFile\":{}}", data.next());
+            assertNull("one record, for the one window with hits", data.background.poll());
+        }
+    }
+
+    @Test
+    public void betweenTwoTestsAClassLoadedTwiceIsReportedAsATestsHitsWouldBe() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] twin = agent.probes(0x99L, SHOP, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+            shop[3] = true;
+            twin[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertEquals("the copy with the lower id",
+                    background("test-set-0/test-1", "test-set-0/test-2", probes(SHOP, "1")), data.nextBackground());
+            assertFalse("both were cleared", shop[3] || twin[1]);
+        }
+    }
+
+    @Test
+    public void noBackgroundRecordReachesAReceiverThatDidNotAsk() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertFalse("cleared all the same", shop[1]);
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{}}", data.next());
+            assertNull(data.background.poll());
+        }
+    }
+
+    @Test
+    public void whatAStartClearsAfterNoTakenEndIsNoBackground() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            // test-2's END never comes: what test-2 ran is its own, not background.
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            // test-3's END names another test: not taken.
+            shop[2] = true;
+            assertEquals(IGNORED, send("END test-set-0/test-9"));
+            assertEquals(TAKEN, send("START test-set-0/test-4"));
+            shop[3] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-4"));
+            assertEquals("{\"id\":\"test-set-0/test-4\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
+                    data.next());
+            assertNull(data.background.poll());
+        }
+    }
+
+    @Test
+    public void anEndNotTakenWithNoStartBeforeItOpensNoWindow() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+            // test-2's START never reached the app, and Keploy ran the test
+            // and sent its END all the same: what test-2 ran is its own.
+            shop[1] = true;
+            assertEquals(IGNORED, send("END test-set-0/test-2"));
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            assertFalse("cleared all the same", shop[1]);
+            assertEquals(TAKEN, send("END test-set-0/test-3"));
+            assertEquals("{\"id\":\"test-set-0/test-3\",\"executedLinesByFile\":{}}", data.next());
+            assertNull(data.background.poll());
+            // After an END taken, the next START's hits are background again.
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-4"));
+            assertEquals(background("test-set-0/test-3", "test-set-0/test-4", probes(SHOP, "2")),
+                    data.nextBackground());
+        }
+    }
+
+    @Test
+    public void anEndWhoseRecordCouldNotBeSentOpensNoWindow() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        File socket = new File(KeployDedupAgent.dataSocketPath);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            shop[1] = true;
+            assertTrue(socket.setWritable(false, false) && socket.setReadable(false, false));
+            Assume.assumeFalse("root connects to any socket", socket.canWrite());
+            // test-2's coverage reaches no one: not taken.
+            assertEquals(IGNORED, send("END test-set-0/test-2"));
+            assertTrue(socket.setWritable(true, false) && socket.setReadable(true, false));
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            assertFalse("cleared all the same", shop[1] || shop[2]);
+            assertEquals(TAKEN, send("END test-set-0/test-3"));
+            assertEquals("{\"id\":\"test-set-0/test-3\",\"executedLinesByFile\":{}}", data.next());
+            assertNull("no window after an END whose record was not sent", data.background.poll());
+            shop[3] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-4"));
+            assertEquals(background("test-set-0/test-3", "test-set-0/test-4", probes(SHOP, "3")),
+                    data.nextBackground());
+        } finally {
+            socket.setWritable(true, false);
+            socket.setReadable(true, false);
+        }
+    }
+
+    @Test
+    public void aReceiverBoundAnewGetsTheIndexBeforeABackgroundRecord() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        assertTrue(KeployDedupAgent.start());
+        try (DataReceiver first = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", first.next());
+        }
+        new File(KeployDedupAgent.dataSocketPath).delete();
+        try (DataReceiver second = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            // It asks before its first START: its first record is a window's.
+            assertEquals(TAKEN, send("BACKGROUND"));
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-1/test-1"));
+            assertEquals(background("test-set-0/test-1", "test-set-1/test-1", probes(SHOP, "1")),
+                    second.nextBackground());
+            assertEquals(Arrays.asList("index", "background"), second.kinds);
+            String index = second.index.poll();
+            assertNotNull(index);
+            assertTrue(index, index.contains(",\"build\":\"" + BUILD + "\","));
+        }
+    }
+
+    @Test
+    public void aReceiverBoundAnewGetsNoBackgroundRecordUntilItAsks() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        assertTrue(KeployDedupAgent.start());
+        try (DataReceiver first = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", first.next());
+        }
+        // The next test set's receiver, on the same path: it may be an older
+        // Keploy, which reads any record as a test's coverage.
+        new File(KeployDedupAgent.dataSocketPath).delete();
+        try (DataReceiver second = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-1/test-1"));
+            assertEquals(TAKEN, send("END test-set-1/test-1"));
+            assertEquals("{\"id\":\"test-set-1/test-1\",\"executedLinesByFile\":{}}", second.next());
+            assertNull(second.background.poll());
+
+            assertEquals(TAKEN, send("BACKGROUND"));
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-1/test-2"));
+            assertEquals(background("test-set-1/test-1", "test-set-1/test-2", probes(SHOP, "2")),
+                    second.nextBackground());
+        }
+    }
+
+    @Test
+    public void withNoReceiverBackgroundIsNotTakenAndAWindowGoesNowhere() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        assertTrue(KeployDedupAgent.start());
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals("no receiver to send it to", IGNORED, send("BACKGROUND"));
+        assertNotNull(logged("Keploy dedup: BACKGROUND is not taken: no receiver is on "));
+        assertEquals("said, not thrown", 0, count("Failed to run Java dedup coverage command"));
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+        }
+        // The receiver is gone: the window's record goes nowhere, and the server goes on.
+        new File(KeployDedupAgent.dataSocketPath).delete();
+        shop[1] = true;
+        assertEquals(TAKEN, send("START test-set-0/test-2"));
+        assertFalse(shop[1]);
+        assertEquals(IGNORED, send("END test-set-0/test-2"));
+        assertEquals(TAKEN, send("START test-set-0/test-3"));
+    }
+
+    @Test
+    public void aBackgroundRecordThatCouldNotBeSentIsCountedInTheNext() throws Exception {
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        File socket = new File(KeployDedupAgent.dataSocketPath);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{}}", data.next());
+
+            // The same receiver, which no one may connect to for a while: two
+            // windows' records are lost, and said once.
+            for (int test = 2; test <= 3; test++) {
+                assertTrue(socket.setWritable(false, false) && socket.setReadable(false, false));
+                Assume.assumeFalse("root connects to any socket", socket.canWrite());
+                shop[1] = true;
+                assertEquals(TAKEN, send("START test-set-0/test-" + test));
+                // The window's record is sent once the START is answered and
+                // before the next command is read: this one's answer says it was.
+                assertEquals(IGNORED, send("NO-COMMAND"));
+                assertTrue(socket.setWritable(true, false) && socket.setReadable(true, false));
+                assertEquals(TAKEN, send("END test-set-0/test-" + test));
+                assertEquals("{\"id\":\"test-set-0/test-" + test + "\",\"executedLinesByFile\":{}}",
+                        data.next());
+            }
+            assertEquals(1, count("Keploy dedup: the BACKGROUND record of the hits before"));
+            assertNotNull(logged("Keploy dedup: the BACKGROUND record of the hits before test-set-0/test-2 could"
+                    + " not be sent to "));
+
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-4"));
+            assertEquals(background("test-set-0/test-3", "test-set-0/test-4", probes(SHOP, "2"), 2),
+                    data.nextBackground());
+            assertEquals(TAKEN, send("END test-set-0/test-4"));
+            assertEquals("{\"id\":\"test-set-0/test-4\",\"executedLinesByFile\":{}}", data.next());
+            shop[3] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-5"));
+            assertEquals("counted once", background("test-set-0/test-4", "test-set-0/test-5", probes(SHOP, "3")),
+                    data.nextBackground());
+
+            // Lost again, and the same receiver asks again: it is still told.
+            assertEquals(TAKEN, send("END test-set-0/test-5"));
+            assertEquals("{\"id\":\"test-set-0/test-5\",\"executedLinesByFile\":{}}", data.next());
+            assertTrue(socket.setWritable(false, false) && socket.setReadable(false, false));
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-6"));
+            assertEquals(IGNORED, send("NO-COMMAND"));
+            assertTrue(socket.setWritable(true, false) && socket.setReadable(true, false));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-6"));
+            assertEquals("{\"id\":\"test-set-0/test-6\",\"executedLinesByFile\":{}}", data.next());
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-7"));
+            assertEquals(background("test-set-0/test-6", "test-set-0/test-7", probes(SHOP, "2"), 1),
+                    data.nextBackground());
+
+            // Lost again, then the receiver is replaced: the new one, once it
+            // asks, is told of no window lost before it.
+            assertEquals(TAKEN, send("END test-set-0/test-7"));
+            assertEquals("{\"id\":\"test-set-0/test-7\",\"executedLinesByFile\":{}}", data.next());
+            assertTrue(socket.setWritable(false, false) && socket.setReadable(false, false));
+            shop[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-8"));
+            assertEquals(IGNORED, send("NO-COMMAND"));
+            assertTrue(socket.setWritable(true, false) && socket.setReadable(true, false));
+            assertEquals(TAKEN, send("END test-set-0/test-8"));
+            assertEquals("{\"id\":\"test-set-0/test-8\",\"executedLinesByFile\":{}}", data.next());
+        } finally {
+            socket.setWritable(true, false);
+            socket.setReadable(true, false);
+        }
+        socket.delete();
+        try (DataReceiver next = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertEquals(TAKEN, send("BACKGROUND"));
+            shop[2] = true;
+            assertEquals(TAKEN, send("START test-set-1/test-1"));
+            assertEquals(background("test-set-0/test-8", "test-set-1/test-1", probes(SHOP, "2")),
+                    next.nextBackground());
+        }
+    }
+
+    @Test
+    public void withTheScanOffEachTestTakesJacocosDumpAndBackgroundIsNotTaken() throws Exception {
+        System.setProperty("keploy.java.dedup.diagnostics", "true");
+        System.setProperty("keploy.java.scan", "Off");
+        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            shop[0] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertTrue(logged(" START test-set-0/test-1 took ").contains(" reset="));
+            assertFalse("JaCoCo's reset cleared it", shop[0]);
+            assertEquals(IGNORED, send("BACKGROUND"));
+            assertNotNull(logged("Keploy dedup: KEPLOY_JAVA_SCAN is off"));
+            shop[1] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
+                    data.next());
+            String end = logged(" END test-set-0/test-1 took ");
+            assertTrue(end, end.contains("dump=") && !end.contains(" scan="));
+            assertEquals(0, count("background hits cleared"));
+        }
+    }
+
+    @Test
+    public void anyOtherScanValueKeepsTheScan() throws Exception {
+        System.setProperty("keploy.java.dedup.diagnostics", "true");
+        System.setProperty("keploy.java.scan", "on");
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertTrue(logged(" START test-set-0/test-1 took ").contains(" scan="));
+            assertEquals(TAKEN, send("BACKGROUND"));
         }
     }
 
@@ -433,6 +790,23 @@ public class InProcessScanTest {
         return n;
     }
 
+    // background is the BACKGROUND record of the window from the END of
+    // after to the START of before, whose probes by class are classes
+    // (probes(...) joined by ","), with lost when it is more than 0.
+    private static String background(String after, String before, String classes, int lost) {
+        return "{\"kind\":\"background\",\"v\":1,\"build\":\"" + BUILD + "\",\"after\":\"" + after
+                + "\",\"before\":\"" + before + "\",\"executedLinesByFile\":{" + classes + "}"
+                + (lost > 0 ? ",\"lost\":" + lost : "") + "}";
+    }
+
+    private static String background(String after, String before, String classes) {
+        return background(after, before, classes, 0);
+    }
+
+    private static String probes(String className, String probes) {
+        return "\"" + className + "\":[" + probes + "]";
+    }
+
     private static String send(String command) throws IOException {
         try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
             socket.connect(AFUNIXSocketAddress.of(new File(KeployDedupAgent.controlSocketPath)), 3000);
@@ -485,12 +859,31 @@ public class InProcessScanTest {
 
     private static final class DataReceiver implements Closeable {
 
+        private static final AtomicInteger BOUND = new AtomicInteger();
+
         private final AFUNIXServerSocket server;
         private final BlockingQueue<String> payloads = new LinkedBlockingQueue<>();
+        // The BACKGROUND records, in the order they came.
+        final BlockingQueue<String> background = new LinkedBlockingQueue<>();
+        // The INDEX reports, in the order they came.
+        final BlockingQueue<String> index = new LinkedBlockingQueue<>();
+        // The kind of each record ("index", "background", "test"), in the
+        // order they came.
+        final List<String> kinds = new CopyOnWriteArrayList<>();
 
         DataReceiver(String path) throws IOException {
             server = AFUNIXServerSocket.newInstance();
             server.bind(AFUNIXSocketAddress.of(new File(path)), 50);
+            // The socket file keeps a second name until the row's folder is
+            // removed, so that a receiver bound anew on the path never gets
+            // this one's inode back. Deleted and bound again within one tick
+            // of the file system's clock, it would have the same mtime too,
+            // and the SDK, which tells receivers apart by the file's inode
+            // and mtime, would take it for this one: a stated limit, which a
+            // receiver bound anew for a new run or the next test set, long
+            // after, never meets.
+            Files.createLink(new File(path + "." + BOUND.incrementAndGet() + ".held").toPath(),
+                    new File(path).toPath());
             Thread thread = new Thread(this::serve, "data-receiver");
             thread.setDaemon(true);
             thread.start();
@@ -502,7 +895,14 @@ public class InProcessScanTest {
                     socket.setSoTimeout(30000);
                     String payload = new String(readAll(socket.getInputStream()), StandardCharsets.UTF_8);
                     // The INDEX report (ControlSocketTest's rows) is not a test's coverage.
-                    if (!payload.startsWith("{\"kind\":\"index\",")) {
+                    if (payload.startsWith("{\"kind\":\"background\",")) {
+                        kinds.add("background");
+                        background.add(payload);
+                    } else if (payload.startsWith("{\"kind\":\"index\",")) {
+                        kinds.add("index");
+                        index.add(payload);
+                    } else {
+                        kinds.add("test");
                         payloads.add(payload);
                     }
                 } catch (IOException e) {
@@ -513,6 +913,10 @@ public class InProcessScanTest {
 
         String next() throws InterruptedException {
             return payloads.poll(30, TimeUnit.SECONDS);
+        }
+
+        String nextBackground() throws InterruptedException {
+            return background.poll(30, TimeUnit.SECONDS);
         }
 
         @Override
