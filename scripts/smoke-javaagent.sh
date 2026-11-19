@@ -332,6 +332,27 @@ run_smoke "classpath-fallback" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "classpath-fallback" derived attached
 
+# With JaCoCo's agent in the JVM, a START and an END read and clear the app's
+# probes in place, in one pass, instead of taking JaCoCo's reset and dump.
+# This is the real (shaded) JaCoCo runtime, which the unit tests do not load:
+# its layout must be the one the pass reads. The END's diagnostics line names
+# the step: `scan=` for the pass, `dump=` for JaCoCo's dump.
+scan_log="${work_dir}/in-place-scan.log"
+scan_rc=0
+KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "in-place-scan" \
+  java_with_agents "in-place-scan" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "in-place-scan" derived attached 2>"${scan_log}" || scan_rc=$?
+if [[ "${scan_rc}" -ne 0 ]] \
+  || ! grep -q 'diagnostics: START test-set-0/in-place-scan took .* scan=' "${scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/in-place-scan took .* scan=' "${scan_log}" \
+  || grep -q 'cannot be read in place\|the probe scan failed' "${scan_log}"; then
+  cat "${scan_log}" >&2
+  echo "in-place-scan: the agent did not read JaCoCo's probes in place (exit ${scan_rc})" >&2
+  exit 1
+fi
+echo "in-place-scan: START and END read JaCoCo's probes in place"
+
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
 cat > "${work_dir}/jar/MANIFEST.MF" <<EOF
@@ -410,6 +431,24 @@ run_smoke "sdk-only-override-names-keploy-sdk" \
   java_with_sdk_only "sdk-only-override-names-keploy-sdk" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "sdk-only-override-names-keploy-sdk" override embedded "${app_class_count}"
+
+# The same pass over the JaCoCo keploy-sdk.jar starts itself, the usual case.
+(
+  cd "${work_dir}/maven"
+  KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "sdk-only-in-place-scan" \
+    java_with_sdk_only "sdk-only-in-place-scan" \
+      -cp "target/classes:${agent_jar}" \
+      smoke.SmokeHarness "sdk-only-in-place-scan" derived embedded
+)
+sdk_scan_log="${work_dir}/sdk-only-in-place-scan.err"
+if ! grep -q 'diagnostics: START test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
+  || grep -q 'cannot be read in place\|the probe scan failed' "${sdk_scan_log}"; then
+  cat "${sdk_scan_log}" >&2
+  echo "sdk-only-in-place-scan: the agent did not read its own JaCoCo's probes in place" >&2
+  exit 1
+fi
+echo "sdk-only-in-place-scan: START and END read the probes of the JaCoCo keploy-sdk.jar started in place"
 
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
 cp -R "${work_dir}/classes/." "${work_dir}/boot-root/BOOT-INF/classes/"
