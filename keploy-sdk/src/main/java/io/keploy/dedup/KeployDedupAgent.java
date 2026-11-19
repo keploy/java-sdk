@@ -263,9 +263,11 @@ public final class KeployDedupAgent {
     private static void startJacoco(Instrumentation instrumentation, CoverageIndex index) {
         try {
             index.jacoco = IndexReport.JACOCO_NONE;
-            if (EmbeddedJacoco.attached(ClassLoader.getSystemClassLoader(),
-                    ManagementFactory.getRuntimeMXBean().getInputArguments())) {
+            String attached = EmbeddedJacoco.attached(ClassLoader.getSystemClassLoader(),
+                    ManagementFactory.getRuntimeMXBean().getInputArguments());
+            if (attached != null) {
                 index.jacoco = IndexReport.JACOCO_ATTACHED;
+                index.jacocoVersion = attached;
                 log(Level.INFO, "Keploy dedup: this JVM has a JaCoCo agent attached, so Keploy reads coverage"
                         + " from it, and it instruments every class its own options take in. Attach only"
                         + " keploy-sdk.jar to have JaCoCo instrument the app's own classes alone", null);
@@ -285,6 +287,7 @@ public final class KeployDedupAgent {
             String version = EmbeddedJacoco.start(instrumentation, EmbeddedJacoco.options(includes));
             index.includes = includes;
             index.jacoco = IndexReport.JACOCO_EMBEDDED;
+            index.jacocoVersion = version;
             log(Level.INFO, "Keploy dedup: started JaCoCo " + version + (includes.isEmpty()
                     ? " on every class"
                     : " on the app's " + names.size() + " classes alone (includes="
@@ -1485,10 +1488,12 @@ public final class KeployDedupAgent {
         private volatile String launch = "";
         private volatile List<String> packages = Collections.emptyList();
         // What measures the classes, and the includes= of the JaCoCo agent
-        // the SDK started (IndexReport's JACOCO_*). Set by premain's
-        // startJacoco before the worker that sends the report starts.
+        // the SDK started (IndexReport's JACOCO_*), and that agent's
+        // version, or the attached one's. Set by premain's startJacoco
+        // before the worker that sends the report starts.
         private volatile String jacoco = IndexReport.JACOCO_UNCHECKED;
         private volatile String includes = "";
+        private volatile String jacocoVersion = "";
         private volatile IndexReport report;
 
         // report is the INDEX report of this index: computed once, on the
@@ -1512,7 +1517,7 @@ public final class KeployDedupAgent {
                         }
                     }
                     report = new IndexReport(IndexReport.buildId(ids), sourceKind, launch, roots, packages,
-                            all.size(), includes, jacoco);
+                            all.size(), includes, jacoco, IndexReport.versionOf(IndexReport.class), jacocoVersion);
                 }
                 return report;
             }

@@ -67,9 +67,17 @@ final class IndexReport {
     // includes= of the JaCoCo agent the SDK started, or "".
     final String includes;
     final String jacoco;
+    // keploy-sdk.jar's version (versionOf), or "" when it is not known: the
+    // SDK's classes come from a build's class dir, or from a jar that is not
+    // keploy-sdk.jar.
+    final String sdkVersion;
+    // The version of the JaCoCo agent that measures the classes: the one the
+    // SDK started or the one the command attached, as its jar names it; ""
+    // when none does (jacoco none or unchecked) or its jar names none.
+    final String jacocoVersion;
 
     IndexReport(String build, String source, String launch, Collection<String> roots, List<String> packages,
-                int classes, String includes, String jacoco) {
+                int classes, String includes, String jacoco, String sdkVersion, String jacocoVersion) {
         this.build = build;
         this.source = source;
         this.launch = launch;
@@ -80,6 +88,30 @@ final class IndexReport {
         this.classes = classes;
         this.includes = includes;
         this.jacoco = jacoco;
+        this.sdkVersion = sdkVersion;
+        this.jacocoVersion = jacocoVersion;
+    }
+
+    // SDK_TITLE is the Implementation-Title keploy-sdk.jar's build writes
+    // in its manifest, next to its version: the project's name.
+    static final String SDK_TITLE = "Keploy Java Coverage Agent";
+
+    /**
+     * versionOf is the Implementation-Version the manifest of type's jar
+     * names, as the class loader read it when it defined type's package,
+     * when that manifest is keploy-sdk.jar's: its Implementation-Title is
+     * SDK_TITLE. It is "" when the manifest is another jar's (an app jar
+     * that shades the SDK's classes, or holds a copy of them), names no
+     * version, or type comes from no jar (a class dir). So of IndexReport,
+     * it is keploy-sdk.jar's version or "", never an app's.
+     */
+    static String versionOf(Class<?> type) {
+        Package pkg = type.getPackage();
+        if (pkg == null || !SDK_TITLE.equals(pkg.getImplementationTitle())) {
+            return "";
+        }
+        String version = pkg.getImplementationVersion();
+        return version == null ? "" : version;
     }
 
     String toJson() {

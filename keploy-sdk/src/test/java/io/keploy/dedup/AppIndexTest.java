@@ -443,6 +443,9 @@ public class AppIndexTest {
         // start() is not premain: it starts no JaCoCo and looks for none.
         assertEquals(index.toString(), "unchecked", index.get("jacoco").getAsString());
         assertEquals(index.toString(), "", index.get("includes").getAsString());
+        assertEquals(index.toString(), "", index.get("jacocoVersion").getAsString());
+        // The SDK's classes come from the build's class dir here.
+        assertEquals(index.toString(), "", index.get("sdkVersion").getAsString());
     }
 
     private static String sha256(String text) {

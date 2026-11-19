@@ -2,18 +2,34 @@ package io.keploy.dedup;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.jar.Attributes;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+import java.util.zip.ZipEntry;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class IndexReportTest {
+
+    @Rule
+    public final TemporaryFolder tmp = new TemporaryFolder();
 
     // Keploy's codecoverage.JavaBuildID of the ids 1, 0xff and
     // 0xffffffffffffffff (its TestBuildIDs): sha256 over
@@ -59,7 +75,7 @@ public class IndexReportTest {
     public void theReportIsOneSmallJsonObjectWithNoClassList() {
         IndexReport report = new IndexReport(GO_BUILD_ID, IndexReport.SOURCE_DERIVED, "java -jar /app/app.jar",
                 Arrays.asList("/app/libs/b.jar", "/app/classes", "/app/libs/b.jar"),
-                Collections.singletonList("org.acme"), 3, "org.acme.*", IndexReport.JACOCO_EMBEDDED);
+                Collections.singletonList("org.acme"), 3, "org.acme.*", IndexReport.JACOCO_EMBEDDED, "2.2.0", "0.8.15");
         JsonObject json = JsonParser.parseString(report.toJson()).getAsJsonObject();
         assertEquals("index", json.get("kind").getAsString());
         assertEquals(1, json.get("v").getAsInt());
@@ -72,7 +88,12 @@ public class IndexReportTest {
         assertEquals(3, json.get("classes").getAsInt());
         assertEquals("org.acme.*", json.get("includes").getAsString());
         assertEquals("embedded", json.get("jacoco").getAsString());
-        assertEquals(11, json.size());
+        assertEquals("2.2.0", json.get("sdkVersion").getAsString());
+        assertEquals("0.8.15", json.get("jacocoVersion").getAsString());
+        assertEquals(13, json.size());
+        // The versions come last, after the fields an older SDK sent.
+        assertTrue(report.toJson(), report.toJson().endsWith(
+                "\"jacoco\":\"embedded\",\"sdkVersion\":\"2.2.0\",\"jacocoVersion\":\"0.8.15\"}"));
         // Its kind starts the object, so a reader can tell it from a test's
         // coverage record by its first bytes.
         assertEquals(0, report.toJson().indexOf("{\"kind\":\"index\","));
@@ -87,9 +108,72 @@ public class IndexReportTest {
             roots.add(String.format("/cp/lib-%03d.jar", i));
         }
         IndexReport report = new IndexReport("", IndexReport.SOURCE_CLASSPATH, "why", roots,
-                Collections.<String>emptyList(), 0, "", IndexReport.JACOCO_UNCHECKED);
+                Collections.<String>emptyList(), 0, "", IndexReport.JACOCO_UNCHECKED, "", "");
         assertEquals(IndexReport.MAX_ROOTS, report.roots.size());
         assertEquals(IndexReport.MAX_ROOTS + 6, report.rootCount);
         assertEquals("/cp/lib-000.jar", report.roots.get(0));
+    }
+
+    @Test
+    public void theSdkVersionIsWhatItsJarsManifestNames() throws Exception {
+        // As keploy-sdk.jar's build writes it: its title and the project's
+        // version.
+        assertEquals("2.2.0-row", versionOfMarkerIn(jarWithMarker(IndexReport.SDK_TITLE, "2.2.0-row")));
+        // keploy-sdk.jar's manifest that names no version, and a class dir.
+        assertEquals("", versionOfMarkerIn(jarWithMarker(IndexReport.SDK_TITLE, null)));
+        File dir = tmp.newFolder();
+        File copy = new File(dir, MARKER);
+        assertTrue(copy.getParentFile().mkdirs());
+        try (InputStream input = Marker.class.getClassLoader().getResourceAsStream(MARKER)) {
+            Files.copy(input, copy.toPath());
+        }
+        assertEquals("", versionOfMarkerIn(dir));
+        // The SDK's own classes, here read from the build's class dir.
+        assertEquals("", IndexReport.versionOf(IndexReport.class));
+    }
+
+    @Test
+    public void anotherJarsVersionIsNeverTakenForTheSdks() throws Exception {
+        // An app's uber jar that shades the SDK's classes, or holds a copy
+        // of them, names the app's version: the SDK's is not known.
+        assertEquals("", versionOfMarkerIn(jarWithMarker("My App", "7.7.7-app")));
+        assertEquals("", versionOfMarkerIn(jarWithMarker(null, "7.7.7-app")));
+    }
+
+    // Marker is a class versionOf is asked about, loaded from a jar or dir
+    // of the row's own, by a loader of its own.
+    static final class Marker {
+    }
+
+    private static final String MARKER = Marker.class.getName().replace('.', '/') + ".class";
+
+    private File jarWithMarker(String title, String version) throws Exception {
+        File jar = tmp.newFile("marker-" + System.nanoTime() + ".jar");
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        if (title != null) {
+            manifest.getMainAttributes().put(Attributes.Name.IMPLEMENTATION_TITLE, title);
+        }
+        if (version != null) {
+            manifest.getMainAttributes().put(Attributes.Name.IMPLEMENTATION_VERSION, version);
+        }
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar), manifest);
+             InputStream input = Marker.class.getClassLoader().getResourceAsStream(MARKER)) {
+            out.putNextEntry(new ZipEntry(MARKER));
+            byte[] buffer = new byte[4096];
+            for (int read; (read = input.read(buffer)) != -1; ) {
+                out.write(buffer, 0, read);
+            }
+            out.closeEntry();
+        }
+        return jar;
+    }
+
+    private static String versionOfMarkerIn(File from) throws Exception {
+        try (URLClassLoader loader = new URLClassLoader(new URL[] {from.toURI().toURL()}, null)) {
+            Class<?> marker = Class.forName(Marker.class.getName(), false, loader);
+            assertTrue("loaded from " + from, marker != Marker.class);
+            return IndexReport.versionOf(marker);
+        }
     }
 }

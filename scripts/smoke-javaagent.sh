@@ -68,6 +68,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.JarFile;
+import java.util.jar.JarInputStream;
+import java.util.jar.Manifest;
 
 public final class SmokeHarness {
     private static final File CONTROL_SOCKET = new File("/tmp/coverage_control.sock");
@@ -150,6 +153,20 @@ public final class SmokeHarness {
                     + wantSource + ", jacoco " + wantJacoco
                     + (wantClasses.isEmpty() ? "" : " and " + wantClasses + " classes") + " in " + mode + ": " + report);
         }
+        // keploy-sdk's version and the measuring JaCoCo's, as their jars'
+        // manifests name them: the one the command attached, or the one
+        // keploy-sdk.jar carries and started.
+        String wantSdkVersion = versionOf(new File(System.getProperty("smoke.sdkJar")), null);
+        String wantJacocoVersion = "attached".equals(wantJacoco)
+                ? versionOf(new File(System.getProperty("smoke.jacocoJar")), null)
+                : "embedded".equals(wantJacoco)
+                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "jacocoagent.jar") : "";
+        if (wantSdkVersion.isEmpty() || wantJacocoVersion.isEmpty() != !wantJacoco.matches("attached|embedded")
+                || !report.endsWith(",\"sdkVersion\":\"" + wantSdkVersion + "\",\"jacocoVersion\":\""
+                        + wantJacocoVersion + "\"}")) {
+            throw new IllegalStateException("the INDEX report did not name keploy-sdk " + wantSdkVersion
+                    + " and JaCoCo " + wantJacocoVersion + " in " + mode + ": " + report);
+        }
         String ownLibraries = System.getProperty("smoke.ownLibraries", "");
         if (!ownLibraries.isEmpty()) {
             loadsItsOwn(ownLibraries);
@@ -202,6 +219,21 @@ public final class SmokeHarness {
             if (!"ACK proto=2\n".equals(ack)) {
                 throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
+        }
+    }
+
+    // versionOf is the Implementation-Version of jar's manifest, or of the
+    // manifest of the jar nested in it at entry when entry is not null.
+    private static String versionOf(File jar, String entry) throws Exception {
+        try (JarFile file = new JarFile(jar)) {
+            Manifest manifest = file.getManifest();
+            if (entry != null) {
+                try (JarInputStream nested = new JarInputStream(file.getInputStream(file.getEntry(entry)))) {
+                    manifest = nested.getManifest();
+                }
+            }
+            String version = manifest == null ? null : manifest.getMainAttributes().getValue("Implementation-Version");
+            return version == null ? "" : version;
         }
     }
 
@@ -268,6 +300,7 @@ java_with_agents() {
   java \
     -javaagent:"${agent_jar}" \
     -javaagent:"${jacoco_jar}=destfile=/tmp/keploy-sdk-smoke-${mode}.exec" \
+    -Dsmoke.sdkJar="${agent_jar}" -Dsmoke.jacocoJar="${jacoco_jar}" \
     "$@"
 }
 
@@ -321,7 +354,8 @@ jar cfm "${work_dir}/jar/plain-app.jar" "${work_dir}/jar/MANIFEST.MF" -C "${work
 java_with_sdk_only() {
   local mode="${1:?mode required}"
   shift
-  java -javaagent:"${agent_jar}" "$@" 2>"${work_dir}/${mode}.err" || { cat "${work_dir}/${mode}.err" >&2; exit 1; }
+  java -javaagent:"${agent_jar}" -Dsmoke.sdkJar="${agent_jar}" "$@" 2>"${work_dir}/${mode}.err" \
+    || { cat "${work_dir}/${mode}.err" >&2; exit 1; }
   if ! grep -q "started JaCoCo .* on the app's .* classes alone (includes=" "${work_dir}/${mode}.err"; then
     cat "${work_dir}/${mode}.err" >&2
     echo "${mode}: keploy-sdk.jar did not start its JaCoCo agent on the app's classes" >&2

@@ -88,22 +88,79 @@ public class EmbeddedJacocoTest {
     public void aJacocoAgentOnTheClasspathOrAmongTheArgumentsCountsAsAttached() throws Exception {
         File jacoco = tmp.newFile("jacocoagent.jar");
         AgentJar.extractTo(jacoco);
+        String version = jacocoVersion();
         File other = sdkJar();
         List<String> none = Collections.emptyList();
         try (URLClassLoader withJacoco = new URLClassLoader(new URL[] {jacoco.toURI().toURL()}, null);
              URLClassLoader without = new URLClassLoader(new URL[] {tmp.getRoot().toURI().toURL()}, null)) {
             // Attached before keploy-sdk.jar: on the classpath already.
-            assertTrue(EmbeddedJacoco.attached(withJacoco, none));
-            assertFalse(EmbeddedJacoco.attached(without, none));
+            assertEquals(version, EmbeddedJacoco.attached(withJacoco, none));
+            assertNull(EmbeddedJacoco.attached(without, none));
             // Attached after it: only its argument names it.
-            assertTrue(EmbeddedJacoco.attached(without, Arrays.asList("-Xmx64m",
+            assertEquals(version, EmbeddedJacoco.attached(without, Arrays.asList("-Xmx64m",
                     "-javaagent:" + other.getPath(), "-javaagent:" + jacoco.getPath() + "=output=none")));
-            assertTrue(EmbeddedJacoco.attached(without, Collections.singletonList("-javaagent:" + jacoco.getPath())));
+            assertEquals(version, EmbeddedJacoco.attached(without,
+                    Collections.singletonList("-javaagent:" + jacoco.getPath())));
             // Another agent, a jar named as an option, a jar not there.
-            assertFalse(EmbeddedJacoco.attached(without, Arrays.asList("-javaagent:" + other.getPath(),
+            assertNull(EmbeddedJacoco.attached(without, Arrays.asList("-javaagent:" + other.getPath(),
                     "-javaagent:" + other.getPath() + "=" + jacoco.getPath(), "-cp", jacoco.getPath(),
                     "-javaagent:" + new File(tmp.getRoot(), "gone.jar").getPath())));
         }
+    }
+
+    @Test
+    public void aJacocoAgentWhoseJarNamesNoVersionIsAttachedWithNone() throws Exception {
+        // A JaCoCo runtime in a jar whose manifest names no version, and in
+        // a class dir: attached, at a version not known.
+        File jar = tmp.newFile("unversioned-jacoco.jar");
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar), manifest)) {
+            out.putNextEntry(new ZipEntry(EmbeddedJacoco.RUNTIME_CLASS));
+            out.closeEntry();
+        }
+        File dir = tmp.newFolder();
+        File runtime = new File(dir, EmbeddedJacoco.RUNTIME_CLASS);
+        assertTrue(runtime.getParentFile().mkdirs());
+        assertTrue(runtime.createNewFile());
+        List<String> none = Collections.emptyList();
+        try (URLClassLoader inJar = new URLClassLoader(new URL[] {jar.toURI().toURL()}, null);
+             URLClassLoader inDir = new URLClassLoader(new URL[] {dir.toURI().toURL()}, null);
+             URLClassLoader without = new URLClassLoader(new URL[] {tmp.getRoot().toURI().toURL()}, null)) {
+            assertEquals("", EmbeddedJacoco.attached(inJar, none));
+            assertEquals("", EmbeddedJacoco.attached(inDir, none));
+            assertEquals("", EmbeddedJacoco.attached(without,
+                    Collections.singletonList("-javaagent:" + jar.getPath())));
+        }
+    }
+
+    @Test
+    public void aJacocoRuntimeInAJarNestedInAnotherNamesNoVersion() throws Exception {
+        // A loader of its own may find the runtime in a jar nested in the
+        // app's: the outer jar's manifest is the app's, not JaCoCo's.
+        File app = tmp.newFile("app.jar");
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().put(Attributes.Name.IMPLEMENTATION_VERSION, "7.7.7-app");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(app), manifest)) {
+            out.putNextEntry(new ZipEntry("BOOT-INF/lib/jacocoagent.jar"));
+            out.closeEntry();
+        }
+        String outer = "jar:" + app.toURI() + "!/";
+        assertEquals("7.7.7-app", EmbeddedJacoco.versionOfJarHolding(new URL(outer + "BOOT-INF/classes/A.class")));
+        assertEquals("", EmbeddedJacoco.versionOfJarHolding(
+                new URL(outer + "BOOT-INF/lib/jacocoagent.jar!/" + EmbeddedJacoco.RUNTIME_CLASS)));
+        // A runtime in no jar file.
+        assertEquals("", EmbeddedJacoco.versionOfJarHolding(new File(tmp.getRoot(), "A.class").toURI().toURL()));
+    }
+
+    // jacocoVersion is the version the jar of the JaCoCo agent the SDK
+    // carries names: JaCoCo's own version, less its build qualifier.
+    private static String jacocoVersion() {
+        String qualified = org.jacoco.core.JaCoCo.VERSION;
+        String version = qualified.substring(0, qualified.lastIndexOf('.'));
+        assertTrue(qualified, version.matches("\\d+\\.\\d+\\.\\d+"));
+        return version;
     }
 
     @Test
@@ -113,7 +170,8 @@ public class EmbeddedJacocoTest {
         String output = runApp(run);
         // The INDEX report says what measures the app, and with what includes=.
         assertTrue(output, output.contains("\"source\":\"override\""));
-        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"org.example.embedded.*\",\"jacoco\":\"embedded\"}"));
+        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"org.example.embedded.*\","
+                + "\"jacoco\":\"embedded\",\"sdkVersion\":\"\",\"jacocoVersion\":\"" + jacocoVersion() + "\"}"));
         assertTrue(output, output.contains("agent=true"));
         assertTrue(output, output.contains("app=true"));
         // Loaded after JaCoCo started, outside its includes=.
@@ -134,7 +192,10 @@ public class EmbeddedJacocoTest {
         Run run = new Run(SDK, JACOCO);
         run.env.put("EMBEDDED_APP_INDEX", "1");
         String output = runApp(run);
-        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"\",\"jacoco\":\"attached\"}"));
+        // The SDK's classes come from a class dir here, so it names no
+        // version of its own.
+        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"\",\"jacoco\":\"attached\","
+                + "\"sdkVersion\":\"\",\"jacocoVersion\":\"" + jacocoVersion() + "\"}"));
     }
 
     @Test
@@ -152,6 +213,17 @@ public class EmbeddedJacocoTest {
         Run run = new Run(JACOCO, SDK);
         run.inEnv = true;
         assertLeftAlone(runApp(run));
+    }
+
+    @Test
+    public void theIndexReportNamesAJacocoAgentAttachedBeforeTheSdk() throws Exception {
+        // JaCoCo's jar is on the system classpath when the SDK's premain
+        // runs: its version is read from the jar holding its runtime.
+        Run run = new Run(JACOCO, SDK);
+        run.env.put("EMBEDDED_APP_INDEX", "1");
+        String output = runApp(run);
+        assertTrue(output, output.contains("\"classes\":1,\"includes\":\"\",\"jacoco\":\"attached\","
+                + "\"sdkVersion\":\"\",\"jacocoVersion\":\"" + jacocoVersion() + "\"}"));
     }
 
     @Test
@@ -178,7 +250,8 @@ public class EmbeddedJacocoTest {
         assertTrue(output, output.contains("could not start the JaCoCo agent keploy-sdk.jar carries"));
         assertFalse(output, output.contains("started JaCoCo"));
         // The INDEX report says nothing measures the app.
-        assertTrue(output, output.contains("\"includes\":\"\",\"jacoco\":\"none\"}"));
+        assertTrue(output, output.contains(
+                "\"includes\":\"\",\"jacoco\":\"none\",\"sdkVersion\":\"\",\"jacocoVersion\":\"\"}"));
     }
 
     private static void assertLeftAlone(String output) {
