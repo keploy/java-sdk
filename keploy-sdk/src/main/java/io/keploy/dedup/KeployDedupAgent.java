@@ -46,6 +46,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -133,6 +134,17 @@ public final class KeployDedupAgent {
     // How long stop(), and a start() after it, wait for the worker's thread.
     // Not final: the tests shorten it.
     static volatile long workerStopWaitMillis = 5000;
+    // How long the first START waits for the warmup before it goes on
+    // without it: well inside the 30 s Keploy's k8s collector waits for an
+    // answer by default. Not final: the tests shorten it.
+    static volatile long warmupWaitMillis = 10000;
+    // Makes the warmup's thread. Not final: a test makes one that cannot
+    // start.
+    static volatile ThreadFactory warmupThreads = runnable -> {
+        Thread thread = new Thread(runnable, "keploy-java-dedup-warmup");
+        thread.setDaemon(true);
+        return thread;
+    };
 
     private KeployDedupAgent() {
     }
@@ -188,7 +200,7 @@ public final class KeployDedupAgent {
 
         startedIndex = index;
         CoverageCollector collector = new CoverageCollector(
-                new JacocoClient(resolveHost(), resolvePort()), index);
+                new JacocoClient(resolveHost(), resolvePort()), index, instrumentation);
 
         CoverageWorker worker;
         String threadName;
@@ -1040,6 +1052,9 @@ public final class KeployDedupAgent {
 
         private final JacocoClient jacocoClient;
         private final CoverageIndex coverageIndex;
+        // premain's, for the warmup to find the app's class loaders; null
+        // when the SDK was not started as a -javaagent.
+        private final Instrumentation instrumentation;
         private final AtomicBoolean warmed = new AtomicBoolean(false);
         // The VM names of the app's classes; see indexedClassNames.
         private volatile Set<String> appClassNames;
@@ -1072,9 +1087,11 @@ public final class KeployDedupAgent {
             lastUploadedManifestSize.set(-1);
         }
 
-        private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex) {
+        private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex,
+                Instrumentation instrumentation) {
             this.jacocoClient = jacocoClient;
             this.coverageIndex = coverageIndex;
+            this.instrumentation = instrumentation;
         }
 
         // The one-pass scan of the app classes' probes, when JaCoCo's agent
@@ -1167,74 +1184,87 @@ public final class KeployDedupAgent {
          * lines to whichever test ran first — making the duplicate set
          * non-deterministic run-to-run. Running them now (then letting the START
          * clear the counters) means every test sees only the lines its own
-         * request executes. Called once, on the first START, when the app is
-         * fully started. Best-effort: per-class failures are ignored (the class
+         * request executes. Called on the first START, when the app is fully
+         * started. Best-effort: per-class failures are ignored (the class
          * just falls back to lazy init). Disable with
          * KEPLOY_JAVA_DEDUP_WARMUP_DISABLED=true if a static initializer has
          * harmful side effects.
+         *
+         * <p>The warmup runs on a thread of its own, through the app's class
+         * loaders (AppWarmup). This START waits for it at most
+         * warmupWaitMillis, then tells it to stop after the class it is
+         * initializing and goes on: that class's static initializer goes on
+         * while the tests run, and each line it runs from then on counts in
+         * the test running at the time (between two tests, in none; the next
+         * START clears it). The classes it did not reach initialize when the
+         * app first uses them, as with no warmup.
          */
         private void warmup() {
             if (isWarmupDisabled() || !warmed.compareAndSet(false, true)) {
                 return;
             }
-            // Only the app's own classes: a library's static initializer can
-            // start threads, open connections or self-attach an agent (Mockito
-            // through byte-buddy), and the whole classpath of a large app took
-            // the warmup to 54 s (105k classes on Fineract).
-            if (!coverageIndex.isAppOnly()) {
-                log(Level.INFO, "Keploy dedup: no warmup, as the index is not the app's own classes alone"
-                        + " (from " + coverageIndex.source + ")", null);
+            final long began = System.nanoTime();
+            final AppWarmup warmup = new AppWarmup(instrumentation);
+            Thread thread;
+            try {
+                thread = warmupThreads.newThread(() -> runWarmup(warmup, began));
+                thread.start();
+            } catch (Throwable t) {
+                // Out of threads (a pids or ulimit -u limit): no warmup, and
+                // this START, and the server that runs it, go on.
+                log(Level.WARNING, "Keploy dedup: no warmup, as its thread could not start; the app's classes"
+                        + " initialize when the app first uses them", t);
                 return;
             }
-            long began = System.nanoTime();
-            ClassLoader[] loaders = warmupLoaders();
-            int initialized = 0;
-            int failed = 0;
-            for (ClassEntry entry : coverageIndex.entries()) {
-                if (initializeClass(entry.className.replace('/', '.'), loaders)) {
-                    initialized++;
-                } else {
-                    failed++;
-                }
+            try {
+                thread.join(warmupWaitMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-            log(Level.INFO, "Keploy dedup: warmed up application classes (initialized="
-                    + initialized + ", skipped=" + failed + ") in " + Phases.millis(System.nanoTime() - began)
-                    + " ms", null);
+            if (thread.isAlive()) {
+                warmup.stop();
+                log(Level.WARNING, "Keploy dedup: the warmup of the app's classes was still " + warmup.doing()
+                        + " after " + Phases.millis(System.nanoTime() - began) + " ms, so the first test goes on"
+                        + " without it, and the warmup stops after that step. A static initializer it is running"
+                        + " goes on while the tests run, and each line it runs from then on counts in the test"
+                        + " running at the time (between two tests, in none); the classes it did not reach"
+                        + " initialize when the app first uses them, and their lines count in the test that does",
+                        null);
+            }
+        }
+
+        // runWarmup is the warmup's thread: it reads the app's classes here,
+        // not on the START's thread, and never names a library's class.
+        private void runWarmup(AppWarmup warmup, long began) {
+            try {
+                // Only the app's own classes: a library's static initializer can
+                // start threads, open connections or self-attach an agent (Mockito
+                // through byte-buddy), and the whole classpath of a large app took
+                // the warmup to 54 s (105k classes on Fineract).
+                if (!coverageIndex.isAppOnly()) {
+                    log(Level.INFO, "Keploy dedup: no warmup, as the index is not the app's own classes alone"
+                            + " (from " + coverageIndex.source + ")", null);
+                    return;
+                }
+                List<String> names = new ArrayList<>();
+                for (ClassEntry entry : coverageIndex.entries()) {
+                    names.add(entry.className.replace('/', '.'));
+                }
+                warmup.run(names);
+                log(Level.INFO, "Keploy dedup: warmed up application classes (initialized="
+                        + warmup.initialized() + ", skipped=" + warmup.skipped()
+                        + (warmup.notReached() > 0 ? ", not reached=" + warmup.notReached() : "")
+                        + ") in " + Phases.millis(System.nanoTime() - began) + " ms", null);
+            } catch (Throwable t) {
+                // Never let the warmup end anything but itself.
+                log(Level.WARNING, "Keploy dedup: the warmup of the app's classes failed; they initialize when"
+                        + " the app first uses them", t);
+            }
         }
 
         private boolean isWarmupDisabled() {
             return isTruthy(envOrProperty("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED",
                     "keploy.java.dedup.warmup.disabled", ""));
-        }
-
-        private ClassLoader[] warmupLoaders() {
-            List<ClassLoader> loaders = new ArrayList<>(3);
-            ClassLoader ctx = Thread.currentThread().getContextClassLoader();
-            if (ctx != null) {
-                loaders.add(ctx);
-            }
-            ClassLoader sys = ClassLoader.getSystemClassLoader();
-            if (sys != null && !loaders.contains(sys)) {
-                loaders.add(sys);
-            }
-            ClassLoader own = KeployDedupAgent.class.getClassLoader();
-            if (own != null && !loaders.contains(own)) {
-                loaders.add(own);
-            }
-            return loaders.toArray(new ClassLoader[0]);
-        }
-
-        private boolean initializeClass(String binaryName, ClassLoader[] loaders) {
-            for (ClassLoader loader : loaders) {
-                try {
-                    Class.forName(binaryName, true, loader);
-                    return true;
-                } catch (Throwable ignored) {
-                    // Try the next loader; a class that no loader can initialize
-                    // (or whose <clinit> throws) is simply left to lazy init.
-                }
-            }
-            return false;
         }
 
         private Map<String, List<Integer>> capture(Phases phases) throws IOException {
