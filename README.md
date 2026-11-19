@@ -199,6 +199,8 @@ ceiling does not quietly fall behind again.
 - `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations of the app's own classes. You rarely need it: see "Which classes count as the app's" below
 - `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath when neither the app's own classes nor the executable jar give any class. `false` leaves the index empty then, and no test's coverage is measured. Default: `true`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
+- `KEPLOY_JAVA_DEDUP_DIAGNOSTICS`: when `true`, `1`, or `yes`, logs one line per START and END that says how long the command took and how long each step did: `warmup` and `reset` for a START; `dump` (JaCoCo's dump), `parse`, `filter` (to the app's classes), `json` and `send` for an END, plus `classes` on TCP (the check for new app classes, and the class-zip frame when there are some). A step that did not run is left out: an empty dump has only `dump`. The app's class files are read once, on the first START under `warmup`, or, with the warmup off, on the first END whose dump is not empty, under `filter`. On the unix socket `took` ends before the answer is written; on TCP it includes the answer. Use it to see where a test's time goes on your app
+- `KEPLOY_JAVA_DEDUP_WARMUP_DISABLED`: when `true`, `1`, or `yes`, skips the warmup, which runs the static initializers of the app's own classes once, on the first START, so that no test is charged with them. The log says how long the warmup took
 
 ## Which classes count as the app's
 
