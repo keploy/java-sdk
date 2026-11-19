@@ -62,6 +62,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -77,6 +79,8 @@ public final class SmokeHarness {
         // and which JaCoCo measures them.
         String wantSource = args.length > 1 ? args[1] : "";
         String wantJacoco = args.length > 2 ? args[2] : "";
+        // How many classes the index must hold, when the case says.
+        String wantClasses = args.length > 3 ? args[3] : "";
 
         // Keploy fires its first test as soon as the app answers a health
         // check, so the agent has to be listening before main runs. This START
@@ -140,12 +144,50 @@ public final class SmokeHarness {
         if (report == null
                 || !report.contains("\"source\":\"" + wantSource + "\"")
                 || !report.contains("\"jacoco\":\"" + wantJacoco + "\"")
-                || ("embedded".equals(wantJacoco) != report.matches(".*\"includes\":\"[^\"]*smoke\\.Work.*"))) {
+                || ("embedded".equals(wantJacoco) != report.matches(".*\"includes\":\"[^\"]*smoke\\.Work.*"))
+                || (!wantClasses.isEmpty() && !report.matches(".*\"classes\":" + wantClasses + "[,}].*"))) {
             throw new IllegalStateException("the first record on the data socket was no INDEX report with source "
-                    + wantSource + " and jacoco " + wantJacoco + " in " + mode + ": " + report);
+                    + wantSource + ", jacoco " + wantJacoco
+                    + (wantClasses.isEmpty() ? "" : " and " + wantClasses + " classes") + " in " + mode + ": " + report);
+        }
+        String ownLibraries = System.getProperty("smoke.ownLibraries", "");
+        if (!ownLibraries.isEmpty()) {
+            loadsItsOwn(ownLibraries);
         }
         System.out.println(mode + ": " + report);
         System.out.println(mode + ": " + json);
+    }
+
+    // loadsItsOwn loads ASM, Gson and JaCoCo's core from the app's own jars
+    // as Spring Boot's launcher loads BOOT-INF/lib: through a loader that asks
+    // its parent, the system class loader, first. keploy-sdk.jar is on the
+    // system class path, so a copy of these it carried under their own names
+    // would be what the app gets, in keploy-sdk's version, not the app's.
+    private static void loadsItsOwn(String jars) throws Exception {
+        String[] paths = jars.split(File.pathSeparator);
+        URL[] urls = new URL[paths.length];
+        for (int i = 0; i < paths.length; i++) {
+            urls[i] = new File(paths[i]).toURI().toURL();
+        }
+        URLClassLoader libraries = new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
+        try {
+            for (String name : new String[] {
+                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo"}) {
+                Class<?> type = Class.forName(name, false, libraries);
+                URL from = type.getProtectionDomain().getCodeSource() == null
+                        ? null : type.getProtectionDomain().getCodeSource().getLocation();
+                boolean own = false;
+                for (URL url : urls) {
+                    own |= from != null && new File(from.toURI()).equals(new File(url.toURI()));
+                }
+                if (!own) {
+                    throw new IllegalStateException("the app's " + name + " came from " + from
+                            + ", not from the app's own jars " + jars);
+                }
+            }
+        } finally {
+            libraries.close();
+        }
     }
 
     private static void command(String command) throws Exception {
@@ -301,6 +343,39 @@ java_with_sdk_only() {
     java_with_sdk_only "sdk-only-plain-jar" \
       -jar plain-app.jar "sdk-only-plain-jar" derived embedded
 )
+
+# The app's own ASM, Gson and JaCoCo core, in versions other than the ones
+# keploy-sdk.jar carries. keploy-sdk.jar carries its copies renamed under
+# io/keploy/shaded, so the app gets its own and keploy-sdk its own, whichever
+# comes first: the app's on the class path before keploy-sdk.jar (Jib's
+# launch), or the app's in a loader under the system class loader (Spring
+# Boot's BOOT-INF/lib).
+for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9; do
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/app-libs"
+done
+app_libs="$(find "${work_dir}/app-libs" -name '*.jar' | sort | paste -sd: -)"
+
+run_smoke "sdk-only-app-libraries-first" \
+  java_with_sdk_only "sdk-only-app-libraries-first" \
+    -cp "${app_libs}:${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-app-libraries-first" derived embedded
+
+run_smoke "sdk-only-app-libraries-in-own-loader" \
+  java_with_sdk_only "sdk-only-app-libraries-in-own-loader" \
+    -Dsmoke.ownLibraries="${app_libs}" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-app-libraries-in-own-loader" derived embedded
+
+# keploy-sdk.jar's own classes, the libraries it carries among them, are
+# never the app's: an override that names keploy-sdk.jar still indexes the
+# app's classes alone.
+app_class_count="$(find "${work_dir}/classes" -name '*.class' | wc -l | tr -d ' ')"
+KEPLOY_JAVA_CLASS_DIRS="${work_dir}/classes:${agent_jar}" \
+run_smoke "sdk-only-override-names-keploy-sdk" \
+  java_with_sdk_only "sdk-only-override-names-keploy-sdk" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-override-names-keploy-sdk" override embedded "${app_class_count}"
 
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
 cp -R "${work_dir}/classes/." "${work_dir}/boot-root/BOOT-INF/classes/"

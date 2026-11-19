@@ -1816,15 +1816,22 @@ public final class KeployDedupAgent {
             return entryName;
         }
 
+        // shouldSkipClass keeps keploy-sdk.jar's own classes out of the index:
+        // its code, the ASM, Gson and JaCoCo core it carries renamed under
+        // io/keploy/shaded, JaCoCo's agent (the AgentJar it starts, and the
+        // runtime of any JaCoCo agent), and junixsocket, which it carries under
+        // its own names because its native library is bound to them. An app's
+        // own ASM or Gson is one of the app's libraries, as Jackson is. The
+        // shade plugin rewrites every string constant that starts with a
+        // package it renames, so no prefix here may start with one.
         private boolean shouldSkipClass(String name) {
             return name.endsWith("module-info.class")
                     || name.endsWith("package-info.class")
                     || name.startsWith("io/keploy/dedup/")
                     || name.startsWith("io/keploy/servlet/")
+                    || name.startsWith("io/keploy/shaded/")
                     || name.startsWith("org/jacoco/")
-                    || name.startsWith("org/objectweb/asm/")
-                    || name.startsWith("org/newsclub/net/unix/")
-                    || name.startsWith("com/google/gson/")
+                    || name.startsWith("org/newsclub/")
                     || name.contains("$Mockito")
                     || name.contains("Test.class");
         }

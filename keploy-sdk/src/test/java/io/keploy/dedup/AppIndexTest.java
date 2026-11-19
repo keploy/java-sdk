@@ -142,6 +142,33 @@ public class AppIndexTest {
     }
 
     @Test
+    public void keploySdksOwnClassesAreNeverTheApps() throws Exception {
+        // An override that takes in keploy-sdk.jar's classes too: its code,
+        // the libraries it carries renamed under io/keploy/shaded, JaCoCo's
+        // agent and junixsocket stay out. The app's own ASM and Gson are the
+        // app's libraries, so they are fingerprinted, as Jackson would be.
+        File jar = jar(tmp.newFile("app.jar"),
+                "com/acme/shop/Main.class",
+                "org/objectweb/asm/ClassReader.class",
+                "com/google/gson/Gson.class",
+                "io/keploy/dedup/KeployDedupAgent.class",
+                "io/keploy/servlet/KeployMiddleware.class",
+                "io/keploy/shaded/org/objectweb/asm/ClassReader.class",
+                "io/keploy/shaded/com/google/gson/Gson.class",
+                "io/keploy/shaded/org/jacoco/core/JaCoCo.class",
+                "org/jacoco/agent/AgentJar.class",
+                "org/newsclub/net/unix/AFUNIXSocket.class",
+                "org/newsclub/lib/junixsocket/common/NarMetadata.class");
+        System.setProperty("keploy.java.class.dirs", jar.getPath());
+        System.setProperty("java.class.path", jar.getPath());
+        System.setProperty("sun.java.command", "com.acme.shop.Main");
+
+        startAndSendStart();
+
+        assertIndex("override", "the class dirs [" + jar.getPath() + "]", "[]", 3, jar.getPath());
+    }
+
+    @Test
     public void manyClassDirsAreSaidWithHowManyMore() throws Exception {
         List<String> dirs = new ArrayList<>();
         for (int i = 0; i < 7; i++) {

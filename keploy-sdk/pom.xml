@@ -124,6 +124,29 @@
                                     </manifestEntries>
                                 </transformer>
                             </transformers>
+                            <!-- keploy-sdk.jar is on the app's system class path, as every
+                                 -javaagent jar is, so a library it carried under its own name
+                                 would be the copy the app's code gets, ahead of the app's own
+                                 version (Spring Boot's BOOT-INF/lib asks the system class loader
+                                 first), and keploy-sdk's code would get the app's version when
+                                 the app's jars come first (-cp /app/libs/*). So keploy-sdk.jar
+                                 carries these under io.keploy.shaded. junixsocket keeps its names:
+                                 its native library is bound to them. A Java string that starts
+                                 with one of these patterns is rewritten too (shouldSkipClass). -->
+                            <relocations>
+                                <relocation>
+                                    <pattern>org.jacoco.core</pattern>
+                                    <shadedPattern>io.keploy.shaded.org.jacoco.core</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.objectweb.asm</pattern>
+                                    <shadedPattern>io.keploy.shaded.org.objectweb.asm</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.gson</pattern>
+                                    <shadedPattern>io.keploy.shaded.com.google.gson</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
