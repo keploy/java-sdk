@@ -68,7 +68,34 @@ final class ProbeScan {
             this.probeCount = probeCount;
             this.probes = probes;
         }
+
+        // of is the Hit of a class in JaCoCo's dump: the probes set in its
+        // probe array.
+        static Hit of(String name, long id, boolean[] probes) {
+            int count = 0;
+            for (boolean probe : probes) {
+                if (probe) {
+                    count++;
+                }
+            }
+            int[] hit = new int[count];
+            for (int i = 0, k = 0; k < count; i++) {
+                if (probes[i]) {
+                    hit[k++] = i;
+                }
+            }
+            return new Hit(name, id, probes.length, hit);
+        }
     }
+
+    // HITS_BY_NAME_THEN_ID sorts hits as pass returns them.
+    static final Comparator<Hit> HITS_BY_NAME_THEN_ID = new Comparator<Hit>() {
+        @Override
+        public int compare(Hit a, Hit b) {
+            int byName = a.name.compareTo(b.name);
+            return byName != 0 ? byName : Long.compareUnsigned(a.id, b.id);
+        }
+    };
 
     // One of the app's classes as JaCoCo holds it.
     private static final class Slot {
@@ -88,7 +115,7 @@ final class ProbeScan {
         @Override
         public int compare(Slot a, Slot b) {
             int byName = a.name.compareTo(b.name);
-            return byName != 0 ? byName : Long.compare(a.id, b.id);
+            return byName != 0 ? byName : Long.compareUnsigned(a.id, b.id);
         }
     };
 
@@ -113,8 +140,8 @@ final class ProbeScan {
     // The store's size when refresh last looked at it: classes are only
     // ever added to it.
     private int known;
-    // The app's classes JaCoCo has seen, sorted by name then id, and their
-    // probe arrays at the same index.
+    // The app's classes JaCoCo has seen, sorted by name then id (compared
+    // as unsigned numbers), and their probe arrays at the same index.
     private Slot[] slots = new Slot[0];
     private boolean[][] arrays = new boolean[0][];
     private int maxProbes;
@@ -192,7 +219,7 @@ final class ProbeScan {
 
     /**
      * pass returns the app's classes that were hit since the last pass, sorted
-     * by name then id, and clears those hits. app is the VM names of the app's
+     * by name then id (compared as unsigned numbers), and clears those hits. app is the VM names of the app's
      * classes; it must be the same set on every call, as a class is looked up
      * in it once, when JaCoCo first holds it.
      *

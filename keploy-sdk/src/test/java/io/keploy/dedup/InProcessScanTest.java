@@ -58,9 +58,17 @@ public class InProcessScanTest {
     private static final String IGNORED = "IGNORED proto=2\n";
     private static final String SHOP = "com/acme/Shop";
     private static final String CART = "com/acme/Cart";
+    // The JaCoCo ids of the bytes setUp writes for the two classes: the ids
+    // JaCoCo gives them when it sees the bytes the index reads.
+    private static final long SHOP_ID = IndexReport.classId(new byte[] {1});
+    private static final long CART_ID = IndexReport.classId(new byte[] {2});
     // The build id of the two classes setUp writes, as the INDEX report has it.
-    private static final String BUILD = IndexReport.buildId(
-            new long[] {IndexReport.classId(new byte[] {1}), IndexReport.classId(new byte[] {2})});
+    private static final String BUILD = IndexReport.buildId(new long[] {SHOP_ID, CART_ID});
+    // Ids of copies of a class JaCoCo saw other bytes of (another agent
+    // changed them first): one past the sign bit, and one below every id
+    // above as an unsigned number.
+    private static final long HIGH_ID = 0x8000000000000001L;
+    private static final long LOW_ID = 0x99L;
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -149,7 +157,7 @@ public class InProcessScanTest {
     @Test
     public void eachTestGetsItsOwnHitsAndNoneOfTheBackground() throws Exception {
         System.setProperty("keploy.java.dedup.diagnostics", "true");
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         boolean[] lib = agent.probes(0x99L, "org/lib/Lib", 2);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
@@ -181,25 +189,98 @@ public class InProcessScanTest {
     }
 
     @Test
-    public void aClassLoadedTwiceReportsTheOneWithTheLowerId() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
-        // The same class from other bytes, in a second class loader.
-        boolean[] twin = agent.probes(0x99L, SHOP, 3);
+    public void aClassLoadedTwiceReportsTheCopyTheIndexRead() throws Exception {
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        // The same class from other bytes, in a second class loader, with
+        // the lower id.
+        boolean[] twin = agent.probes(LOW_ID, SHOP, 3);
+        assertTrue(Long.compareUnsigned(LOW_ID, SHOP_ID) < 0);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
             shop[3] = true;
             twin[1] = true;
             assertEquals(TAKEN, send("END test-set-0/test-1"));
-            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
                     data.next());
             assertFalse("both were cleared", shop[3] || twin[1]);
         }
     }
 
     @Test
+    public void ofTwoCopiesTheIndexDidNotReadTheLowerIdAsAnUnsignedNumberIsReported() throws Exception {
+        // Signed, HIGH_ID is the lower.
+        boolean[] high = agent.probes(HIGH_ID, SHOP, 4);
+        boolean[] low = agent.probes(LOW_ID, SHOP, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            high[3] = true;
+            low[1] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals(test("test-set-0/test-1", probes(SHOP, "1"), SHOP), data.next());
+        }
+    }
+
+    @Test
+    public void aClassJacocoSawOtherBytesOfIsNamedInClassMismatch() throws Exception {
+        System.setProperty("keploy.java.dedup.diagnostics", "true");
+        boolean[] cart = agent.probes(CART_ID, CART, 3);
+        // Shop as another agent changed it before JaCoCo saw it.
+        boolean[] shop = agent.probes(HIGH_ID, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            cart[0] = true;
+            shop[2] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals(test("test-set-0/test-1", probes(CART, "0") + "," + probes(SHOP, "2"), SHOP),
+                    data.next());
+            assertNotNull(logged("classMismatch=1, sampleClasses=[" + SHOP + "]"));
+            // A test that runs only the class the index read names none.
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            cart[1] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals(test("test-set-0/test-2", probes(CART, "1"), null), data.next());
+            assertEquals("said for the first test alone", 1, count("classMismatch="));
+        }
+    }
+
+    @Test
+    public void withTheScanOffTheDumpChoosesOfTwoCopiesAsTheScanDoes() throws Exception {
+        System.setProperty("keploy.java.scan", "off");
+        boolean[] cart = agent.probes(CART_ID, CART, 3);
+        boolean[] cartTwin = agent.probes(LOW_ID, CART, 2);
+        boolean[] shopHigh = agent.probes(HIGH_ID, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] shopLow = agent.probes(LOW_ID + 1, SHOP, 3);
+        boolean[] lib = agent.probes(0x77L, "org/lib/Lib", 2);
+        assertTrue(Long.compareUnsigned(LOW_ID, CART_ID) < 0 && Long.compareUnsigned(LOW_ID + 1, SHOP_ID) < 0);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            lib[1] = true;
+            cart[2] = true;
+            cartTwin[0] = true;
+            shopHigh[0] = true;
+            shop[3] = true;
+            shopLow[1] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals("the copies the index read",
+                    test("test-set-0/test-1", probes(CART, "2") + "," + probes(SHOP, "3"), null), data.next());
+            // Of two copies the index did not read, the lower id as an
+            // unsigned number, named in classMismatch.
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            shopHigh[1] = true;
+            shopLow[2] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals(test("test-set-0/test-2", probes(SHOP, "2"), SHOP), data.next());
+        }
+    }
+
+    @Test
     public void withDiagnosticsOffTheBackgroundIsNotLogged() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             shop[0] = true;
@@ -214,8 +295,8 @@ public class InProcessScanTest {
 
     @Test
     public void betweenTwoTestsTheHitsGoOnceToAReceiverThatAskedAndNeverIntoATest() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
-        boolean[] cart = agent.probes(0x4321L, CART, 3);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] cart = agent.probes(CART_ID, CART, 3);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             // The app's start: not between two tests.
@@ -251,8 +332,8 @@ public class InProcessScanTest {
 
     @Test
     public void betweenTwoTestsAClassLoadedTwiceIsReportedAsATestsHitsWouldBe() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
-        boolean[] twin = agent.probes(0x99L, SHOP, 3);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] twin = agent.probes(LOW_ID, SHOP, 3);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -262,15 +343,44 @@ public class InProcessScanTest {
             shop[3] = true;
             twin[1] = true;
             assertEquals(TAKEN, send("START test-set-0/test-2"));
-            assertEquals("the copy with the lower id",
-                    background("test-set-0/test-1", "test-set-0/test-2", probes(SHOP, "1")), data.nextBackground());
+            assertEquals("the copy the index read",
+                    background("test-set-0/test-1", "test-set-0/test-2", probes(SHOP, "3")), data.nextBackground());
             assertFalse("both were cleared", shop[3] || twin[1]);
         }
     }
 
     @Test
+    public void betweenTwoTestsAClassJacocoSawOtherBytesOfIsNamedInClassMismatch() throws Exception {
+        boolean[] cart = agent.probes(CART_ID, CART, 3);
+        // Shop as another agent changed it before JaCoCo saw it: only this
+        // copy runs between the tests.
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] woven = agent.probes(HIGH_ID, SHOP, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals(test("test-set-0/test-1", "", null), data.next());
+            cart[2] = true;
+            woven[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertEquals(background("test-set-0/test-1", "test-set-0/test-2",
+                    probes(CART, "2") + "," + probes(SHOP, "1"), SHOP, 0), data.nextBackground());
+            // Between the next two, only the class the index read: none named.
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals(test("test-set-0/test-2", "", null), data.next());
+            shop[0] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            assertEquals(background("test-set-0/test-2", "test-set-0/test-3", probes(SHOP, "0")),
+                    data.nextBackground());
+            assertFalse("all were cleared", cart[2] || woven[1] || shop[0]);
+        }
+    }
+
+    @Test
     public void noBackgroundRecordReachesAReceiverThatDidNotAsk() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -287,7 +397,7 @@ public class InProcessScanTest {
 
     @Test
     public void whatAStartClearsAfterNoTakenEndIsNoBackground() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -312,7 +422,7 @@ public class InProcessScanTest {
 
     @Test
     public void anEndNotTakenWithNoStartBeforeItOpensNoWindow() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -338,7 +448,7 @@ public class InProcessScanTest {
 
     @Test
     public void anEndWhoseRecordCouldNotBeSentOpensNoWindow() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         File socket = new File(KeployDedupAgent.dataSocketPath);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
@@ -371,7 +481,7 @@ public class InProcessScanTest {
 
     @Test
     public void aReceiverBoundAnewGetsTheIndexBeforeABackgroundRecord() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         assertTrue(KeployDedupAgent.start());
         try (DataReceiver first = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -395,7 +505,7 @@ public class InProcessScanTest {
 
     @Test
     public void aReceiverBoundAnewGetsNoBackgroundRecordUntilItAsks() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         assertTrue(KeployDedupAgent.start());
         try (DataReceiver first = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -423,7 +533,7 @@ public class InProcessScanTest {
 
     @Test
     public void withNoReceiverBackgroundIsNotTakenAndAWindowGoesNowhere() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         assertTrue(KeployDedupAgent.start());
         assertEquals(TAKEN, send("START test-set-0/test-1"));
         assertEquals("no receiver to send it to", IGNORED, send("BACKGROUND"));
@@ -445,7 +555,7 @@ public class InProcessScanTest {
 
     @Test
     public void aBackgroundRecordThatCouldNotBeSentIsCountedInTheNext() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         File socket = new File(KeployDedupAgent.dataSocketPath);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
@@ -529,7 +639,7 @@ public class InProcessScanTest {
     public void withTheScanOffEachTestTakesJacocosDumpAndBackgroundIsNotTaken() throws Exception {
         System.setProperty("keploy.java.dedup.diagnostics", "true");
         System.setProperty("keploy.java.scan", "Off");
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             shop[0] = true;
@@ -564,7 +674,7 @@ public class InProcessScanTest {
     public void anEndWhoseScanFailsTakesJacocosDumpFromThenOn() throws Exception {
         System.setProperty("keploy.java.dedup.diagnostics", "true");
         ProbeScanTest.CountingMap entries = ProbeScanTest.CountingMap.swapInto(agent.data);
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -596,7 +706,7 @@ public class InProcessScanTest {
     public void aStartWhoseScanFailsResetsInstead() throws Exception {
         System.setProperty("keploy.java.dedup.diagnostics", "true");
         ProbeScanTest.CountingMap entries = ProbeScanTest.CountingMap.swapInto(agent.data);
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         entries.fail = true;
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
@@ -612,46 +722,91 @@ public class InProcessScanTest {
     }
 
     @Test
-    public void aClassLoadedTwiceReportsTheOneTheManifestNames() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
-        boolean[] twin = agent.probes(0x99L, SHOP, 3);
+    public void ofTwoCopiesTheIndexDidNotReadTheOneTheManifestNamesIsReported() throws Exception {
+        boolean[] high = agent.probes(HIGH_ID, SHOP, 4);
+        boolean[] low = agent.probes(LOW_ID, SHOP, 3);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             // Only the copy with the higher id runs first: the manifest names it.
             assertEquals(TAKEN, send("START test-set-0/test-1"));
-            shop[3] = true;
+            high[3] = true;
             assertEquals(TAKEN, send("END test-set-0/test-1"));
-            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
-                    data.next());
+            assertEquals(test("test-set-0/test-1", probes(SHOP, "3"), SHOP), data.next());
             // Both run: the probes sent are still that copy's.
             assertEquals(TAKEN, send("START test-set-0/test-2"));
-            shop[2] = true;
+            high[2] = true;
+            low[0] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals(test("test-set-0/test-2", probes(SHOP, "2"), SHOP), data.next());
+        }
+    }
+
+    @Test
+    public void theCopyTheManifestNamesIsFoundWhenItsIdHasFewerThan16HexDigits() throws Exception {
+        // Neither copy is the one the index read. The one the manifest will
+        // name has a 4-digit id and is not the lowest: a hex form compared
+        // with the manifest's padded one would never find it.
+        long named = 0x1234L;
+        boolean[] high = agent.probes(named, SHOP, 4);
+        boolean[] low = agent.probes(LOW_ID, SHOP, 3);
+        assertTrue(Long.compareUnsigned(LOW_ID, named) < 0);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            high[3] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals(test("test-set-0/test-1", probes(SHOP, "3"), SHOP), data.next());
+            // Both run: the probes sent are still the named copy's, every time.
+            for (int n = 2; n <= 3; n++) {
+                assertEquals(TAKEN, send("START test-set-0/test-" + n));
+                high[2] = true;
+                low[0] = true;
+                assertEquals(TAKEN, send("END test-set-0/test-" + n));
+                assertEquals(test("test-set-0/test-" + n, probes(SHOP, "2"), SHOP), data.next());
+            }
+        }
+    }
+
+    @Test
+    public void aClassLoadedTwiceReportsTheCopyTheIndexReadOverTheOneTheManifestNames() throws Exception {
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] twin = agent.probes(HIGH_ID, SHOP, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            // Only the other copy runs first: the manifest names it.
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            twin[2] = true;
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertEquals(test("test-set-0/test-1", probes(SHOP, "2"), SHOP), data.next());
+            // Both run: the copy the index read.
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            shop[1] = true;
             twin[0] = true;
             assertEquals(TAKEN, send("END test-set-0/test-2"));
-            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{\"" + SHOP + "\":[2]}}",
-                    data.next());
+            assertEquals(test("test-set-0/test-2", probes(SHOP, "1"), null), data.next());
         }
     }
 
     @Test
     public void aClassLoadedTwiceSendsTheOtherCopysProbesWhenOnlyItRan() throws Exception {
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
-        boolean[] twin = agent.probes(0x99L, SHOP, 3);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] twin = agent.probes(LOW_ID, SHOP, 3);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
-            // Only the copy with the higher id runs first: the manifest names it.
+            // Only the copy the index read, with the higher id, runs first:
+            // the manifest names it.
             assertEquals(TAKEN, send("START test-set-0/test-1"));
             shop[3] = true;
             assertEquals(TAKEN, send("END test-set-0/test-1"));
             assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
                     data.next());
             // Only the other copy runs: its probes are sent under the class's
-            // name, as JaCoCo's dump sends them, not dropped.
+            // name, as JaCoCo's dump sends them, not dropped, and the class
+            // is named in classMismatch.
             assertEquals(TAKEN, send("START test-set-0/test-2"));
             twin[2] = true;
             assertEquals(TAKEN, send("END test-set-0/test-2"));
-            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{\"" + SHOP + "\":[2]}}",
-                    data.next());
+            assertEquals(test("test-set-0/test-2", probes(SHOP, "2"), SHOP), data.next());
             assertFalse("the copy's hit was cleared", twin[2]);
         }
     }
@@ -659,7 +814,7 @@ public class InProcessScanTest {
     @Test
     public void anEndWhoseScanLostHitsIsNotTaken() throws Exception {
         System.setProperty("keploy.java.dedup.diagnostics", "true");
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -683,7 +838,7 @@ public class InProcessScanTest {
     @Test
     public void anErrorReadingJacocosClassesAtAnEndTakesJacocosDump() throws Exception {
         ProbeScanTest.CountingMap entries = ProbeScanTest.CountingMap.swapInto(agent.data);
-        boolean[] shop = agent.probes(0x1234L, SHOP, 4);
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
             assertTrue(KeployDedupAgent.start());
             assertEquals(TAKEN, send("START test-set-0/test-1"));
@@ -793,10 +948,15 @@ public class InProcessScanTest {
     // background is the BACKGROUND record of the window from the END of
     // after to the START of before, whose probes by class are classes
     // (probes(...) joined by ","), with lost when it is more than 0.
-    private static String background(String after, String before, String classes, int lost) {
+    private static String background(String after, String before, String classes, String mismatch, int lost) {
         return "{\"kind\":\"background\",\"v\":1,\"build\":\"" + BUILD + "\",\"after\":\"" + after
                 + "\",\"before\":\"" + before + "\",\"executedLinesByFile\":{" + classes + "}"
+                + (mismatch == null ? "" : ",\"classMismatch\":[\"" + mismatch + "\"]")
                 + (lost > 0 ? ",\"lost\":" + lost : "") + "}";
+    }
+
+    private static String background(String after, String before, String classes, int lost) {
+        return background(after, before, classes, null, lost);
     }
 
     private static String background(String after, String before, String classes) {
@@ -805,6 +965,13 @@ public class InProcessScanTest {
 
     private static String probes(String className, String probes) {
         return "\"" + className + "\":[" + probes + "]";
+    }
+
+    // test is a test's coverage record as the SDK sends it: classes as in
+    // background, and classMismatch naming mismatch when it is not null.
+    private static String test(String id, String classes, String mismatch) {
+        return "{\"id\":\"" + id + "\",\"executedLinesByFile\":{" + classes + "}"
+                + (mismatch == null ? "" : ",\"classMismatch\":[\"" + mismatch + "\"]") + "}";
     }
 
     private static String send(String command) throws IOException {
@@ -876,14 +1043,19 @@ public class InProcessScanTest {
             server.bind(AFUNIXSocketAddress.of(new File(path)), 50);
             // The socket file keeps a second name until the row's folder is
             // removed, so that a receiver bound anew on the path never gets
-            // this one's inode back. Deleted and bound again within one tick
-            // of the file system's clock, it would have the same mtime too,
-            // and the SDK, which tells receivers apart by the file's inode
-            // and mtime, would take it for this one: a stated limit, which a
-            // receiver bound anew for a new run or the next test set, long
-            // after, never meets.
-            Files.createLink(new File(path + "." + BOUND.incrementAndGet() + ".held").toPath(),
-                    new File(path).toPath());
+            // this one's inode back. Bound anew within one tick of the file
+            // system's clock after this one's bind, it would have the same
+            // mtime too, and the SDK, which tells receivers apart by the
+            // file's inode and mtime, would take it for this one: a stated
+            // limit, which a receiver bound anew for a new run or the next
+            // test set, long after, never meets.
+            try {
+                Files.createLink(new File(path + "." + BOUND.incrementAndGet() + ".held").toPath(),
+                        new File(path).toPath());
+            } catch (IOException | RuntimeException e) {
+                server.close();
+                throw e;
+            }
             Thread thread = new Thread(this::serve, "data-receiver");
             thread.setDaemon(true);
             thread.start();

@@ -50,6 +50,15 @@ public class IndexReportTest {
     }
 
     @Test
+    public void aClassIdIsWrittenAs16LowercaseHexDigits() {
+        assertEquals("0000000000000000", IndexReport.hexId(0));
+        assertEquals("0000000000000099", IndexReport.hexId(0x99L));
+        assertEquals("0123456789abcdef", IndexReport.hexId(0x0123456789abcdefL));
+        assertEquals("8000000000000001", IndexReport.hexId(0x8000000000000001L));
+        assertEquals("ffffffffffffffff", IndexReport.hexId(-1L));
+    }
+
+    @Test
     public void theClassIdIsJacocos() {
         byte[] bytes = {(byte) 0xca, (byte) 0xfe, (byte) 0xba, (byte) 0xbe, 0, 0, 0, 52, 1, 2, 3};
         assertEquals(org.jacoco.core.internal.data.CRC64.classId(bytes), IndexReport.classId(bytes));

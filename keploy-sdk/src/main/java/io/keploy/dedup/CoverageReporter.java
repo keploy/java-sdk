@@ -32,8 +32,9 @@ import java.util.Map;
  *       auto-replay cycles). Reuses the exact {@code dedupFingerprints} probe
  *       sets already persisted for cross-cycle dedup;</li>
  *   <li><b>manifest</b> — {@code {vmClassName -> {id, probeCount}}}: the JaCoCo
- *       class id (CRC64, as an unsigned-hex string) and total probe count per
- *       class. These are build-constant and captured by the SDK from the live
+ *       class id (CRC64, as unsigned hex: 16 digits from SDK 2.2.0, unpadded
+ *       before) and total probe count per class. These are build-constant and
+ *       captured by the SDK from the live
  *       {@code ExecutionData} at record time ({@code getId()} /
  *       {@code getProbes().length}), so the reporter never has to touch JaCoCo
  *       internal APIs to derive them.</li>
@@ -67,7 +68,7 @@ public final class CoverageReporter {
 
     /** JaCoCo class id + total probe count for one class (build-constant). */
     static final class ClassMeta {
-        String id;       // CRC64 class id, unsigned-hex (from ExecutionData.getId())
+        String id;       // CRC64 class id, unsigned hex, padded or not (from ExecutionData.getId())
         int probeCount;  // ExecutionData.getProbes().length
     }
 

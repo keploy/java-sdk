@@ -65,9 +65,9 @@ import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarFile;
 import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
@@ -97,25 +97,17 @@ public final class SmokeHarness {
         // after the START: no socket file was there when the SDK bound its
         // control socket, so it sent no INDEX report then, and it must send
         // it here first, before the test's coverage.
-        AtomicReference<String> index = new AtomicReference<String>();
-        AtomicReference<String> payload = new AtomicReference<String>();
-        CountDownLatch received = new CountDownLatch(1);
+        final BlockingQueue<String> records = new LinkedBlockingQueue<String>();
         Thread receiver = new Thread(new Runnable() {
             @Override
             public void run() {
                 try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
                     server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
-                    for (int n = 0; payload.get() == null; n++) {
+                    for (;;) {
                         try (AFUNIXSocket socket = server.accept()) {
-                            String record = readAll(socket.getInputStream());
-                            if (n == 0 && record.startsWith("{\"kind\":\"index\",")) {
-                                index.set(record);
-                            } else {
-                                payload.set(record);
-                            }
+                            records.add(readAll(socket.getInputStream()));
                         }
                     }
-                    received.countDown();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -131,19 +123,22 @@ public final class SmokeHarness {
         }
         command("END test-set-0/" + mode);
 
-        if (!received.await(10, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("timed out waiting for coverage payload in " + mode);
+        String json = next(records, mode);
+        String report = null;
+        if (json.startsWith("{\"kind\":\"index\",")) {
+            report = json;
+            json = next(records, mode);
         }
-
-        String json = payload.get();
         // The fingerprint is keyed by VM class name (probe-based coverage),
-        // e.g. "smoke/Work" — not a source file like "Work.java".
-        if (json == null
-                || !json.contains("\"id\":\"test-set-0/" + mode + "\"")
-                || !json.contains("smoke/Work")) {
+        // e.g. "smoke/Work" — not a source file like "Work.java". JaCoCo's id
+        // of each class the app ran is the id of the bytes the index read,
+        // so the record names no class in classMismatch: one named here
+        // would lose that class's coverage in Keploy.
+        if (!json.contains("\"id\":\"test-set-0/" + mode + "\"")
+                || !json.contains("smoke/Work")
+                || json.contains("\"classMismatch\"")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
-        String report = index.get();
         if (report == null
                 || !report.contains("\"source\":\"" + wantSource + "\"")
                 || !report.contains("\"jacoco\":\"" + wantJacoco + "\"")
@@ -173,6 +168,49 @@ public final class SmokeHarness {
         }
         System.out.println(mode + ": " + report);
         System.out.println(mode + ": " + json);
+        String otherWork = System.getProperty("smoke.otherWork", "");
+        if (!otherWork.isEmpty()) {
+            runsAnotherCopy(otherWork, mode, records);
+        }
+    }
+
+    // runsAnotherCopy runs a test in which only another smoke.Work runs:
+    // one built from other source, which the index never read, in a loader
+    // of its own (as a second web app or an agent's woven copy would be).
+    // JaCoCo measures it under the same name with another id, so the
+    // record must send its probes under smoke/Work and name smoke/Work in
+    // classMismatch, and no other class.
+    private static void runsAnotherCopy(String dir, String mode, BlockingQueue<String> records)
+            throws Exception {
+        String id = "test-set-0/" + mode + "-another-copy";
+        URLClassLoader loader = new URLClassLoader(new URL[] {new File(dir).toURI().toURL()}, null);
+        try {
+            Class<?> other = Class.forName("smoke.Work", false, loader);
+            command("START " + id);
+            Object result = other.getMethod("exercise", int.class).invoke(null, 1);
+            command("END " + id);
+            if (!Integer.valueOf(3).equals(result)) {
+                throw new IllegalStateException("the copy in " + dir + " did not run in " + mode + ": " + result);
+            }
+            String json = next(records, mode);
+            if (!json.contains("\"id\":\"" + id + "\"")
+                    || !json.contains("\"smoke/Work\":[")
+                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]}")) {
+                throw new IllegalStateException("the record of a test that ran another copy of smoke/Work does"
+                        + " not name it, alone, in classMismatch in " + mode + ": " + json);
+            }
+            System.out.println(mode + ": " + json);
+        } finally {
+            loader.close();
+        }
+    }
+
+    private static String next(BlockingQueue<String> records, String mode) throws InterruptedException {
+        String record = records.poll(10, TimeUnit.SECONDS);
+        if (record == null) {
+            throw new IllegalStateException("timed out waiting for a record on the data socket in " + mode);
+        }
+        return record;
     }
 
     // loadsItsOwn loads ASM, Gson and JaCoCo's core from the app's own jars
@@ -279,6 +317,23 @@ public final class PlainApp {
 }
 JAVA
 
+# Another smoke.Work, from other source, compiled into a dir of its own that
+# the index never reads: the copy runsAnotherCopy loads.
+mkdir -p "${work_dir}/other-src/smoke" "${work_dir}/other-work"
+cat > "${work_dir}/other-src/smoke/Work.java" <<'JAVA'
+package smoke;
+
+public final class Work {
+    private Work() {
+    }
+
+    public static int exercise(int input) {
+        return input * 3;
+    }
+}
+JAVA
+javac -d "${work_dir}/other-work" "${work_dir}/other-src/smoke/Work.java"
+
 javac -cp "${agent_jar}" -d "${work_dir}/classes" \
   "${work_dir}/src/smoke/Work.java" \
   "${work_dir}/src/smoke/SmokeHarness.java" \
@@ -336,22 +391,46 @@ run_smoke "classpath-fallback" \
 # probes in place, in one pass, instead of taking JaCoCo's reset and dump.
 # This is the real (shaded) JaCoCo runtime, which the unit tests do not load:
 # its layout must be the one the pass reads. The END's diagnostics line names
-# the step: `scan=` for the pass, `dump=` for JaCoCo's dump.
+# the step: `scan=` for the pass, `dump=` for JaCoCo's dump. A second test
+# runs only another copy of smoke.Work (smoke.otherWork): a class JaCoCo
+# first sees there, which the pass must find, and name in classMismatch.
 scan_log="${work_dir}/in-place-scan.log"
 scan_rc=0
 KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "in-place-scan" \
   java_with_agents "in-place-scan" \
+    -Dsmoke.otherWork="${work_dir}/other-work" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "in-place-scan" derived attached 2>"${scan_log}" || scan_rc=$?
 if [[ "${scan_rc}" -ne 0 ]] \
   || ! grep -q 'diagnostics: START test-set-0/in-place-scan took .* scan=' "${scan_log}" \
   || ! grep -q 'diagnostics: END test-set-0/in-place-scan took .* scan=' "${scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/in-place-scan-another-copy took .* scan=' "${scan_log}" \
   || grep -q 'cannot be read in place\|the probe scan failed' "${scan_log}"; then
   cat "${scan_log}" >&2
   echo "in-place-scan: the agent did not read JaCoCo's probes in place (exit ${scan_rc})" >&2
   exit 1
 fi
 echo "in-place-scan: START and END read JaCoCo's probes in place"
+
+# KEPLOY_JAVA_SCAN=off: each test takes JaCoCo's dump and reset instead, and
+# its records must be the pass's: no class named for the app's own copy, and
+# the other copy named.
+dump_log="${work_dir}/jacoco-dump.log"
+dump_rc=0
+KEPLOY_JAVA_SCAN=off KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "jacoco-dump" \
+  java_with_agents "jacoco-dump" \
+    -Dsmoke.otherWork="${work_dir}/other-work" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "jacoco-dump" derived attached 2>"${dump_log}" || dump_rc=$?
+if [[ "${dump_rc}" -ne 0 ]] \
+  || ! grep -q 'diagnostics: END test-set-0/jacoco-dump took .* dump=' "${dump_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/jacoco-dump-another-copy took .* dump=' "${dump_log}" \
+  || grep -q 'diagnostics: END test-set-0/jacoco-dump.* scan=' "${dump_log}"; then
+  cat "${dump_log}" >&2
+  echo "jacoco-dump: with KEPLOY_JAVA_SCAN=off the ENDs did not take JaCoCo's dump (exit ${dump_rc})" >&2
+  exit 1
+fi
+echo "jacoco-dump: with KEPLOY_JAVA_SCAN=off each END took JaCoCo's dump"
 
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
@@ -437,12 +516,14 @@ run_smoke "sdk-only-override-names-keploy-sdk" \
   cd "${work_dir}/maven"
   KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "sdk-only-in-place-scan" \
     java_with_sdk_only "sdk-only-in-place-scan" \
+      -Dsmoke.otherWork="${work_dir}/other-work" \
       -cp "target/classes:${agent_jar}" \
       smoke.SmokeHarness "sdk-only-in-place-scan" derived embedded
 )
 sdk_scan_log="${work_dir}/sdk-only-in-place-scan.err"
 if ! grep -q 'diagnostics: START test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
   || ! grep -q 'diagnostics: END test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/sdk-only-in-place-scan-another-copy took .* scan=' "${sdk_scan_log}" \
   || grep -q 'cannot be read in place\|the probe scan failed' "${sdk_scan_log}"; then
   cat "${sdk_scan_log}" >&2
   echo "sdk-only-in-place-scan: the agent did not read its own JaCoCo's probes in place" >&2

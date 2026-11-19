@@ -71,8 +71,8 @@ public final class CoverageReporterSelfTest {
                     firedProbes++;
                 }
             }
-            // manifest.id = data.getId() (round-tripped through unsigned-hex, like the real pipeline)
-            long id = Long.parseUnsignedLong(Long.toHexString(data.getId()), 16);
+            // manifest.id = data.getId() (round-tripped through 16-hex, like the real pipeline)
+            long id = Long.parseUnsignedLong(IndexReport.hexId(data.getId()), 16);
             rebuilt.put(new ExecutionData(id, data.getName(), copy));
         }
         long[] rebuiltCov = analyze(rebuilt, classesPath);
