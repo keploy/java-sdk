@@ -19,6 +19,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <jacoco.version>0.8.15</jacoco.version>
     </properties>
 
     <licenses>
@@ -67,7 +68,15 @@
                  ASM is an independent ceiling on the Java bytecode dynamic dedup can
                  instrument. While this sat on 0.8.12 it, not the jacocoagent in the
                  init image, was what capped dedup at Java 22. -->
-            <version>0.8.15</version>
+            <version>${jacoco.version}</version>
+        </dependency>
+        <dependency>
+            <!-- jacocoagent.jar, carried unchanged, which the SDK starts with
+                 includes= the app's classes when the command attaches no JaCoCo
+                 agent of its own (EmbeddedJacoco). Same version as above. -->
+            <groupId>org.jacoco</groupId>
+            <artifactId>org.jacoco.agent</artifactId>
+            <version>${jacoco.version}</version>
         </dependency>
         <dependency>
             <groupId>com.kohlschutter.junixsocket</groupId>

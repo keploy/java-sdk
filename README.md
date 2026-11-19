@@ -61,23 +61,41 @@ Download the `keploy-sdk` jar and keep it outside your application dependencies.
 </plugin>
 ```
 
-The SDK no longer has to be added to `dependencies`, and application code should not import `io.keploy.*` classes for dynamic deduplication.
+Do not add `io.keploy:keploy-sdk` to the app's dependencies, and remove it if it is there: it must not be on the
+app's classpath, where an older copy would run in place of the attached `keploy-sdk.jar` and start no JaCoCo, so no
+test's coverage would be measured. Application code should not import `io.keploy.*` classes for dynamic deduplication.
 
-### 2. Run the App with the Keploy and JaCoCo Java Agents
+### 2. Run the App with the Keploy Java Agent
 
-The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so attaching the JaCoCo Java agent is the only runtime requirement in the common cases below:
-
-- Maven/Gradle dev runs where application classes are under `target/classes` or `build/classes/java/main`
-- packaged `java -jar` runs where the application classes live inside the executable jar
+`keploy-sdk.jar` is the only agent the app needs:
 
 ```bash
-java \
-  -javaagent:/path/to/keploy-sdk.jar \
-  -javaagent:/path/to/jacocoagent.jar \
-  -jar your-app.jar
+java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar
 ```
 
-If the in-process API is unavailable (for example because the JaCoCo agent is loaded into an isolated classloader), the SDK transparently falls back to JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in `tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
+It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0; see
+`META-INF/THIRD-PARTY-NOTICES.txt` in the jar) and starts it itself, before the
+app's `main`, with `includes=` set to the app's own classes, which it finds from
+how the JVM was launched (Spring Boot, Jib, shaded and plain jars, class dirs;
+`KEPLOY_JAVA_CLASS_DIRS` overrides it). JaCoCo then instruments only those
+classes, not every library class the app loads. The startup log says which:
+
+```
+INFO: Keploy dedup: started JaCoCo 0.8.15 on the app's <n> classes alone (includes=com.example.shop.*)
+```
+
+When the SDK cannot tell the app's classes from its libraries, it says so at
+WARNING and starts JaCoCo on every class; set `KEPLOY_JAVA_CLASS_DIRS` to the
+app's class dirs and jars to fix that.
+
+If the command attaches a JaCoCo agent of its own (`-javaagent:jacocoagent.jar`,
+in any order, or in `JAVA_TOOL_OPTIONS`), the SDK starts none and reads coverage
+from that one, through JaCoCo's in-process runtime API
+(`org.jacoco.agent.rt.RT.getAgent()`). That JaCoCo instruments every class its
+own options take in. If the in-process API is unavailable (for example because
+the JaCoCo agent is loaded into an isolated classloader), the SDK falls back to
+JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in
+`tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
 
 ```bash
 java \
@@ -91,7 +109,7 @@ java \
 Run replay with dynamic dedup enabled:
 
 ```bash
-keploy test -c "java -javaagent:/path/to/keploy-sdk.jar -javaagent:/path/to/jacocoagent.jar -jar your-app.jar" \
+keploy test -c "java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar" \
   --dedup \
   --language java
 ```
@@ -128,7 +146,7 @@ supported ceiling is the lower of two limits — not one:
 
 | Component | Role | Reads up to |
 | --- | --- | --- |
-| `jacocoagent.jar` (k8s-proxy init image) | analyzes coverage | Java 26 (JaCoCo 0.8.15) |
+| `jacocoagent.jar` (carried in `keploy-sdk.jar`; on k8s, the k8s-proxy init image's) | analyzes coverage | Java 26 (JaCoCo 0.8.15) |
 | `keploy-sdk.jar` (this repo) | instruments the app, via the ASM shaded in through `org.jacoco:org.jacoco.core` | Java 26 (jacoco.core 0.8.15) |
 
 Both currently sit at **Java 26**, so that is the effective ceiling.
@@ -153,7 +171,10 @@ reason instead of failing silently.
 
 ### Raising it
 
-1. Bump `org.jacoco:org.jacoco.core` in `keploy-sdk/pom.xml`, and cut a release.
+1. Bump `jacoco.version` in `keploy-sdk/pom.xml` (both `org.jacoco.core` and the
+   `jacocoagent.jar` the SDK carries), change the JaCoCo and ASM versions named in
+   `keploy-sdk/src/main/resources/META-INF/THIRD-PARTY-NOTICES.txt` and in this
+   README to match, and cut a release.
 2. In k8s-proxy, bump `KEPLOY_SDK_VERSION` (`build/dedup-jars/build.sh`) to that
    release, and set `BundledJaCoCoVersion`, `JaCoCoOfficialMaxJava` and
    `SDKShadedASMMaxJava` in `pkg/platform/dedupinject/jacocompat.go`.

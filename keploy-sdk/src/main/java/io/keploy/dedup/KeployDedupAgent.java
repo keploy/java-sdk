@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.instrument.Instrumentation;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
@@ -136,7 +137,7 @@ public final class KeployDedupAgent {
      * @param instrumentation JVM instrumentation handle
      */
     public static void premain(String agentArgs, Instrumentation instrumentation) {
-        start();
+        start(new CoverageIndex(), instrumentation);
     }
 
     /**
@@ -155,6 +156,17 @@ public final class KeployDedupAgent {
      * @return {@code true} when the agent is running or was already started
      */
     public static boolean start() {
+        return start(new CoverageIndex(), null);
+    }
+
+    // start starts the agent on index. From premain (instrumentation not
+    // null) it also starts the JaCoCo agent keploy-sdk.jar carries, after the
+    // socket is bound and before the worker that reads commands runs: a START
+    // that comes earlier waits in the socket's backlog, so it never resets a
+    // JaCoCo not yet started, or warms up app classes before JaCoCo can
+    // instrument them. A start that finds the agent started already starts
+    // no JaCoCo: the call that started the agent did.
+    private static boolean start(CoverageIndex index, Instrumentation instrumentation) {
         if (isDisabled()) {
             return false;
         }
@@ -168,8 +180,7 @@ public final class KeployDedupAgent {
         }
 
         CoverageCollector collector = new CoverageCollector(
-                new JacocoClient(resolveHost(), resolvePort()),
-                new CoverageIndex());
+                new JacocoClient(resolveHost(), resolvePort()), index);
 
         CoverageWorker worker;
         String threadName;
@@ -227,12 +238,55 @@ public final class KeployDedupAgent {
             threadName = "keploy-java-dedup-control";
         }
 
+        if (instrumentation != null) {
+            startJacoco(instrumentation, index);
+        }
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
         coverageThread = thread;
         thread.start();
         registerShutdownHook();
         return true;
+    }
+
+    // startJacoco starts the JaCoCo agent keploy-sdk.jar carries, with
+    // includes= the app's classes in index (EmbeddedJacoco), unless the JVM
+    // has a JaCoCo agent of its own or the index holds no class. It runs in
+    // premain, before the app's main loads any app class, so it reads the
+    // index there: the app's classes found from the launch, with their
+    // bytes, which the first START read before.
+    private static void startJacoco(Instrumentation instrumentation, CoverageIndex index) {
+        try {
+            if (EmbeddedJacoco.attached(ClassLoader.getSystemClassLoader(),
+                    ManagementFactory.getRuntimeMXBean().getInputArguments())) {
+                log(Level.INFO, "Keploy dedup: this JVM has a JaCoCo agent attached, so Keploy reads coverage"
+                        + " from it, and it instruments every class its own options take in. Attach only"
+                        + " keploy-sdk.jar to have JaCoCo instrument the app's own classes alone", null);
+                return;
+            }
+            List<String> names = new ArrayList<>();
+            for (ClassEntry entry : index.entries()) {
+                names.add(entry.className);
+            }
+            String includes = EmbeddedJacoco.includes(index.isAppOnly(), names);
+            if (includes == null) {
+                // Said at WARNING, as the index read was: no class can pass
+                // the index's cut, so JaCoCo would only slow the app down.
+                log(Level.WARNING, "Keploy dedup starts no JaCoCo agent: it found no class to measure", null);
+                return;
+            }
+            String version = EmbeddedJacoco.start(instrumentation, EmbeddedJacoco.options(includes));
+            log(Level.INFO, "Keploy dedup: started JaCoCo " + version + (includes.isEmpty()
+                    ? " on every class"
+                    : " on the app's " + names.size() + " classes alone (includes="
+                    + (includes.length() > 300 ? includes.substring(0, 300) + "..." : includes) + ")"), null);
+        } catch (Throwable t) {
+            // Never let premain fail the app's start: run it unmeasured. This
+            // must stay Throwable: an Error (NoClassDefFoundError for JaCoCo's
+            // AgentJar, a LinkageError from its premain) would abort the JVM.
+            log(Level.WARNING, "Keploy dedup could not start the JaCoCo agent keploy-sdk.jar carries, so no"
+                    + " test's coverage is measured: attach jacocoagent.jar with -javaagent to measure it", t);
+        }
     }
 
     /**

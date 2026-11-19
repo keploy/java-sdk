@@ -245,6 +245,35 @@ jar cfm "${work_dir}/jar/plain-app.jar" "${work_dir}/jar/MANIFEST.MF" -C "${work
       -jar plain-app.jar "plain-jar"
 )
 
+# keploy-sdk.jar alone: it starts the JaCoCo agent it carries, with includes=
+# the app's classes, so the command attaches no jacocoagent.jar. Its log
+# must say it did, or a JaCoCo found elsewhere could pass these cases.
+java_with_sdk_only() {
+  local mode="${1:?mode required}"
+  shift
+  java -javaagent:"${agent_jar}" "$@" 2>"${work_dir}/${mode}.err" || { cat "${work_dir}/${mode}.err" >&2; exit 1; }
+  if ! grep -q "started JaCoCo .* on the app's .* classes alone (includes=" "${work_dir}/${mode}.err"; then
+    cat "${work_dir}/${mode}.err" >&2
+    echo "${mode}: keploy-sdk.jar did not start its JaCoCo agent on the app's classes" >&2
+    exit 1
+  fi
+}
+
+(
+  cd "${work_dir}/maven"
+  run_smoke "sdk-only-maven-classes" \
+    java_with_sdk_only "sdk-only-maven-classes" \
+      -cp "target/classes:${agent_jar}" \
+      smoke.SmokeHarness "sdk-only-maven-classes"
+)
+
+(
+  cd "${work_dir}/jar"
+  run_smoke "sdk-only-plain-jar" \
+    java_with_sdk_only "sdk-only-plain-jar" \
+      -jar plain-app.jar "sdk-only-plain-jar"
+)
+
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
 cp -R "${work_dir}/classes/." "${work_dir}/boot-root/BOOT-INF/classes/"
 cp -R "${work_dir}/classes/." "${work_dir}/war-root/WEB-INF/classes/"
