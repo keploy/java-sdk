@@ -144,15 +144,23 @@ final class IndexReport {
 
     /**
      * buildId is the build's id from its classes' JaCoCo ids: "jv1-" and the
-     * first 32 hex of the sha256 over the ids sorted as unsigned numbers,
-     * de-duplicated, each as 16 lowercase hex, joined by newlines. Keploy's
-     * codecoverage.JavaBuildID computes the same from the same ids. "" when
-     * there is no id.
+     * first 32 hex of classIdsSum, or "" when there is no id. Keploy's
+     * codecoverage.JavaBuildID computes the same from the same ids. It is the
+     * one build id: the INDEX record and the build table (BuildTable.write)
+     * both take it over the id of every class the index holds, read or not,
+     * so Keploy finds the table under the build the INDEX record named.
      */
     static String buildId(long[] ids) {
-        if (ids.length == 0) {
-            return "";
-        }
+        return ids.length == 0 ? "" : "jv1-" + classIdsSum(ids).substring(0, 32);
+    }
+
+    /**
+     * classIdsSum is the sha256, as 64 lowercase hex, over the ids sorted as
+     * unsigned numbers, de-duplicated, each as 16 lowercase hex, joined by
+     * newlines. The build id is its first 32 hex; a build table unit's hash
+     * is all of it, over that unit's class ids.
+     */
+    static String classIdsSum(long[] ids) {
         long[] sorted = Arrays.copyOf(ids, ids.length);
         // Unsigned order: flipping the sign bit maps it onto signed order.
         for (int i = 0; i < sorted.length; i++) {
@@ -176,11 +184,11 @@ final class IndexReport {
             // Every Java platform has SHA-256.
             throw new IllegalStateException(e);
         }
-        StringBuilder id = new StringBuilder("jv1-");
-        for (int i = 0; i < 16; i++) {
-            id.append(Character.forDigit((sum[i] >> 4) & 0xf, 16)).append(Character.forDigit(sum[i] & 0xf, 16));
+        StringBuilder hex = new StringBuilder(sum.length * 2);
+        for (byte b : sum) {
+            hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
         }
-        return id.toString();
+        return hex.toString();
     }
 
     /**

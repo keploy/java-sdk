@@ -459,7 +459,7 @@ public class ProbeMapTest {
                 stream.write(f, 8 + h.length() + 1, f.length - 8 - h.length() - 1);
                 if (o.get("last").getAsBoolean()) {
                     assertEquals(5, o.get("records").getAsInt());
-                    assertEquals(BuildTable.sha256Hex(golden.getBytes(StandardCharsets.UTF_8)),
+                    assertEquals(BuildTableTest.sha256Hex(golden.getBytes(StandardCharsets.UTF_8)),
                             o.get("sha256").getAsString());
                     assertEquals("the last frame ends the answer", f, sent.frames.get(sent.frames.size() - 1));
                 }
