@@ -125,6 +125,7 @@ public class PhasesTest {
                 + MS + "ms reset=" + MS + "ms"));
         assertStepsAddUp(awaitLogged("Java dedup diagnostics: END test-set-0/test-1 took " + MS + " ms: dump=" + MS
                 + "ms parse=" + MS + "ms filter=" + MS + "ms json=" + MS + "ms send=" + MS + "ms"));
+        assertNoProbeScan();
     }
 
     @Test
@@ -155,6 +156,15 @@ public class PhasesTest {
         assertStepsAddUp(awaitLogged("Java dedup diagnostics: END test-set-0/test-1 took " + MS + " ms: dump=" + MS
                 + "ms parse=" + MS + "ms filter=" + MS + "ms json=" + MS + "ms send=" + MS + "ms classes=" + MS
                 + "ms"));
+        assertNoProbeScan();
+    }
+
+    // With JaCoCo reached over TCP there is no probe scan to look up or to
+    // drop, and nothing says there was.
+    private void assertNoProbeScan() {
+        for (String line : logged) {
+            assertTrue("logged: " + line, !line.contains("probe scan") && !line.contains("read in place"));
+        }
     }
 
     @Test
