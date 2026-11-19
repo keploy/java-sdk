@@ -38,7 +38,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -74,7 +74,11 @@ public final class KeployDedupAgent {
     // GSON + DedupPayload), so tests can lock the wire shape. The historical
     // "executedLinesByFile" key now carries {vmClassName -> [probeIdx]}.
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass) {
-        return GSON.toJson(new DedupPayload(id, probesByClass));
+        return toDedupJson(id, probesByClass, Collections.<String>emptyList());
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
+        return GSON.toJson(new DedupPayload(id, new TestCoverage(probesByClass, classMismatch)));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -454,10 +458,13 @@ public final class KeployDedupAgent {
 
     // Build-constant coverage metadata for one class, serialized into the
     // manifest the offline CoverageReporter consumes. id = CRC64 class id
-    // (unsigned-hex), probeCount = JaCoCo probe array length.
+    // (IndexReport.hexId), probeCount = JaCoCo probe array length. classId
+    // is that id as JaCoCo has it, for chosenCopy to compare with a copy's
+    // id as a number; transient, so it is never sent.
     private static final class ManifestEntry {
         private String id;
         private int probeCount;
+        private transient long classId;
     }
 
     // fileKey is the file's identity (its device and inode on Linux and
@@ -595,10 +602,11 @@ public final class KeployDedupAgent {
         private volatile Object socketFileKey;
         private String activeTestId = "";
         // The id of the test whose END last sent its coverage, set once that
-        // record is sent and cleared by every START and every other END: what
-        // the next START clears then ran between two tests. BACKGROUND and
-        // lines that are no command leave it (a receiver may ask between an
-        // END and a START). Like activeTestId, only the worker thread uses it.
+        // record is sent and cleared by every START, and by every END until
+        // its record is sent: what the next START clears then ran between
+        // two tests. BACKGROUND and lines that are no command leave it (a
+        // receiver may ask between an END and a START). Like activeTestId,
+        // only the worker thread uses it.
         private String lastEndedTestId;
         // The between-tests hits the last START cleared, for a receiver that
         // asked for them: made into a record and sent once that START's
@@ -783,11 +791,11 @@ public final class KeployDedupAgent {
             }
 
             try {
-                Map<String, List<Integer>> executedProbesByClass = collector.capture(phases);
-                if (executedProbesByClass.isEmpty()) {
+                TestCoverage coverage = collector.capture(phases);
+                if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
-                publisher.publish(command.testId, executedProbesByClass, phases);
+                publisher.publish(command.testId, coverage, phases);
                 lastEndedTestId = command.testId;
                 return true;
             } catch (Exception e) {
@@ -1002,9 +1010,9 @@ public final class KeployDedupAgent {
                     // collector reads COV and ACK off the same line-oriented stream,
                     // so exactly one COV must precede every ACK — a missing COV on an
                     // exception would shift the collector onto the next test's frames.
-                    Map<String, List<Integer>> executedProbesByClass;
+                    TestCoverage coverage;
                     try {
-                        executedProbesByClass = collector.capture(phases);
+                        coverage = collector.capture(phases);
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
@@ -1014,14 +1022,14 @@ public final class KeployDedupAgent {
                         writeLine(out, "ACK");
                         return;
                     }
-                    if (executedProbesByClass.isEmpty()) {
+                    if (coverage.probesByClass.isEmpty()) {
                         log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
                     try {
                         // Always emit exactly one COV before ACK — even when empty —
                         // so the line-oriented collector stays in lockstep (the unix
                         // transport likewise always publishes).
-                        String cov = "COV " + GSON.toJson(new DedupPayload(command.testId, executedProbesByClass));
+                        String cov = "COV " + GSON.toJson(new DedupPayload(command.testId, coverage));
                         phases.mark("json");
                         writeLine(out, cov);
                         phases.mark("send");
@@ -1111,8 +1119,14 @@ public final class KeployDedupAgent {
         // when the SDK was not started as a -javaagent.
         private final Instrumentation instrumentation;
         private final AtomicBoolean warmed = new AtomicBoolean(false);
-        // The VM names of the app's classes; see indexedClassNames.
+        // The VM names of the app's classes, and the classes by those
+        // names; see indexedClassNames.
         private volatile Set<String> appClassNames;
+        private volatile Map<String, ClassEntry> appClassesByName;
+        // The JaCoCo ids of the indexed classes looked up so far; see
+        // indexedId.
+        private final java.util.concurrent.ConcurrentMap<String, Long> indexedIds =
+                new java.util.concurrent.ConcurrentHashMap<>();
         // Coverage manifest ({vmClassName -> {classId, probeCount}}) accumulated
         // from the SAME per-test capture() path that produces dedup fingerprints —
         // so its class matching is proven correct (a separate post-warmup dump
@@ -1335,7 +1349,7 @@ public final class KeployDedupAgent {
                     "keploy.java.dedup.warmup.disabled", ""));
         }
 
-        private Map<String, List<Integer>> capture(Phases phases) throws IOException {
+        private TestCoverage capture(Phases phases) throws IOException {
             ProbeScan scan = probeScan();
             if (scan != null) {
                 List<ProbeScan.Hit> hits = null;
@@ -1362,7 +1376,7 @@ public final class KeployDedupAgent {
                 if (diagnosticsEnabled()) {
                     diagnostic("JaCoCo dump returned 0 bytes");
                 }
-                return Collections.emptyMap();
+                return TestCoverage.NONE;
             }
 
             ExecFileLoader loader = new ExecFileLoader();
@@ -1385,60 +1399,38 @@ public final class KeployDedupAgent {
                 if (diagnosticsEnabled()) {
                     diagnostic("coverage index has no app classes");
                 }
-                return Collections.emptyMap();
+                return TestCoverage.NONE;
             }
 
-            Map<String, Set<Integer>> raw = new LinkedHashMap<>();
+            // The app's classes the dump holds hits of, sorted as the scan
+            // returns them, so that both choose of two copies of one class
+            // alike.
+            List<ProbeScan.Hit> hits = new ArrayList<>();
             for (ExecutionData executionData : executionDataStore.getContents()) {
-                if (!executionData.hasHits()) {
-                    continue;
-                }
-                if (!appClasses.contains(executionData.getName())) {
-                    continue;
-                }
-                boolean[] probes = executionData.getProbes();
-                // Record this class's build-constant (classId, probeCount) for the
-                // coverage manifest. Same matching as the fingerprint below, so the
-                // manifest can never miss a class that appears in the union.
-                final int probeCount = probes.length;
-                final long classId = executionData.getId();
-                liveManifest.computeIfAbsent(executionData.getName(), k -> {
-                    ManifestEntry m = new ManifestEntry();
-                    m.id = Long.toHexString(classId);
-                    m.probeCount = probeCount;
-                    return m;
-                });
-                Set<Integer> fired = new LinkedHashSet<>();
-                for (int i = 0; i < probes.length; i++) {
-                    if (probes[i]) {
-                        fired.add(i);
-                    }
-                }
-                if (!fired.isEmpty()) {
-                    raw.put(executionData.getName(), fired);
+                if (executionData.hasHits() && appClasses.contains(executionData.getName())) {
+                    hits.add(ProbeScan.Hit.of(executionData.getName(), executionData.getId(),
+                            executionData.getProbes()));
                 }
             }
-
-            Map<String, List<Integer>> sorted = toSortedMap(raw);
-            phases.mark("filter");
-
-            if (diagnosticsEnabled()) {
-                diagnostic("classesWithProbes=" + raw.size()
-                        + ", sampleClasses=" + summarizeStrings(raw.keySet(), 5));
-            }
-            return sorted;
+            Collections.sort(hits, ProbeScan.HITS_BY_NAME_THEN_ID);
+            return probesByClass(hits, phases);
         }
 
-        // probesByClass turns the scan's hits (sorted by name, then id) into
-        // the test's probes by class, and adds each class to the coverage
-        // manifest, as the dump's path does. Of two classes of one name
-        // (loaded twice, from different bytes) it reports the one whose id
-        // the manifest holds when that one was hit, else the lowest id. In
-        // that last case, when the manifest already names the other copy,
-        // the probes sent are not those of the class the manifest names, as
-        // with JaCoCo's dump: a test's record names a class, not its id.
-        private Map<String, List<Integer>> probesByClass(List<ProbeScan.Hit> hits, Phases phases) {
+        // probesByClass turns a test's hits (sorted by name, then id) into
+        // its probes by class, and adds each class to the coverage manifest.
+        // Of two classes of one name (loaded twice, from different bytes)
+        // it reports chosenCopy's. In its first and last cases, when the
+        // manifest already names another copy, the probes sent are not those
+        // of the class the manifest names: a test's record names a class,
+        // not its id. The legacy CoverageReporter then credits nothing when
+        // the manifest names a copy the index did not read, and credits the
+        // other copy's probe indices to the indexed class when the manifest
+        // names the indexed copy. Each class whose reported copy is not the
+        // class the index read is named in the record's classMismatch, so
+        // that Keploy does not read its probes against the indexed bytes.
+        private TestCoverage probesByClass(List<ProbeScan.Hit> hits, Phases phases) {
             Map<String, List<Integer>> byClass = new LinkedHashMap<>();
+            List<String> mismatch = new ArrayList<>();
             for (int i = 0; i < hits.size(); ) {
                 String name = hits.get(i).name;
                 int end = copiesEnd(hits, i);
@@ -1448,32 +1440,48 @@ public final class KeployDedupAgent {
                 final long classId = chosen.id;
                 liveManifest.computeIfAbsent(name, k -> {
                     ManifestEntry m = new ManifestEntry();
-                    m.id = Long.toHexString(classId);
+                    m.id = IndexReport.hexId(classId);
+                    m.classId = classId;
                     m.probeCount = probeCount;
                     return m;
                 });
                 byClass.put(name, probeList(chosen));
+                if (!isIndexed(name, classId)) {
+                    mismatch.add(name);
+                }
             }
             phases.mark("filter");
             if (diagnosticsEnabled()) {
                 diagnostic("classesWithProbes=" + byClass.size()
                         + ", sampleClasses=" + summarizeStrings(byClass.keySet(), 5));
+                if (!mismatch.isEmpty()) {
+                    diagnostic("classMismatch=" + mismatch.size()
+                            + ", sampleClasses=" + summarizeStrings(mismatch, 5));
+                }
             }
-            return byClass;
+            return new TestCoverage(byClass, mismatch);
         }
 
         // backgroundProbes turns the hits a START cleared into probes by
         // class, of two copies of one class the one probesByClass would
-        // report, and adds none of them to the coverage manifest: no test
-        // ran them.
-        private Map<String, List<Integer>> backgroundProbes(List<ProbeScan.Hit> hits) {
+        // report, and names in classMismatch, as probesByClass does, each
+        // whose reported copy is not the class the index read: Keploy takes
+        // background out of a test's hits probe by probe, so it must know
+        // which are not the indexed class's. It adds none of them to the
+        // coverage manifest: no test ran them.
+        private TestCoverage backgroundProbes(List<ProbeScan.Hit> hits) {
             Map<String, List<Integer>> byClass = new LinkedHashMap<>();
+            List<String> mismatch = new ArrayList<>();
             for (int i = 0; i < hits.size(); ) {
                 int end = copiesEnd(hits, i);
-                byClass.put(hits.get(i).name, probeList(chosenCopy(hits, i, end)));
+                ProbeScan.Hit chosen = chosenCopy(hits, i, end);
                 i = end;
+                byClass.put(chosen.name, probeList(chosen));
+                if (!isIndexed(chosen.name, chosen.id)) {
+                    mismatch.add(chosen.name);
+                }
             }
-            return byClass;
+            return new TestCoverage(byClass, mismatch);
         }
 
         // copiesEnd returns the end of the run of hits, sorted by name, that
@@ -1489,18 +1497,49 @@ public final class KeployDedupAgent {
         }
 
         // chosenCopy picks, of the copies hits[from, to) of one class, the
-        // one whose id the coverage manifest holds, else the first (the
-        // lowest id).
+        // class the index read (its id is the CRC64 of the indexed bytes),
+        // else the one whose id the coverage manifest holds, else the first
+        // (the lowest id, compared as unsigned numbers).
         private ProbeScan.Hit chosenCopy(List<ProbeScan.Hit> hits, int from, int to) {
-            ManifestEntry known = liveManifest.get(hits.get(from).name);
-            if (known != null) {
-                for (int k = from; k < to; k++) {
-                    if (Long.toHexString(hits.get(k).id).equals(known.id)) {
-                        return hits.get(k);
-                    }
+            String name = hits.get(from).name;
+            long indexed = indexedId(name);
+            ManifestEntry known = liveManifest.get(name);
+            ProbeScan.Hit named = null;
+            for (int k = from; k < to; k++) {
+                ProbeScan.Hit hit = hits.get(k);
+                if (hit.id == indexed) {
+                    return hit;
+                }
+                // At most one copy has the manifest's id: JaCoCo holds one
+                // class per id.
+                if (known != null && known.classId == hit.id) {
+                    named = hit;
                 }
             }
-            return hits.get(from);
+            return named != null ? named : hits.get(from);
+        }
+
+        // isIndexed says whether the class JaCoCo measured under this name
+        // and id is the class the index read: false for one another agent
+        // changed before JaCoCo saw it, and for a multi-release jar's
+        // META-INF/versions copy the JVM loaded in place of the indexed one.
+        private boolean isIndexed(String name, long id) {
+            return indexedId(name) == id;
+        }
+
+        // indexedId is the JaCoCo id of the class the index read under this
+        // VM name, the CRC64 of its bytes, worked out the first time a hit
+        // of the class is reported: not every indexed class at the first
+        // END. Every hit reported is of an indexed class (the scan and the
+        // dump keep only those), so the index holds the name.
+        private long indexedId(String name) {
+            Long id = indexedIds.get(name);
+            if (id == null) {
+                indexedClassNames();
+                id = IndexReport.classId(appClassesByName.get(name).bytes);
+                indexedIds.put(name, id);
+            }
+            return id;
         }
 
         private List<Integer> probeList(ProbeScan.Hit hit) {
@@ -1520,10 +1559,14 @@ public final class KeployDedupAgent {
             Set<String> names = appClassNames;
             if (names == null) {
                 List<ClassEntry> entries = coverageIndex.entries();
-                names = new HashSet<>(entries.size() * 2);
+                Map<String, ClassEntry> byName = new HashMap<>(entries.size() * 2);
                 for (ClassEntry entry : entries) {
-                    names.add(entry.className);
+                    byName.putIfAbsent(entry.className, entry);
                 }
+                // appClassesByName first: a thread that sees appClassNames
+                // set sees it too.
+                appClassesByName = byName;
+                names = byName.keySet();
                 appClassNames = names;
             }
             return names;
@@ -1538,19 +1581,6 @@ public final class KeployDedupAgent {
                 }
             }
             return sample.toString();
-        }
-
-        private Map<String, List<Integer>> toSortedMap(Map<String, Set<Integer>> raw) {
-            List<String> files = new ArrayList<>(raw.keySet());
-            Collections.sort(files);
-
-            Map<String, List<Integer>> sorted = new LinkedHashMap<>();
-            for (String file : files) {
-                List<Integer> lines = new ArrayList<>(raw.get(file));
-                Collections.sort(lines);
-                sorted.put(file, lines);
-            }
-            return sorted;
         }
 
         // pollBytecodeFrame returns a "CLASSES <b64tag> <b64manifest> <b64zip>"
@@ -2286,8 +2316,7 @@ public final class KeployDedupAgent {
         // none goes to it until it asks. A record that could not be made or
         // sent is not tried again: the next one that goes through counts it
         // in "lost". It never fails the caller.
-        synchronized void sendBackground(String after, String before,
-                Supplier<Map<String, List<Integer>>> classes) {
+        synchronized void sendBackground(String after, String before, Supplier<TestCoverage> classes) {
             Object key = receiverKey(socketFile);
             if (key == null || !key.equals(backgroundAskedBy)) {
                 backgroundAskedBy = null;
@@ -2319,9 +2348,8 @@ public final class KeployDedupAgent {
 
         // publish sends the test's coverage, after the INDEX report when the
         // receiver does not have it yet: the report's time counts in "send".
-        private void publish(String testId, Map<String, List<Integer>> executedProbesByClass, Phases phases)
-                throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, executedProbesByClass))
+        private void publish(String testId, TestCoverage coverage, Phases phases) throws IOException {
+            byte[] payload = GSON.toJson(new DedupPayload(testId, coverage))
                     .getBytes(StandardCharsets.UTF_8);
             phases.mark("json");
             sendIndex();
@@ -2350,15 +2378,40 @@ public final class KeployDedupAgent {
     // this exact name (enterprise dedup #2188, k8s-proxy #574), which treat the
     // value opaquely as key -> int-set. Renaming the JSON key is a coordinated
     // cross-repo break and must land in lockstep on all three sides.
+    //
+    // classMismatch names, in the order of executedLinesByFile, each class
+    // there whose JaCoCo id is not the id of the bytes the index read: its
+    // probes are not those of the indexed class. Left out when there is
+    // none, so that the record is the same as before for every other test.
+    // Receivers that do not know the key ignore it.
     private static final class DedupPayload {
 
         private final String id;
         // Probes-by-class (see class note); serialized under the historical key.
         private final Map<String, List<Integer>> executedLinesByFile;
+        private final List<String> classMismatch;
 
-        private DedupPayload(String id, Map<String, List<Integer>> executedProbesByClass) {
+        private DedupPayload(String id, TestCoverage coverage) {
             this.id = id;
-            this.executedLinesByFile = executedProbesByClass;
+            this.executedLinesByFile = coverage.probesByClass;
+            this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
+        }
+    }
+
+    // TestCoverage is a test's coverage as its END read it: the probes hit
+    // by class, and the classes among them that are not the class the index
+    // read.
+    private static final class TestCoverage {
+
+        static final TestCoverage NONE = new TestCoverage(Collections.<String, List<Integer>>emptyMap(),
+                Collections.<String>emptyList());
+
+        final Map<String, List<Integer>> probesByClass;
+        final List<String> classMismatch;
+
+        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
+            this.probesByClass = probesByClass;
+            this.classMismatch = classMismatch;
         }
     }
 
@@ -2384,7 +2437,8 @@ public final class KeployDedupAgent {
     // receiver that asked with BACKGROUND, and only for a window with hits.
     // build is the INDEX report's. executedLinesByFile is {vmClassName ->
     // [probeIdx]} under a test's record's key and in its shape (DedupPayload),
-    // names in order and probes ascending, so that Keploy reads both alike.
+    // names in order and probes ascending, and classMismatch is as in a
+    // test's record, left out when empty, so that Keploy reads both alike.
     // lost, when set, counts the windows before this one whose record could
     // not be made or sent.
     static final class BackgroundRecord {
@@ -2395,13 +2449,15 @@ public final class KeployDedupAgent {
         final String after;
         final String before;
         final Map<String, List<Integer>> executedLinesByFile;
+        final List<String> classMismatch;
         Integer lost;
 
-        BackgroundRecord(String build, String after, String before, Map<String, List<Integer>> classes) {
+        BackgroundRecord(String build, String after, String before, TestCoverage coverage) {
             this.build = build;
             this.after = after;
             this.before = before;
-            this.executedLinesByFile = classes;
+            this.executedLinesByFile = coverage.probesByClass;
+            this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
         }
     }
 

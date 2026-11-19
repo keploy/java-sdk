@@ -130,6 +130,19 @@ final class IndexReport {
     }
 
     /**
+     * hexId writes a class id as every id the SDK sends is written: the id
+     * as an unsigned number in 16 lowercase hex digits, zero-padded.
+     */
+    static String hexId(long id) {
+        String hex = Long.toHexString(id);
+        StringBuilder padded = new StringBuilder(16);
+        for (int pad = hex.length(); pad < 16; pad++) {
+            padded.append('0');
+        }
+        return padded.append(hex).toString();
+    }
+
+    /**
      * buildId is the build's id from its classes' JaCoCo ids: "jv1-" and the
      * first 32 hex of the sha256 over the ids sorted as unsigned numbers,
      * de-duplicated, each as 16 lowercase hex, joined by newlines. Keploy's
@@ -154,11 +167,7 @@ final class IndexReport {
             if (joined.length() > 0) {
                 joined.append('\n');
             }
-            String hex = Long.toHexString(sorted[i] ^ Long.MIN_VALUE);
-            for (int pad = hex.length(); pad < 16; pad++) {
-                joined.append('0');
-            }
-            joined.append(hex);
+            joined.append(hexId(sorted[i] ^ Long.MIN_VALUE));
         }
         byte[] sum;
         try {
