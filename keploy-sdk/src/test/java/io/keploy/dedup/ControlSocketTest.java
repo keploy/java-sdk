@@ -2,6 +2,7 @@ package io.keploy.dedup;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -16,6 +17,7 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -78,6 +80,7 @@ public class ControlSocketTest {
         }
     };
     private AFUNIXServerSocket foreign;
+    private static final String INDEX_START = "{\"kind\":\"index\",";
 
     @Before
     public void setUp() throws IOException {
@@ -455,6 +458,72 @@ public class ControlSocketTest {
         return false;
     }
 
+    @Test
+    public void theIndexReportReachesTheReceiverOnceBeforeAnyCommand() throws Exception {
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
+        String index = data.indexes.poll(30, TimeUnit.SECONDS);
+        assertNotNull("the INDEX report came with no command sent", index);
+        assertEquals(KeployDedupAgent.indexReport(), index);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        assertTrue(data.next().contains("\"id\":\"test-set-0/test-1\""));
+        assertEquals(TAKEN, send("START test-set-0/test-2"));
+        assertEquals(TAKEN, send("END test-set-0/test-2"));
+        assertTrue(data.next().contains("\"id\":\"test-set-0/test-2\""));
+        assertNull("one INDEX report for one receiver", data.indexes.poll(200, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void aReceiverBoundAnewGetsTheIndexReportBeforeItsFirstRecord() throws Exception {
+        startWithJacoco();
+        // No receiver yet: the report sent once the socket was bound reached
+        // no one, and an ignored END publishes nothing, the report included.
+        assertEquals(IGNORED, send("END test-set-0/test-0"));
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertNull(data.all.poll(200, TimeUnit.MILLISECONDS));
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        assertEquals(KeployDedupAgent.indexReport(), data.all.poll(30, TimeUnit.SECONDS));
+        assertTrue(data.all.poll(30, TimeUnit.SECONDS).contains("\"id\":\"test-set-0/test-1\""));
+
+        // The next test set's receiver (docker compose), on the same path.
+        data.close();
+        // Keploy unlinks the old receiver's file before it binds the next.
+        new File(KeployDedupAgent.dataSocketPath).delete();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-1/test-1"));
+        assertEquals(TAKEN, send("END test-set-1/test-1"));
+        assertEquals(KeployDedupAgent.indexReport(), data.all.poll(30, TimeUnit.SECONDS));
+        assertTrue(data.all.poll(30, TimeUnit.SECONDS).contains("\"id\":\"test-set-1/test-1\""));
+        assertEquals(TAKEN, send("START test-set-1/test-2"));
+        assertEquals(TAKEN, send("END test-set-1/test-2"));
+        assertTrue(data.all.poll(30, TimeUnit.SECONDS).contains("\"id\":\"test-set-1/test-2\""));
+        assertNull(data.all.poll(200, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void aReceiverIsToldApartByItsFileAndTheTimeItWasMade() throws Exception {
+        // A file system can give a new socket file the inode of one just
+        // removed: the time it was made tells the two receivers apart.
+        File file = new File(dir, "receiver");
+        Files.write(file.toPath(), new byte[] {1});
+        Files.setLastModifiedTime(file.toPath(), FileTime.fromMillis(1_000_000_000_000L));
+        Object key = KeployDedupAgent.receiverKey(file);
+        assertNotNull(key);
+        assertEquals(key, KeployDedupAgent.receiverKey(file));
+        Files.setLastModifiedTime(file.toPath(), FileTime.fromMillis(1_000_000_001_000L));
+        assertNotEquals(key, KeployDedupAgent.receiverKey(file));
+        // Two receivers bound within one tick of the clock share a time: the
+        // file's identity tells them apart.
+        File other = new File(dir, "other");
+        Files.write(other.toPath(), new byte[] {1});
+        Files.setLastModifiedTime(other.toPath(), FileTime.fromMillis(1_000_000_001_000L));
+        assertNotEquals(KeployDedupAgent.receiverKey(file), KeployDedupAgent.receiverKey(other));
+        assertTrue(file.delete());
+        assertNull("no file, no receiver", KeployDedupAgent.receiverKey(file));
+    }
+
     private void startWithJacoco() throws IOException {
         jacoco = new FakeJacoco();
         System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
@@ -509,11 +578,17 @@ public class ControlSocketTest {
         return new String(all.toByteArray(), StandardCharsets.UTF_8);
     }
 
-    /** Keploy's data socket: it keeps each payload sent to it. */
+    /**
+     * Keploy's data socket: it keeps each payload sent to it, the tests'
+     * coverage records (next, poll) apart from the INDEX reports (indexes),
+     * and all of them in the order they came (all).
+     */
     private static final class DataReceiver implements Closeable {
 
         final AFUNIXServerSocket server;
         final BlockingQueue<String> payloads = new LinkedBlockingQueue<>();
+        final BlockingQueue<String> indexes = new LinkedBlockingQueue<>();
+        final BlockingQueue<String> all = new LinkedBlockingQueue<>();
 
         DataReceiver(String path) throws IOException {
             server = AFUNIXServerSocket.newInstance();
@@ -527,7 +602,9 @@ public class ControlSocketTest {
             while (!server.isClosed()) {
                 try (Socket socket = server.accept()) {
                     socket.setSoTimeout(30000);
-                    payloads.add(readAll(socket.getInputStream()));
+                    String payload = readAll(socket.getInputStream());
+                    all.add(payload);
+                    (payload.startsWith(INDEX_START) ? indexes : payloads).add(payload);
                 } catch (IOException e) {
                     // Closed.
                 }

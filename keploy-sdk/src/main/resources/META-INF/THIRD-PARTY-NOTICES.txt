@@ -1,0 +1,55 @@
+keploy-sdk.jar (Apache License 2.0) carries the following third-party software.
+
+JaCoCo 0.8.15 - Eclipse Public License 2.0 (https://www.eclipse.org/legal/epl-2.0/)
+  Copyright (c) 2009, 2026 Mountainminds GmbH & Co. KG and Contributors
+  JaCoCo's source code is available under the EPL-2.0 at
+  https://github.com/jacoco/jacoco, tag v0.8.15.
+  - jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:0.8.15; keploy-sdk
+    starts it when the JVM attaches no JaCoCo agent of its own.
+  - the classes of org.jacoco:org.jacoco.core:0.8.15, unchanged but for their
+    package, renamed from org.jacoco.core to io.keploy.shaded.org.jacoco.core
+    (maven-shade-plugin relocation, keploy-sdk/pom.xml), so that they never meet
+    an app's own JaCoCo.
+
+ASM 9.10.1 - BSD 3-Clause License
+  Source: https://gitlab.ow2.org/asm/asm
+  - the classes of org.ow2.asm:asm, asm-commons and asm-tree 9.10.1, which
+    org.jacoco.core depends on, unchanged but for their package, renamed from
+    org.objectweb.asm to io.keploy.shaded.org.objectweb.asm; and the copy
+    inside jacocoagent.jar. ASM is subject to the following license:
+
+ASM: a very small and fast Java bytecode manipulation framework
+Copyright (c) 2000-2011 INRIA, France Telecom
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the copyright holders nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+
+Gson 2.9.1 - Apache License 2.0
+  Source: https://github.com/google/gson
+  - its classes, unchanged but for their package, renamed from com.google.gson
+    to io.keploy.shaded.com.google.gson.
+
+junixsocket 2.10.1 - Apache License 2.0
+  Source: https://github.com/kohlschutter/junixsocket
