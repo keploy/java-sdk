@@ -168,7 +168,7 @@ public class ServerTailTest {
         assertTrue(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
         assertTrue(result.log, result.log.contains("WARNING: Keploy dedup: the jar keploy-sdk.jar runs from has no"
                 + " Can-Retransform-Classes: true in its manifest, or this JVM cannot retransform, so a JaCoCo agent"
-                + " attached after it instruments the server classes it changes"));
+                + " attached after it instruments the server and scheduler classes it changes"));
     }
 
     @Test

@@ -60,6 +60,18 @@ public class ServerEntriesTest {
     // What body saw: the requests running while the server's code ran.
     private static volatile int runningInBody = -1;
 
+    // The scheduled jobs' entries: the class, the method a job's run runs
+    // in, and the name a record gives a stand-in's run (its class's: a
+    // stand-in has no job to name).
+    private static final String[][] JOBS = {
+        {"org/quartz/core/JobRunShell", "run", "quartz:org.quartz.core.JobRunShell"},
+        {"org/springframework/scheduling/support/ScheduledMethodRunnable", "run",
+            "scheduled:org.springframework.scheduling.support.ScheduledMethodRunnable"},
+    };
+    private static volatile boolean jobThrows;
+    private static volatile boolean jobPeeks;
+    private static volatile List<String> namedInBody;
+
     private final List<String> logged = new CopyOnWriteArrayList<>();
     private final Handler handler = new Handler() {
         @Override
@@ -147,6 +159,120 @@ public class ServerEntriesTest {
                 assertTrue(label, ServerEntries.counted().contains(entry[2]));
             }
         }
+    }
+
+    // jobBody is a job's own code in each stand-in: told to peek, it says
+    // which jobs a window opened while it runs names; told to, it throws.
+    public static void jobBody() {
+        if (jobPeeks) {
+            JobGate.open();
+            namedInBody = JobGate.close();
+        }
+        if (jobThrows) {
+            throw new IllegalStateException("the job threw");
+        }
+    }
+
+    @Test
+    public void eachJobsRunIsSeenWhileItRunsAndNotOnceItReturnedOrThrew() throws Exception {
+        // Java 8 classes as today's schedulers, and a synchronized run() in
+        // Java 5 class files as Quartz 1.x jars are built.
+        int[][] shapes = {{Opcodes.V1_8, 0}, {Opcodes.V1_5, Opcodes.ACC_SYNCHRONIZED}};
+        for (String[] job : JOBS) {
+            for (int s = 0; s < shapes.length * 2; s++) {
+                boolean throwing = s % 2 == 1;
+                int[] shape = shapes[s / 2];
+                String label = job[0] + " (class version " + shape[0] + ", run() access " + shape[1] + ")"
+                        + (throwing ? " (throws)" : "");
+                ServerEntries entries = new ServerEntries();
+                byte[] changed = entries.transform(getClass().getClassLoader(), job[0], null, null,
+                        jobStandIn(job[0], shape[0], shape[1]));
+                assertNotNull(label, changed);
+                Class<?> type = load(job[0], changed);
+                Runnable run = (Runnable) type.getDeclaredConstructor().newInstance();
+
+                namedInBody = null;
+                jobPeeks = true;
+                runJob(label, run, throwing);
+                assertEquals(label + ": seen running by a window that opens", Collections.singletonList(job[2]),
+                        namedInBody);
+                JobGate.open();
+                runJob(label, run, throwing);
+                assertEquals(label + ": named in the window it started in", Collections.singletonList(job[2]),
+                        JobGate.close());
+                JobGate.open();
+                assertEquals(label + ": done once it returned or threw", Collections.<String>emptyList(),
+                        JobGate.close());
+
+                // The job's own code is still there, renamed and private.
+                Method renamed = type.getDeclaredMethod(ServerEntries.JOB_RENAMED + job[1]);
+                assertTrue(label, Modifier.isPrivate(renamed.getModifiers()) && renamed.isSynthetic());
+                assertTrue(label, ServerEntries.carriesChange(changed));
+                assertFalse("a job's run is no server's request", ServerEntries.counted().contains("Quartz")
+                        || ServerEntries.counted().contains("Spring"));
+            }
+        }
+    }
+
+    @Test
+    public void withEndsWaitOffAJobsRunIsStillSeenAndNoServerIsChanged() throws Exception {
+        ServerEntries entries = new ServerEntries(false);
+        ClassLoader loader = getClass().getClassLoader();
+        assertNull(entries.transform(loader, ENTRIES[0][0], null, null,
+                standIn(ENTRIES[0][0], ENTRIES[0][1], false, Opcodes.V1_8, 0)));
+        for (String[] job : JOBS) {
+            assertNotNull(job[0], entries.transform(loader, job[0], null, null, jobStandIn(job[0])));
+        }
+    }
+
+    @Test
+    public void aJobsClassChangedAsItLoadedIsChangedAgainWhenRetransformed() throws Exception {
+        ClassLoader loader = getClass().getClassLoader();
+        for (String[] job : JOBS) {
+            ServerEntries entries = new ServerEntries();
+            byte[] classfile = jobStandIn(job[0]);
+            assertNull("not changed as it loaded", entries.transform(loader, job[0], Object.class, null, classfile));
+            assertNotNull(entries.transform(loader, job[0], null, null, classfile));
+            byte[] again = entries.transform(loader, job[0], Object.class, null, classfile);
+            assertNotNull(job[0], again);
+            assertTrue(job[0], ServerEntries.carriesChange(again));
+            assertNull("bytes that carry the change are taken as they are",
+                    entries.transform(loader, job[0], Object.class, null, again));
+            Runnable run = (Runnable) load(job[0], again).getDeclaredConstructor().newInstance();
+            JobGate.open();
+            run.run();
+            assertEquals(Collections.singletonList(job[2]), JobGate.close());
+        }
+    }
+
+    private static void runJob(String label, Runnable run, boolean throwing) {
+        jobThrows = throwing;
+        try {
+            run.run();
+            assertFalse(label, throwing);
+        } catch (IllegalStateException e) {
+            assertTrue(label, throwing);
+        } finally {
+            jobThrows = false;
+            jobPeeks = false;
+        }
+    }
+
+    // jobStandIn is a Runnable named as a scheduler's job class, whose
+    // run() runs jobBody.
+    private static byte[] jobStandIn(String internalName) {
+        return jobStandIn(internalName, Opcodes.V1_8, 0);
+    }
+
+    // ... in class files of this version, with these access flags on run().
+    private static byte[] jobStandIn(String internalName, int version, int access) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(version, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object",
+                new String[] {"java/lang/Runnable"});
+        constructor(writer);
+        calls(writer, Opcodes.ACC_PUBLIC | access, "run", "()V", "jobBody", false);
+        writer.visitEnd();
+        return writer.toByteArray();
     }
 
     @Test
@@ -429,7 +555,19 @@ public class ServerEntriesTest {
             assertNull(transformedOrNull(ENTRIES[6][0], classfile, own));
         }
         assertNotNull(logged("WARNING Keploy dedup does not count Undertow's requests: the class loader of"
-                + " io.undertow.server.Connectors does not see keploy-sdk.jar's classes"));
+                + " io.undertow.server.Connectors does not see keploy-sdk.jar's classes, so a test's END reads its"
+                + " hits without waiting for its requests to finish"));
+    }
+
+    @Test
+    public void aJobWhoseLoaderDoesNotSeeTheGateIsNotChangedAndTheLogSaysWhatIsLost() throws Exception {
+        byte[] classfile = jobStandIn(JOBS[0][0]);
+        try (URLClassLoader alone = new URLClassLoader(new URL[0], null)) {
+            assertNull(transformedOrNull(JOBS[0][0], classfile, alone));
+        }
+        assertNotNull(logged.toString(), logged("WARNING Keploy dedup does not count Quartz's job runs: the class"
+                + " loader of org.quartz.core.JobRunShell does not see keploy-sdk.jar's classes, so a test a job"
+                + " runs in is not marked contaminated"));
     }
 
     @Test
