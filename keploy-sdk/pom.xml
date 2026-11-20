@@ -97,6 +97,21 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- keploy-sdk's own license, Apache 2.0, which the Gson and junixsocket
+                 the jar carries are under too: META-INF/LICENSE in the jar, next to
+                 THIRD-PARTY-NOTICES.txt and JaCoCo's LICENSE-EPL-2.0.txt. -->
+            <resource>
+                <directory>${project.basedir}/..</directory>
+                <includes>
+                    <include>LICENSE</include>
+                </includes>
+                <targetPath>META-INF</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -156,6 +171,19 @@
                                         <exclude>META-INF/*.RSA</exclude>
                                         <exclude>module-info.class</exclude>
                                         <exclude>META-INF/versions/*/module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                                <!-- org.jacoco.core and org.jacoco.agent each hold an about.html
+                                     at their root, and the jar can hold one. The jar's is
+                                     org.jacoco.core's, the notice of the classes it carries
+                                     renamed. org.jacoco.agent's, the notice of AgentJar and
+                                     jacocoagent.jar, is the same file as the about.html inside
+                                     jacocoagent.jar, which the jar carries whole.
+                                     scripts/smoke-javaagent.sh checks both. -->
+                                <filter>
+                                    <artifact>org.jacoco:org.jacoco.agent</artifact>
+                                    <excludes>
+                                        <exclude>about.html</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

@@ -32,6 +32,97 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# keploy-sdk.jar carries JaCoCo (EPL-2.0), ASM, Gson and junixsocket: it must
+# hold keploy-sdk's own license, JaCoCo's EPL-2.0 text and about.html, and the
+# notices that name each and say where JaCoCo's source is. A change to the
+# shade plugin's filters or to the jar's resources that drops one fails here.
+licenses_dir="${work_dir}/licenses"
+jacoco_maven=META-INF/maven/org.jacoco
+license_entries=(META-INF/LICENSE META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt about.html
+  "${jacoco_maven}/org.jacoco.core/pom.properties" "${jacoco_maven}/org.jacoco.agent/pom.properties")
+mkdir -p "${licenses_dir}"
+(cd "${licenses_dir}" && jar xf "${agent_jar}" "${license_entries[@]}")
+for entry in "${license_entries[@]}"; do
+  if [[ ! -s "${licenses_dir}/${entry}" ]]; then
+    echo "licenses: ${agent_jar} holds no ${entry}" >&2
+    exit 1
+  fi
+done
+if ! cmp -s "${repo_root}/LICENSE" "${licenses_dir}/META-INF/LICENSE"; then
+  echo "licenses: the jar's META-INF/LICENSE is not the repo's LICENSE" >&2
+  exit 1
+fi
+for entry in META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt; do
+  if ! cmp -s "${module_dir}/src/main/resources/${entry}" "${licenses_dir}/${entry}"; then
+    echo "licenses: the jar's ${entry} is not keploy-sdk/src/main/resources/${entry}" >&2
+    exit 1
+  fi
+done
+# about.html at the jar's root is org.jacoco.core's, as the notices say, and
+# org.jacoco.agent's, which the shade filter leaves out, is the same file as
+# the about.html inside jacocoagent.jar.
+for artifact in org.jacoco.core org.jacoco.agent; do
+  version="$(sed -n 's/^version=//p' "${licenses_dir}/${jacoco_maven}/${artifact}/pom.properties" | tr -d '\r')"
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="org.jacoco:${artifact}:${version}" -DoutputDirectory="${licenses_dir}"
+  mkdir -p "${licenses_dir}/${artifact}"
+  (cd "${licenses_dir}/${artifact}" && jar xf "../${artifact}-${version}.jar" about.html)
+done
+if ! cmp -s "${licenses_dir}/org.jacoco.core/about.html" "${licenses_dir}/about.html"; then
+  echo "licenses: the jar's about.html is not org.jacoco.core's" >&2
+  exit 1
+fi
+mkdir -p "${licenses_dir}/jacocoagent"
+(cd "${licenses_dir}/jacocoagent" && jar xf "${agent_jar}" jacocoagent.jar && jar xf jacocoagent.jar about.html)
+if ! cmp -s "${licenses_dir}/org.jacoco.agent/about.html" "${licenses_dir}/jacocoagent/about.html"; then
+  echo "licenses: org.jacoco.agent's about.html is not the one inside the jar's jacocoagent.jar" >&2
+  exit 1
+fi
+# The jar holds keploy-sdk's own packages and the parts the notices name, and
+# nothing else: a dependency or a package that lands in the jar without its
+# notice fails here. A third-party part goes in THIRD-PARTY-NOTICES.txt first,
+# then in want_parts; a new package of keploy-sdk's own, in want_parts.
+jar_parts="$(jar tf "${agent_jar}" | grep -v '/$' | awk -F/ '
+  $1 == "io" && $2 == "keploy" && $3 == "shaded" { print $1 "/" $2 "/" $3 "/" $4 "/" $5 "/" $6; next }
+  $1 == "org" && $2 == "jacoco" && $3 == "agent" { print; next }
+  $1 == "META-INF" && $2 == "versions" && NF > 6 { print $1 "/" $2 "/*/" $4 "/" $5 "/" $6; next }
+  $1 == "META-INF" && ($2 == "maven" || $2 == "native-image") && NF > 3 { print $1 "/" $2 "/" $3; next }
+  $1 == "lib" && NF == 4 && $3 == "jni" && $4 ~ /^(lib)?junixsocket-native-/ { print "lib/*/jni/junixsocket-native"; next }
+  NF <= 3 { print; next }
+  { print $1 "/" $2 "/" $3 }' | LC_ALL=C sort -u)"
+want_parts="$(LC_ALL=C sort <<'PARTS'
+META-INF/LICENSE
+META-INF/LICENSE-EPL-2.0.txt
+META-INF/MANIFEST.MF
+META-INF/THIRD-PARTY-NOTICES.txt
+META-INF/maven/com.google.code.gson
+META-INF/maven/com.kohlschutter.junixsocket
+META-INF/maven/io.keploy
+META-INF/maven/org.jacoco
+META-INF/native-image/com.kohlschutter.junixsocket
+META-INF/versions/*/org/newsclub/lib
+META-INF/versions/*/org/newsclub/net
+about.html
+io/keploy/dedup
+io/keploy/servlet
+io/keploy/shaded/com/google/gson
+io/keploy/shaded/org/jacoco/core
+io/keploy/shaded/org/objectweb/asm
+jacocoagent.jar
+lib/*/jni/junixsocket-native
+org/jacoco/agent/AgentJar.class
+org/jacoco/agent/package-info.class
+org/newsclub/lib
+org/newsclub/net
+PARTS
+)"
+if [[ "${jar_parts}" != "${want_parts}" ]]; then
+  echo "licenses: ${agent_jar} does not hold exactly the parts THIRD-PARTY-NOTICES.txt names (< the jar, > want_parts):" >&2
+  diff <(printf '%s\n' "${jar_parts}") <(printf '%s\n' "${want_parts}") >&2 || true
+  exit 1
+fi
+echo "licenses: keploy-sdk.jar holds its license, JaCoCo's EPL-2.0 text and about.html, and the notices of every part it holds"
+
 mkdir -p "${work_dir}/src/smoke" "${work_dir}/classes"
 
 cat > "${work_dir}/src/smoke/Work.java" <<'JAVA'
