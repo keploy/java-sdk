@@ -19,6 +19,7 @@ import java.io.InterruptedIOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
@@ -419,13 +420,24 @@ final class BuildTable {
         }
 
         boolean request(Runnable send) {
+            boolean deferred;
+            boolean dropped = false;
             synchronized (this) {
                 requests++;
-                if (running) {
+                deferred = running;
+                if (deferred) {
+                    dropped = pending != null;
                     pending = send;
-                    return true;
+                } else {
+                    running = true;
                 }
-                running = true;
+            }
+            if (deferred) {
+                // Said once per ask, off the lock, so a table that comes late names why.
+                log(Level.INFO, "Keploy coverage: Keploy asked for the build table while this JVM sends one: it is"
+                        + " sent again when that send ends" + (dropped ? " (an earlier ask that waited for it is"
+                        + " dropped, as this newer one names Keploy's current socket)" : ""), null);
+                return true;
             }
             // Called on the control path: a thread that cannot start (a pids limit, a security manager) must not
             // end the control server. Keploy reads IGNORED as no table from this SDK.
@@ -498,12 +510,17 @@ final class BuildTable {
             FrameWriter maps = new FrameWriter(sender, PART_PROBES, MAX_FRAME_BYTES);
             Summary s;
             Pacer pacer = Pacer.jvm();
-            try (Spill spill = Spill.open(spillDir)) {
-                s = write(classes.get(), frames, spill, MAX_RECORD_BYTES, MAX_MAP_BYTES, MAX_MAP_STEPS, pacer);
-                frames.finish(s.build, s.records);
-                spill.sendTo(maps, s.build);
+            ExitNotice exit = ExitNotice.add(t0, pacer, frames, maps);
+            try {
+                try (Spill spill = Spill.open(spillDir)) {
+                    s = write(classes.get(), frames, spill, MAX_RECORD_BYTES, MAX_MAP_BYTES, MAX_MAP_STEPS, pacer);
+                    frames.finish(s.build, s.records);
+                    spill.sendTo(maps, s.build);
+                }
+                maps.finish(s.build, s.probeRecords);
+            } finally {
+                exit.remove();
             }
-            maps.finish(s.build, s.probeRecords);
             StringBuilder m = new StringBuilder("Keploy coverage: build table ");
             m.append(s.build.isEmpty() ? "(no app classes)" : s.build).append(" sent (").append(s.records)
                     .append(" classes, ").append(s.notMeasured).append(" not measured");
@@ -539,6 +556,90 @@ final class BuildTable {
         } catch (Throwable t) {
             // Never let the table take the app down: Keploy names the coverage it did not get.
             log(Level.WARNING, "Keploy coverage: the build table was not sent", t);
+        }
+    }
+
+    /**
+     * ExitNotice says, once, on System.err, that the JVM exits while a send runs: a native keploy test stops the
+     * app at each test set's end, and a send cut short there would otherwise leave no line in the app's log.
+     * It is a shutdown hook added for the send and removed when it ends. It writes to System.err, not
+     * java.util.logging: the JVM runs its shutdown hooks at once and in no order, and LogManager's own hook (and
+     * an app's logging framework's) may have closed the handlers already. A JVM that is killed (SIGKILL) or
+     * halted runs no hook and says nothing. The hook reads the send's progress, which the send's thread writes:
+     * the Pacer's class-file counts and wait, and each FrameWriter's frame count.
+     */
+    static final class ExitNotice implements Runnable {
+        static final String NAME = "keploy-build-table-exit";
+        private final long t0;
+        private final Pacer pacer;
+        private final FrameWriter table;
+        private final FrameWriter probes;
+        private final PrintStream out;
+        private volatile boolean ended;
+        private Thread hook;
+
+        ExitNotice(long t0, Pacer pacer, FrameWriter table, FrameWriter probes, PrintStream out) {
+            this.t0 = t0;
+            this.pacer = pacer;
+            this.table = table;
+            this.probes = probes;
+            this.out = out;
+        }
+
+        /** add makes the notice and adds its hook; a JVM that takes no hook (exiting, a security manager) has none. */
+        static ExitNotice add(long t0, Pacer pacer, FrameWriter table, FrameWriter probes) {
+            ExitNotice n = new ExitNotice(t0, pacer, table, probes, System.err);
+            Thread h = new Thread(n, NAME);
+            try {
+                Runtime.getRuntime().addShutdownHook(h);
+                n.hook = h;
+            } catch (Throwable t) {
+                log(Level.FINE, "Keploy coverage: no exit notice for the build table's send", t);
+            }
+            return n;
+        }
+
+        /** remove ends the notice: the send is over, so its hook says nothing even when it runs (an exit now). */
+        void remove() {
+            ended = true;
+            if (hook == null) {
+                return;
+            }
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (Throwable t) {
+                // The JVM exits already (IllegalStateException): the hook runs and, as ended is set, says nothing.
+            }
+        }
+
+        @Override
+        public void run() {
+            if (ended) {
+                return;
+            }
+            try {
+                out.println(line());
+            } catch (Throwable ignored) {
+                // Nowhere left to say it.
+            }
+        }
+
+        /** line is what the notice says, with the send's progress read now. */
+        String line() {
+            long total = pacer.totalClassFiles();
+            long done = pacer.doneClassFiles();
+            String where;
+            if (total == 0) {
+                where = "it was still reading the app's class files";
+            } else if (done < total) {
+                where = done + " of " + total + " class files were analyzed";
+            } else {
+                where = "all " + total + " class files were analyzed";
+            }
+            return "Keploy coverage: the JVM exits before its build table is sent whole: " + where + "; "
+                    + (table.seq + probes.seq) + " frames sent in " + (System.nanoTime() - t0) / 1_000_000
+                    + " ms (" + pacer.waitedNanos() / 1_000_000 + " ms of it paced). Keploy gets this build's table"
+                    + " only from a JVM that runs until it is sent";
         }
     }
 
@@ -605,13 +706,18 @@ final class BuildTable {
          * total is 0 and the rate is never read). start is the send's, for the deadline.
          */
         private long begun;
-        private long total;
-        private long done;
+        // total, done and waited are volatile for ExitNotice, which reads them on its own thread; only the
+        // send's thread writes them.
+        private volatile long total;
+        private volatile long done;
         private long last;
         private long gc;
+        /** The collections' time when the send began, for the line that says the send is paced. */
+        private long gc0;
+        private boolean told;
         private long debt;
         private long bank;
-        private long waited;
+        private volatile long waited;
 
         Pacer(Clock clock) {
             this.clock = clock;
@@ -620,6 +726,7 @@ final class BuildTable {
                 start = last;
                 begun = last;
                 gc = clock.gcMillis();
+                gc0 = gc;
             } catch (RuntimeException e) {
                 stop("its clock failed", e);
             }
@@ -671,11 +778,23 @@ final class BuildTable {
             return waited;
         }
 
+        /** totalClassFiles is the class files the send analyzes, from begin; 0 before it. */
+        long totalClassFiles() {
+            return total;
+        }
+
+        /** doneClassFiles is the class files analyzed so far, paced or not. */
+        long doneClassFiles() {
+            return done;
+        }
+
         /**
          * unitDone is called after each unit, whose classFiles were analyzed: it waits what is owed and may be.
          * It throws on an interrupt, which it keeps for the thread: an interrupt ends the send.
          */
         void unitDone(int classFiles) throws InterruptedIOException {
+            int files = Math.max(0, classFiles);
+            done += files;
             if (Thread.currentThread().isInterrupted()) {
                 throw interrupted();
             }
@@ -691,13 +810,22 @@ final class BuildTable {
                     gc = g;
                 }
                 debt = Math.max(0, debt - Math.max(0, now - last));
-                int files = Math.max(0, classFiles);
                 bank = Math.min(MAX_BANK_NANOS, bank + ALLOWANCE_NANOS_PER_CLASS * files);
-                done += files;
                 last = now;
                 long wait = Math.min(Math.min(debt, bank), room(now));
                 if (wait < MIN_WAIT_NANOS) {
                     return;
+                }
+                if (!told) {
+                    // Deferred: said once a send, at its first wait, so a table that comes late names why.
+                    told = true;
+                    log(Level.INFO, "Keploy coverage: the build table's send is paced, so its garbage does not grow"
+                            + " the app's heap: the JVM's collections took " + (g - gc0) + " ms in the "
+                            + Math.max(0, now - start) / 1_000_000 + " ms since it began, and it waits " + WAIT_PER_GC
+                            + " times that; its waits add up to at most " + ALLOWANCE_NANOS_PER_CLASS / 1000
+                            + " us a class file (" + ALLOWANCE_NANOS_PER_CLASS * total / 1_000_000 + " ms for its "
+                            + total + "), and none ends the table past " + deadlineNanos(total) / 1_000_000
+                            + " ms from its start", null);
                 }
                 try {
                     clock.sleep(wait);
@@ -2050,7 +2178,8 @@ final class BuildTable {
         private byte[] frame;
         private int bodyLen;
         private final MessageDigest digest;
-        int seq;
+        /** The frames sent; volatile for ExitNotice, which reads it on its own thread (only the send's writes it). */
+        volatile int seq;
         private String build;
 
         FrameWriter(FrameSender sender) {
