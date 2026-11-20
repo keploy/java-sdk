@@ -1016,9 +1016,10 @@ public final class KeployDedupAgent {
     private static final class CoverageTcpClient implements CoverageWorker {
 
         private static final long RECONNECT_DELAY_MILLIS = 1000;
-        // A reply up to this size leaves in one write. Above it (the first END's
-        // CLASSES frame, a very large COV) a frame goes to the socket as it is,
-        // so it is never copied.
+        // A reply up to this size leaves in one write. Above it (the CLASSES
+        // frame, sent once per connection with the class files; a MANIFEST
+        // frame once the app has hit several hundred classes; a very large
+        // COV) a frame goes to the socket as it is, so it is never copied.
         private static final int REPLY_BUFFER_BYTES = 64 * 1024;
 
         private final CoverageCollector collector;
@@ -1075,8 +1076,8 @@ public final class KeployDedupAgent {
                 open.setTcpNoDelay(true);
             } catch (SocketException e) {
                 log(Level.INFO, "Keploy dedup: TCP_NODELAY could not be set on the socket to " + host + ":" + port
-                        + " (" + e.getMessage() + "), so a reply sent in more than one write may wait about"
-                        + " 40 ms", null);
+                        + " (" + e.getClass().getSimpleName() + ": " + e.getMessage() + "), so a reply sent in"
+                        + " more than one write may wait about 40 ms", null);
             }
             socket = open;
             connectFailureLogged = false;
@@ -1187,13 +1188,18 @@ public final class KeployDedupAgent {
                         // transport likewise always publishes).
                         String cov = "COV " + GSON.toJson(new DedupPayload(command.testId, coverage));
                         phases.mark("json");
+                        // Past here, nothing can leave this ACK without the COV:
+                        // a failure building the CLASSES frame skips only that
+                        // frame. A COV that fits the buffer only fills it, so a
+                        // reply that fits the buffer still leaves in one write,
+                        // at the ACK.
+                        writeLine(out, cov);
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building
-                        // it must not skip the COV or the ACK.
+                        // it skips only this frame.
                         String classesFrame = collector.pollBytecodeFrame();
                         phases.mark("classes");
-                        writeLine(out, cov);
                         if (classesFrame != null) {
                             writeLine(out, classesFrame);
                         }
