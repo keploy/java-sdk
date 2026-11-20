@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.jacoco.core.internal.analysis.KeployBranchCoverage;
 import org.jacoco.core.internal.data.CRC64;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Label;
@@ -37,6 +38,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -299,6 +301,75 @@ public class BuildTableTest {
         // DedupController and Product are the two records past 1600 bytes.
         assertEquals(2, tooLarge);
         assertEquals(2, s.notMeasured);
+    }
+
+    @Test
+    public void aProbeMapPastItsBytesOrStepsIsRecordTooLargeWithNoProbeRecord() throws Exception {
+        String name = "gen/big/Returns";
+        byte[] bytes = BuildTableBudgetTest.returns(name, 200);
+        List<BuildTable.ClassFile> one = Collections.singletonList(new BuildTable.ClassFile(name, bytes));
+        Collect probes = new Collect();
+        BuildTable.write(one, new Collect(), probes, BuildTable.MAX_RECORD_BYTES);
+        assertEquals(1, probes.records.size());
+        // What the map takes: its record and newline (ASCII), and its probes' walks (the method has a line, so
+        // the table's walks are all of them).
+        int mapBytes = probes.records.get(0).length() + 1;
+        long[] steps = {0};
+        KeployBranchCoverage.analyze(bytes, new HashMap<>(), (m, r, h) -> steps[0] += h.steps);
+        // A chain of 200 early returns: each probe walks back over the checks before it.
+        assertTrue(steps[0] + " steps", steps[0] > 200L * 200);
+        assertTrue(mapBytes + " bytes", mapBytes > 100_000);
+
+        long[][] bounds = {{mapBytes, steps[0]}, {mapBytes - 1, steps[0]}, {mapBytes, steps[0] - 1}};
+        for (int i = 0; i < bounds.length; i++) {
+            boolean at = i == 0;
+            Collect table = new Collect();
+            Collect map = new Collect();
+            BuildTable.Summary s = BuildTable.write(one, table, map, BuildTable.MAX_RECORD_BYTES,
+                    (int) bounds[i][0], bounds[i][1]);
+            String why = "bytes " + bounds[i][0] + ", steps " + bounds[i][1];
+            assertEquals(why, 1, s.records);
+            assertEquals(why, at ? 0 : 1, s.notMeasured);
+            assertEquals(why, at ? 0 : 1, s.tooLarge);
+            assertEquals(why, 0, s.notMapped);
+            assertEquals(why, at ? 1 : 0, s.probeRecords);
+            assertEquals(why, at ? 1 : 0, map.records.size());
+            String rec = table.records.get(0);
+            if (at) {
+                assertTrue(rec, rec.contains("\"state\":\"ok\""));
+                assertEquals(probes.records.get(0), map.records.get(0));
+            } else {
+                assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"record_too_large\"}")
+                        && rec.endsWith("\"methods\":[]}"));
+            }
+        }
+    }
+
+    @Test
+    public void theTableAnswerBoundsTheHeapByTheIndexCountHeldAndReadsNoClassFile() {
+        long mb = 1 << 20;
+        String property = System.getProperty(BuildTable.MIN_HEAP_PROPERTY);
+        System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
+        try (Logs logs = new Logs()) {
+            // 63 MiB free. The classes are never read here: the count is the index's when it is read already.
+            BuildTable.Heap heap = new BuildTable.Heap(512 * mb, 449 * mb, true);
+            Supplier<List<BuildTable.ClassFile>> never = () -> {
+                throw new AssertionError("the answer read the classes");
+            };
+            File none = new File("/nonexistent/keploy-data.sock");
+            assertEquals(KeployDedupAgent.UNIX_REPLY_IGNORED + " reason=low_heap heap_free_mb=63 heap_needed_mb=66",
+                    BuildTable.answer(heap, 1025, never, none));
+            assertEquals("50,000 classes", KeployDedupAgent.UNIX_REPLY_IGNORED
+                    + " reason=low_heap heap_free_mb=63 heap_needed_mb=113", BuildTable.answer(heap, 50_000, never,
+                    none));
+            assertEquals("an index not read yet: the base alone", KeployDedupAgent.UNIX_REPLY_IGNORED
+                    + " reason=low_heap heap_free_mb=63 heap_needed_mb=64", BuildTable.answer(heap, -1, never, none));
+            assertEquals(3, logs.records.size());
+        } finally {
+            if (property != null) {
+                System.setProperty(BuildTable.MIN_HEAP_PROPERTY, property);
+            }
+        }
     }
 
     /** Reads frames back: each is KTB1, a length, a header line and the next bytes of the stream. */
@@ -1032,20 +1103,40 @@ public class BuildTableTest {
     }
 
     @Test
-    public void theFreeHeapATableNeedsIsTheEnvElseThePropertyElse256() {
-        assertEquals(256, BuildTable.minHeapMb(null, null));
-        assertEquals(256, BuildTable.minHeapMb(" ", ""));
-        assertEquals(100, BuildTable.minHeapMb("100", "50"));
-        assertEquals(50, BuildTable.minHeapMb(" ", "50"));
-        assertEquals(7, BuildTable.minHeapMb(" 7 ", null));
-        assertEquals(0, BuildTable.minHeapMb(null, "0"));
+    public void theFreeHeapATableNeedsIsTheEnvElseThePropertyElse64MiBAnd1KiBAClass() {
+        assertEquals(64, BuildTable.minHeapMb(null, null, 0));
+        assertEquals(65, BuildTable.minHeapMb(" ", "", 1));
+        assertEquals(65, BuildTable.minHeapMb(null, null, 1024));
+        assertEquals(66, BuildTable.minHeapMb(null, null, 1025));
+        assertEquals("50,000 classes", 113, BuildTable.minHeapMb(null, null, 50_000));
+        assertEquals(100, BuildTable.minHeapMb("100", "50", 50_000));
+        assertEquals(50, BuildTable.minHeapMb(" ", "50", 50_000));
+        assertEquals(7, BuildTable.minHeapMb(" 7 ", null, 50_000));
+        assertEquals(0, BuildTable.minHeapMb(null, "0", 50_000));
         try (Logs logs = new Logs()) {
-            assertEquals(256, BuildTable.minHeapMb("-1", "50"));
-            assertEquals(256, BuildTable.minHeapMb(null, "1g"));
+            assertEquals(113, BuildTable.minHeapMb("-1", "50", 50_000));
+            assertEquals(64, BuildTable.minHeapMb(null, "1g", 0));
             assertEquals(2, logs.records.size());
             assertEquals(Level.WARNING, logs.records.get(1).getLevel());
-            assertTrue(logs.records.get(1).getMessage(), logs.records.get(1).getMessage().contains("'1g'"));
+            assertTrue(logs.records.get(1).getMessage(), logs.records.get(1).getMessage().contains("'1g'")
+                    && logs.records.get(1).getMessage().contains("needs 64 MiB"));
         }
+    }
+
+    @Test
+    public void aTableOf50000ClassesIsBuiltWith113MiBFreeAndDeclinedWith112() {
+        // Both edges of the default bound, as the answer reads it: the count of the index's class list.
+        long mb = 1 << 20;
+        long need = BuildTable.minHeapMb(null, null, 50_000);
+        assertNull("113 MiB free is enough", BuildTable.lowHeap(new BuildTable.Heap(1024 * mb, (1024 - 113) * mb,
+                true), need));
+        try (Logs logs = new Logs()) {
+            assertEquals("reason=low_heap heap_free_mb=112 heap_needed_mb=113", BuildTable.lowHeap(
+                    new BuildTable.Heap(1024 * mb, (1024 - 113) * mb + 1, true), need));
+        }
+        // A 1 GiB pod with no -Xmx caps the heap at about 256 MiB: with its app's live set under 143 MiB, a
+        // 50,000-class app's table is built (the 256 MiB bound before declined every such pod).
+        assertNull(BuildTable.lowHeap(new BuildTable.Heap(256 * mb, 143 * mb, true), need));
     }
 
     @Test

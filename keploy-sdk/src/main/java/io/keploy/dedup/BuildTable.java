@@ -49,6 +49,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -110,6 +111,18 @@ final class BuildTable {
     static final int MAX_FRAME_BYTES = 1 << 20;
     /** A record (with its newline) larger than a whole inflated chunk can never be sent: record_too_large. */
     static final int MAX_RECORD_BYTES = 8 << 20;
+    /** The reason a unit's record is sent without its methods when it, or its probe map, is past a bound. */
+    static final String RECORD_TOO_LARGE = "record_too_large";
+    /**
+     * The most a unit's probe map may take: its records' bytes, newlines included (a table record's bound),
+     * and the steps its probes' walks take (KeployBranchCoverage.Hits#steps, about a second of CPU). A unit
+     * past either is sent not_measured record_too_large with no probe record, and its map is given up as
+     * soon as it is past one, so neither the heap nor the time it takes grows with it: a method of n early
+     * returns maps to about n * n ranges (its probe k covers the k checks before it), 4.4 MB at 1,000 and
+     * 43 MB at 3,000.
+     */
+    static final int MAX_MAP_BYTES = MAX_RECORD_BYTES;
+    static final long MAX_MAP_STEPS = 64L << 20;
     /** The first 4 bytes of a TABLE frame. */
     static final String MAGIC = "KTB1";
     /** The parts a TABLE answer streams, in this order: the table, then the probe map. */
@@ -151,8 +164,10 @@ final class BuildTable {
     /** The env var, then the system property, that set the free heap a table needs, in MiB; 0 turns it off. */
     static final String MIN_HEAP_ENV = "KEPLOY_COVERAGE_TABLE_MIN_HEAP_MB";
     static final String MIN_HEAP_PROPERTY = "keploy.coverage.table.min.heap.mb";
-    /** The free heap a table needs when neither is set, in MiB. */
-    static final long DEFAULT_MIN_HEAP_MB = 256;
+    /** The free heap a table needs when neither is set: this many MiB, plus {@link #MIN_HEAP_KB_PER_CLASS}. */
+    static final long MIN_HEAP_BASE_MB = 64;
+    /** ...and this many KiB per class the index holds (113 MiB at 50,000 classes). */
+    static final long MIN_HEAP_KB_PER_CLASS = 1;
     /** The reason a TABLE ask is declined when the heap is short: Keploy marks the run not_measured with it. */
     static final String LOW_HEAP = "low_heap";
 
@@ -161,11 +176,21 @@ final class BuildTable {
      * table needs ({@link #lowHeap}) the analysis is skipped and the reply is {@code IGNORED proto=2
      * reason=low_heap heap_free_mb=F heap_needed_mb=N}, with a WARNING in the app's log; else it is
      * {@link #request}'s ACK or IGNORED. The heap is read once, here, when Keploy asks: a send that runs after
-     * another one was checked when it was asked. It never blocks.
+     * another one was checked when it was asked. The bound takes loaded, the class count of the index when it
+     * is read already (the app's start or its first START read it, before Keploy asks for a table); when it is
+     * not read yet (loaded is -1: no START read it, the index was not warmed up and the JVM started the SDK
+     * from agentmain or start(), or with a JaCoCo of its own), the bound is the base alone, as the count is
+     * not known without reading the class files. The answer reads no class file and waits on no lock: classes
+     * is read on the send's thread. It never blocks.
      */
-    static String answer(Supplier<List<ClassFile>> classes, File dataSocket) {
-        String low = lowHeap(Heap.read(), minHeapMb(System.getenv(MIN_HEAP_ENV),
-                System.getProperty(MIN_HEAP_PROPERTY)));
+    static String answer(IntSupplier loaded, Supplier<List<ClassFile>> classes, File dataSocket) {
+        return answer(Heap.read(), loaded.getAsInt(), classes, dataSocket);
+    }
+
+    /** answer with the heap read and the index's class count (-1: not read yet) given. */
+    static String answer(Heap heap, int loaded, Supplier<List<ClassFile>> classes, File dataSocket) {
+        String low = lowHeap(heap, minHeapMb(System.getenv(MIN_HEAP_ENV), System.getProperty(MIN_HEAP_PROPERTY),
+                loaded));
         if (low != null) {
             return KeployDedupAgent.UNIX_REPLY_IGNORED + " " + low;
         }
@@ -191,14 +216,14 @@ final class BuildTable {
     }
 
     /**
-     * minHeapMb is the free heap a table needs, in MiB: env, else property (as the agent reads its settings),
-     * else {@link #DEFAULT_MIN_HEAP_MB}. A value that is not a whole number of 0 or more is logged and the
-     * default holds.
+     * minHeapMb is the free heap a table of the given number of classes needs, in MiB: env, else property (as
+     * the agent reads its settings), else {@link #defaultMinHeapMb}. A value that is not a whole number of 0 or
+     * more is logged and the default holds.
      */
-    static long minHeapMb(String env, String property) {
+    static long minHeapMb(String env, String property, int classes) {
         String v = env == null || env.trim().isEmpty() ? property : env;
         if (v == null || v.trim().isEmpty()) {
-            return DEFAULT_MIN_HEAP_MB;
+            return defaultMinHeapMb(classes);
         }
         try {
             long mb = Long.parseLong(v.trim());
@@ -209,9 +234,14 @@ final class BuildTable {
             // logged below
         }
         log(Level.WARNING, "Keploy coverage: " + MIN_HEAP_ENV + " (or -D" + MIN_HEAP_PROPERTY + ") is '" + v.trim()
-                + "', not a whole number of MiB (0 or more); the build table needs " + DEFAULT_MIN_HEAP_MB
+                + "', not a whole number of MiB (0 or more); the build table needs " + defaultMinHeapMb(classes)
                 + " MiB of free heap", null);
-        return DEFAULT_MIN_HEAP_MB;
+        return defaultMinHeapMb(classes);
+    }
+
+    /** defaultMinHeapMb is {@link #MIN_HEAP_BASE_MB} MiB plus 1 KiB per class, rounded up to a whole MiB. */
+    static long defaultMinHeapMb(int classes) {
+        return MIN_HEAP_BASE_MB + (Math.max(0, classes) * MIN_HEAP_KB_PER_CLASS + 1023) / 1024;
     }
 
     /**
@@ -452,6 +482,12 @@ final class BuildTable {
                 m.append(" (").append(s.notMapped).append(" of them as their probes could not be mapped: two"
                         + " different class files of one name, or a Keploy bug; the FINE log names each)");
             }
+            if (s.tooLarge > 0) {
+                m.append(", ").append(s.tooLarge).append(" not measured as too large (").append(RECORD_TOO_LARGE)
+                        .append(": a record over ").append(MAX_RECORD_BYTES >> 20).append(" MiB, or a probe map over ")
+                        .append(MAX_MAP_BYTES >> 20).append(" MiB or ").append(MAX_MAP_STEPS >> 20)
+                        .append(" Mi steps; the FINE log names each)");
+            }
             if (s.noLines > 0) {
                 m.append(", ").append(s.noLines)
                         .append(" class files without line numbers, so without lines: compile them with -g");
@@ -494,10 +530,12 @@ final class BuildTable {
         final int unnamed;
         /** How many of the not measured records JaCoCo analyzed but whose probes could not be mapped. */
         final int notMapped;
+        /** How many of the not measured records are record_too_large: the record or its probe map too large. */
+        final int tooLarge;
         /** How many probe-map records went to the probes sink: one per class name of each measured unit. */
         final int probeRecords;
 
-        Summary(String build, int records, int notMeasured, int noLines, int unnamed, int notMapped,
+        Summary(String build, int records, int notMeasured, int noLines, int unnamed, int notMapped, int tooLarge,
                 int probeRecords) {
             this.build = build;
             this.records = records;
@@ -505,6 +543,7 @@ final class BuildTable {
             this.noLines = noLines;
             this.unnamed = unnamed;
             this.notMapped = notMapped;
+            this.tooLarge = tooLarge;
             this.probeRecords = probeRecords;
         }
     }
@@ -537,28 +576,39 @@ final class BuildTable {
 
     static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes, int maxRecord)
             throws IOException {
+        return write(classes, sink, probes, maxRecord, MAX_MAP_BYTES, MAX_MAP_STEPS);
+    }
+
+    /** write with the bounds of a unit's table record (maxRecord) and probe map (maxMap bytes, maxSteps). */
+    static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes, int maxRecord, int maxMap,
+            long maxSteps) throws IOException {
         Grouped g = group(classes);
         if (g.build.isEmpty()) {
-            return new Summary("", 0, 0, 0, g.unnamed, 0, 0);
+            return new Summary("", 0, 0, 0, g.unnamed, 0, 0, 0);
         }
         String build = g.build;
         List<Unit> units = g.units;
         int notMeasured = 0;
         int noLines = 0;
         int notMapped = 0;
+        int tooLarge = 0;
         int probeRecords = 0;
         for (int i = 0; i < units.size(); i++) {
             // A unit written is dropped: what stays is the class list (names, ids), not the table.
             Unit u = units.set(i, null);
-            byte[] rec = u.record();
+            byte[] rec = u.record(new MapBudget(maxMap, maxSteps));
             if (rec.length + 1 > maxRecord) {
-                rec = u.notMeasured("record_too_large");
+                rec = u.notMeasured(RECORD_TOO_LARGE);
                 u.failed = true;
+                u.tooLarge = true;
             }
             if (u.failed) {
                 notMeasured++;
                 if (u.notMapped) {
                     notMapped++;
+                }
+                if (u.tooLarge) {
+                    tooLarge++;
                 }
             } else {
                 noLines += u.noLines;
@@ -569,7 +619,8 @@ final class BuildTable {
             }
             sink.record(build, rec);
         }
-        return new Summary(build, units.size(), notMeasured, noLines, g.unnamed, notMapped, probeRecords);
+        return new Summary(build, units.size(), notMeasured, noLines, g.unnamed, notMapped, tooLarge,
+                probeRecords);
     }
 
     /** What group makes of the index's classes: the build id ("" with none), the units in table order. */
@@ -702,6 +753,8 @@ final class BuildTable {
         boolean failed;
         // Set when JaCoCo analyzed the unit but its probes could not be mapped (so failed is set too).
         boolean notMapped;
+        // Set when the unit's record or its probe map is past its bound: record_too_large (failed is set too).
+        boolean tooLarge;
         // Class files with code but no line numbers: their methods have no leaf, so they are left out.
         int noLines;
         // The probe map's records for the unit's class files, in file order; set when record() succeeds.
@@ -780,8 +833,11 @@ final class BuildTable {
             return sorted;
         }
 
-        /** record analyzes the unit's class files and writes its record; any class JaCoCo refuses fails it. */
-        byte[] record() {
+        /**
+         * record analyzes the unit's class files and writes its record; any class JaCoCo refuses fails it, and
+         * a probe map past the budget makes it record_too_large.
+         */
+        byte[] record(MapBudget budget) {
             Map<String, ClassInfo> infos = new HashMap<>();
             List<Method> methods = new ArrayList<>();
             Set<String> methodIds = new HashSet<>();
@@ -824,23 +880,32 @@ final class BuildTable {
             List<byte[]> maps = new ArrayList<>();
             try {
                 String lastName = null;
-                String lastProbes = null;
+                byte[] last = null;
                 for (UnitFile f : sortedFiles()) {
-                    String p = ProbeMap.probes(f, byId);
+                    byte[] p = ProbeMap.record(id, f, ProbeMap.probes(f, byId, budget));
                     if (f.file.name.equals(lastName)) {
                         // Two class files of one name whose bytes differ (the index found both). Keploy finds a
                         // class's map by its name, as a test's hits name it, so they share one record: exact
                         // only when a hit of either one covers the same leaves.
-                        if (!p.equals(lastProbes)) {
+                        if (!ProbeMap.sameProbes(p, last)) {
                             throw new IllegalStateException(f.file.name + ": two class files of this name map"
                                     + " their probes differently");
                         }
+                        budget.drop();
                         continue;
                     }
-                    maps.add(ProbeMap.record(id, f, p));
+                    // The unit's records, newlines included, within the budget (its text alone was, as it grew).
+                    budget.take(p.length + 1);
+                    maps.add(p);
                     lastName = f.file.name;
-                    lastProbes = p;
+                    last = p;
                 }
+            } catch (TooLarge e) {
+                log(Level.FINE, "Keploy coverage: the probe map of " + path() + " is past its bound: " + e.getMessage(),
+                        null);
+                failed = true;
+                tooLarge = true;
+                return notMeasured(RECORD_TOO_LARGE);
             } catch (Exception | LinkageError e) {
                 // A class whose probes cannot be mapped exactly is not measured: its hits could not be read.
                 log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
@@ -1048,38 +1113,63 @@ final class BuildTable {
             }
         }
 
+        // Per counted instruction of the class file's analysis of this method (set by prepare): the unit
+        // leaf index of its line's code leaf, and of its first branch edge (-1: a line below 1, no leaf).
+        private int[] codeAt;
+        private int[] edgeAt;
+        private KeployBranchCoverage.Method prepared;
+
         /**
-         * hits is the set of unit-relative leaf indices the analysis covers: a line's code leaf when one of its
-         * instructions is covered, and the leaf of each covered branch edge. A line's edges are its leaves after
-         * its code leaf, in the order of the instructions and of each instruction's branches.
+         * prepare checks the analysis has the method's leaves ({@link #check}) and notes, per counted
+         * instruction, its leaves: its line's code leaf, and its line's edges after the code leaf in the
+         * order of the instructions and of each instruction's branches.
          */
-        BitSet hits(KeployBranchCoverage.Method a) {
-            BitSet out = new BitSet();
+        void prepare(KeployBranchCoverage.Method a) {
+            check(a);
+            codeAt = new int[a.lines.length];
+            edgeAt = new int[a.lines.length];
             Map<Integer, Integer> edges = new HashMap<>(); // line -> edges met so far
             for (int k = 0; k < a.lines.length; k++) {
                 int l = a.lines[k];
                 if (l < 1) {
+                    codeAt[k] = -1;
+                    edgeAt[k] = -1;
                     continue;
                 }
                 int leaf = codeLeaf(l);
                 if (leaf < 0) {
                     throw new IllegalStateException(id + ": line " + l + " has no code leaf");
                 }
-                int code = base + leaf;
-                if (a.covered[k]) {
-                    out.set(code);
-                }
                 Integer met = edges.get(l);
                 int e = met == null ? 0 : met;
-                for (boolean covered : a.branches[k]) {
-                    if (covered) {
-                        out.set(code + 1 + e);
-                    }
-                    e++;
-                }
-                edges.put(l, e);
+                codeAt[k] = base + leaf;
+                edgeAt[k] = base + leaf + 1 + e;
+                edges.put(l, e + a.branches[k].length);
             }
-            return out;
+            prepared = a;
+        }
+
+        /**
+         * hits sets in out the unit-relative leaf indices a probe covers: a line's code leaf when one of its
+         * instructions is covered, and the leaf of each covered branch edge.
+         */
+        void hits(KeployBranchCoverage.Method a, KeployBranchCoverage.Hits h, BitSet out) {
+            if (prepared != a) {
+                throw new IllegalStateException(id + ": probes of an analysis not prepared");
+            }
+            for (int j = 0; j < h.count; j++) {
+                int k = h.at[j];
+                if (codeAt[k] < 0) {
+                    continue;
+                }
+                out.set(codeAt[k]);
+                boolean[] b = h.branches[k];
+                for (int t = 0; t < b.length; t++) {
+                    if (b[t]) {
+                        out.set(edgeAt[k] + t);
+                    }
+                }
+            }
         }
     }
 
@@ -1089,9 +1179,11 @@ final class BuildTable {
      * covered branch edge's leaf. A probe covers more than its own line: JaCoCo marks every instruction on the
      * path that ends at the probe, so a test's leaves are the union of its probes' leaves.
      *
-     * <p>A method's probes never reach another method's instructions, so the class file is analyzed once and
-     * each probe replays only its own method (KeployBranchCoverage): the map costs, summed over the methods
-     * with a line, each method's probes times that method's size, on top of the table's own analysis.
+     * <p>The class file is analyzed once, and each probe's leaves are read off that analysis (KeployBranchCoverage
+     * walks back from the probe over the edges JaCoCo's builder wired): the map costs the class's size plus its
+     * probes' walks and their ranges' text, on top of the table's own analysis, with no object per probe. The
+     * walks and the text are quadratic in a chain of early returns, so a unit's map has a budget
+     * ({@link MapBudget}): past it the unit is record_too_large.
      */
     static final class ProbeMap {
         private ProbeMap() {
@@ -1099,43 +1191,88 @@ final class BuildTable {
 
         /**
          * record is the class file's probe-map record: {"class":vmName,"id":crc64,"unit":unitId,"probes":[...]},
-         * with probes as {@link #probes} gives them.
+         * with probes as {@link #probes} made them, written once into a buffer of its size.
          */
-        static byte[] record(String unitId, UnitFile f, String probes) {
-            StringBuilder sb = new StringBuilder(64 + probes.length());
+        static byte[] record(String unitId, UnitFile f, Ranges probes) {
+            StringBuilder sb = new StringBuilder(64 + f.file.name.length() + unitId.length());
             sb.append("{\"class\":");
             Json.string(sb, f.file.name);
             sb.append(",\"id\":\"").append(String.format("%016x", f.classId)).append("\",\"unit\":");
             Json.string(sb, unitId);
-            sb.append(",\"probes\":").append(probes).append('}');
-            return sb.toString().getBytes(StandardCharsets.UTF_8);
+            sb.append(",\"probes\":");
+            byte[] head = sb.toString().getBytes(StandardCharsets.UTF_8);
+            byte[] rec = new byte[head.length + probes.jsonLength() + 1];
+            System.arraycopy(head, 0, rec, 0, head.length);
+            int at = probes.json(rec, head.length);
+            rec[at] = '}';
+            return rec;
         }
 
         /**
-         * probes is the class file's probe map as JSON: one entry per probe (the class's probe count), each the
+         * sameProbes says whether two records of one class name and unit map their probes alike: they are
+         * alike but for the id (16 hex digits), which ends at the same place in both.
+         */
+        static boolean sameProbes(byte[] a, byte[] b) {
+            if (a.length != b.length) {
+                return false;
+            }
+            int id = indexOf(a, ID_KEY) + ID_KEY.length + 16;
+            for (int i = id; i < a.length; i++) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static final byte[] ID_KEY = ",\"id\":\"".getBytes(StandardCharsets.US_ASCII);
+
+        private static int indexOf(byte[] a, byte[] key) {
+            outer:
+            for (int i = 0; i + key.length <= a.length; i++) {
+                for (int j = 0; j < key.length; j++) {
+                    if (a[i + j] != key[j]) {
+                        continue outer;
+                    }
+                }
+                return i;
+            }
+            throw new IllegalStateException("a probe record with no id");
+        }
+
+        /**
+         * probes is the class file's probe map: one entry per probe (the class's probe count), each the
          * probe's leaves as half-open ranges of the unit's leaf indices, [start,end,start,end,...] ascending, no
          * two ranges touching. It throws when the class's lines or branches differ from the unit's methods (the
-         * same name under two roots), when a method with lines is in one and not in the other, or when a probe's
-         * replay meets other probes than the class's analysis did.
+         * same name under two roots), when a method with lines is in one and not in the other, or when a
+         * method's flow is not one KeployBranchCoverage maps; and TooLarge as soon as the unit's map is past
+         * its budget's bytes or steps.
          */
-        static String probes(UnitFile f, Map<String, Method> byId) {
+        static Ranges probes(UnitFile f, Map<String, Method> byId, MapBudget budget) {
             Map<String, KeployBranchCoverage.Method> shape = new HashMap<>();
-            Map<Integer, BitSet> hits = new HashMap<>();
             String prefix = "m:" + f.file.name + "#";
-            // One analysis of the class; each probe's coverage replays only its own method (KeployBranchCoverage).
+            Ranges ranges = new Ranges(budget);
+            // One analysis of the class; each probe's leaves come from it (KeployBranchCoverage).
             int total = Math.max(0, KeployBranchCoverage.analyze(f.file.bytes, shape,
                     new KeployBranchCoverage.EachProbe() {
+                        private Method method;
+
                         @Override
                         public boolean wants(KeployBranchCoverage.Method s) {
                             // Checked below: a method with no line has no leaf for its probes to cover.
-                            return byId.containsKey(prefix + s.name + s.desc);
+                            method = byId.get(prefix + s.name + s.desc);
+                            if (method == null) {
+                                return false;
+                            }
+                            method.prepare(s);
+                            return true;
                         }
 
                         @Override
-                        public void probe(KeployBranchCoverage.Method s, int r, KeployBranchCoverage.Method got) {
-                            Method m = byId.get(prefix + s.name + s.desc);
-                            m.check(got);
-                            hits.put(s.probes[r], m.hits(got));
+                        public void probe(KeployBranchCoverage.Method s, int r, KeployBranchCoverage.Hits h) {
+                            budget.step(h.steps);
+                            method.hits(s, h, ranges.bits);
+                            ranges.put(s.probes[r]);
                         }
                     }));
             int inShape = 0;
@@ -1164,22 +1301,188 @@ final class BuildTable {
                 throw new IllegalStateException(f.file.name + ": " + inTable + " methods in the table, "
                         + inShape + " in the probe analysis");
             }
-            StringBuilder sb = new StringBuilder(2 + 8 * total);
-            sb.append('[');
-            for (int p = 0; p < total; p++) {
-                sb.append(p > 0 ? ",[" : "[");
-                BitSet b = hits.get(p);
-                int at = b == null ? -1 : b.nextSetBit(0);
-                boolean first = true;
-                while (at >= 0) {
-                    int end = b.nextClearBit(at);
-                    sb.append(first ? "" : ",").append(at).append(',').append(end);
-                    first = false;
-                    at = b.nextSetBit(end);
-                }
-                sb.append(']');
+            ranges.close(f.file.name, total);
+            return ranges;
+        }
+    }
+
+    /**
+     * TooLarge ends a unit's probe map that is past its budget (MapBudget): the unit is sent not_measured
+     * record_too_large. It carries no stack trace: it is an answer, not a bug.
+     */
+    static final class TooLarge extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        TooLarge(String message) {
+            super(message, null, false, false);
+        }
+    }
+
+    /**
+     * MapBudget is what one unit's probe map may still take: bytes (its records', newlines included; its
+     * ranges' text counts as it is written, since a record holds it) and walk steps. Past either it throws
+     * TooLarge, so a map is given up as soon as it is past, not once it is made.
+     */
+    static final class MapBudget {
+        private final long maxBytes;
+        private final long maxSteps;
+        private long text;
+        private long bytes;
+        private long steps;
+
+        MapBudget(long maxBytes, long maxSteps) {
+            this.maxBytes = maxBytes;
+            this.maxSteps = maxSteps;
+        }
+
+        /** step counts a probe's walk. */
+        void step(int n) {
+            steps += n;
+            if (steps > maxSteps) {
+                throw new TooLarge("its probes' walks take more than " + maxSteps + " steps");
             }
-            return sb.append(']').toString();
+        }
+
+        /** grew counts ranges' text written for a class file's record not taken yet. */
+        void grew(int n) {
+            text += n;
+            if (bytes + text > maxBytes) {
+                throw new TooLarge("its probe map is more than " + maxBytes + " bytes");
+            }
+        }
+
+        /** drop forgets the text counted so far: its record shares the record before it. */
+        void drop() {
+            text = 0;
+        }
+
+        /** take counts a whole record (with its newline) in place of its text counted so far. */
+        void take(int n) {
+            text = 0;
+            bytes += n;
+            if (bytes > maxBytes) {
+                throw new TooLarge("its probe records are more than " + maxBytes + " bytes");
+            }
+        }
+    }
+
+    /**
+     * Ranges keeps a class file's probe map as it is made: each probe's leaf ranges written once, as ASCII
+     * JSON, into one buffer, with where each probe's text starts and ends, so a probe costs its text and no
+     * object, and the record copies the text once ({@link ProbeMap#record}).
+     */
+    static final class Ranges {
+        /** The probe being written: its leaves, set by the caller and cleared by {@link #put}. */
+        final BitSet bits = new BitSet();
+        private final MapBudget budget;
+        private byte[] text = new byte[256];
+        private int length;
+        private int[] from = new int[16];
+        private int[] to = new int[16];
+        private int total = -1;
+
+        Ranges(MapBudget budget) {
+            this.budget = budget;
+        }
+
+        /** put writes bits as the given probe's ranges ("start,end,..." ascending, none touching), then clears it. */
+        void put(int probe) {
+            if (probe >= from.length) {
+                int size = Math.max(probe + 1, from.length * 2);
+                from = Arrays.copyOf(from, size);
+                to = Arrays.copyOf(to, size);
+            }
+            if (to[probe] != 0) {
+                throw new IllegalStateException("probe " + probe + " mapped twice");
+            }
+            from[probe] = length;
+            int at = bits.nextSetBit(0);
+            while (at >= 0) {
+                int end = bits.nextClearBit(at);
+                int was = length;
+                if (length > from[probe]) {
+                    append(',');
+                }
+                appendInt(at);
+                append(',');
+                appendInt(end);
+                budget.grew(length - was);
+                at = bits.nextSetBit(end);
+            }
+            // to is one past the text's end, so 0 is "not mapped" and an empty range list is still mapped.
+            to[probe] = length + 1;
+            bits.clear();
+        }
+
+        private void append(char c) {
+            if (length == text.length) {
+                text = Arrays.copyOf(text, text.length * 2);
+            }
+            text[length++] = (byte) c;
+        }
+
+        private void appendInt(int v) {
+            if (v < 0) {
+                throw new IllegalStateException("leaf " + v);
+            }
+            int digits = 1;
+            for (int x = v; x >= 10; x /= 10) {
+                digits++;
+            }
+            if (length + digits > text.length) {
+                text = Arrays.copyOf(text, Math.max(text.length * 2, length + digits));
+            }
+            for (int i = length + digits - 1; i >= length; i--) {
+                text[i] = (byte) ('0' + v % 10);
+                v /= 10;
+            }
+            length += digits;
+        }
+
+        /** close ends the map at the class's probe count (total): a probe at or past it is a bug. */
+        void close(String className, int total) {
+            for (int p = total; p < from.length; p++) {
+                if (to[p] != 0) {
+                    throw new IllegalStateException(className + ": probe " + p + " of " + total + " probes");
+                }
+            }
+            this.total = total;
+        }
+
+        /** jsonLength is the length of {@link #json}'s text: [ ], one [ ] a probe, the commas, the ranges. */
+        int jsonLength() {
+            long n = 2 + 3L * total - (total > 0 ? 1 : 0);
+            for (int p = 0; p < total && p < from.length; p++) {
+                if (to[p] != 0) {
+                    n += to[p] - 1 - from[p];
+                }
+            }
+            if (total < 0 || n > Integer.MAX_VALUE - 1024) {
+                throw new IllegalStateException("a probe map of " + n + " bytes");
+            }
+            return (int) n;
+        }
+
+        /**
+         * json writes the map into out at at and returns where it ends: one entry per probe of the class,
+         * [] for a probe no method mapped.
+         */
+        int json(byte[] out, int at) {
+            out[at++] = '[';
+            for (int p = 0; p < total; p++) {
+                if (p > 0) {
+                    out[at++] = ',';
+                }
+                out[at++] = '[';
+                if (p < from.length && to[p] != 0) {
+                    int n = to[p] - 1 - from[p];
+                    System.arraycopy(text, from[p], out, at, n);
+                    at += n;
+                }
+                out[at++] = ']';
+            }
+            out[at++] = ']';
+            return at;
         }
     }
 
