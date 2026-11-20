@@ -19,6 +19,11 @@ jobs:
   verify:
     name: JDK ${{ matrix.java-version }}
     runs-on: ubuntu-latest
+    # A hung step would otherwise hold its runner for GitHub's default of
+    # 6 hours. The steps below take about 2 minutes on 4 CPUs with an empty
+    # Maven cache, and the smoke stops its own Tomcat case after 180 s, so a
+    # run that reaches 10 minutes is stuck, not slow.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -36,10 +41,34 @@ jobs:
           cache: maven
 
       - name: Build
-        run: mvn -B -DskipTests clean verify
+        # With the release profile, signing skipped (CI holds no release
+        # key), as release.yml builds the jars it deploys.
+        run: mvn -B -P release -Dgpg.skip -DskipTests clean verify
+
+      - name: Record keploy-sdk's jars
+        # The main jar and the sources jar. The javadoc jar is left out:
+        # every build makes it anew, with the time in its pages.
+        shell: bash
+        run: |
+          jars=$(ls keploy-sdk/target/keploy-sdk-*.jar | grep -v -e '-javadoc\.jar$')
+          sha256sum $jars | tee "$RUNNER_TEMP/keploy-sdk-jars.sha256"
 
       - name: Unit tests
         run: mvn -B -pl keploy-sdk -am test
 
       - name: Smoke test Java agent
         run: ./scripts/smoke-javaagent.sh
+
+      - name: A build without clean leaves keploy-sdk's jars as they were
+        # release.yml smoke-tests the jar of its clean build, then deploys to
+        # Maven Central from a second pass over the same target/, with the
+        # release profile and no clean. That pass must leave the bytes of the
+        # jar and of the sources jar as they were (shade writes the jar anew
+        # on every pass; only its bytes must stay), or Central gets jars
+        # other than the ones built and tested. The unit tests above stop at
+        # the test phase, but what they change in target/classes would reach
+        # the jar in this pass, so they are checked too.
+        shell: bash
+        run: |
+          mvn -B -P release -Dgpg.skip -DskipTests verify
+          sha256sum -c "$RUNNER_TEMP/keploy-sdk-jars.sha256"

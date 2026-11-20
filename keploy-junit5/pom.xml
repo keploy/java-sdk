@@ -181,5 +181,21 @@
                 </plugins>
             </build>
         </profile>
+        <!-- keploy-junit5 runs on Java 8. Built on JDK 9 or later (the release is
+             built on JDK 17), javac checks the code against Java 8's API too
+             (release 8), not only Java 8's class file version: with source and
+             target 1.8 alone it compiles a call to an API Java 8 lacks, which
+             fails only on Java 8, at run time (NoSuchMethodError,
+             NoClassDefFoundError). JDK 8's javac has no release option, and
+             needs none. The root pom has the same profile for its modules. -->
+        <profile>
+            <id>java8-api</id>
+            <activation>
+                <jdk>[9,)</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.release>8</maven.compiler.release>
+            </properties>
+        </profile>
     </profiles>
 </project>

@@ -71,12 +71,13 @@
             <version>${jacoco.version}</version>
         </dependency>
         <dependency>
-            <!-- jacocoagent.jar, carried unchanged, which the SDK starts with
-                 includes= the app's classes when the command attaches no JaCoCo
-                 agent of its own (EmbeddedJacoco). Same version as above. -->
+            <!-- The tests' copy of jacocoagent.jar (AgentJar). keploy-sdk.jar
+                 carries only the jacocoagent.jar inside this artifact, unpacked
+                 below as io/keploy/dedup/jacocoagent.jar, not its AgentJar class. -->
             <groupId>org.jacoco</groupId>
             <artifactId>org.jacoco.agent</artifactId>
             <version>${jacoco.version}</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.kohlschutter.junixsocket</groupId>
@@ -94,10 +95,118 @@
             <version>4.13.2</version>
             <scope>test</scope>
         </dependency>
+        <!-- The servers whose requests END waits for, run by ServerTailTest.
+             The last lines that run Java 8, as the SDK's tests do. -->
+        <dependency>
+            <groupId>org.apache.tomcat.embed</groupId>
+            <artifactId>tomcat-embed-core</artifactId>
+            <version>9.0.98</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-servlet</artifactId>
+            <version>9.4.57.v20241219</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.undertow</groupId>
+            <artifactId>undertow-servlet</artifactId>
+            <version>2.2.37.Final</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.jboss.spec.javax.servlet</groupId>
+                    <artifactId>jboss-servlet-api_4.0_spec</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- keploy-sdk's own license, Apache 2.0, which the Gson and junixsocket
+                 the jar carries are under too: META-INF/LICENSE in the jar, next to
+                 THIRD-PARTY-NOTICES.txt and JaCoCo's LICENSE-EPL-2.0.txt. -->
+            <resource>
+                <directory>${project.basedir}/..</directory>
+                <includes>
+                    <include>LICENSE</include>
+                </includes>
+                <targetPath>META-INF</targetPath>
+            </resource>
+        </resources>
         <plugins>
+            <plugin>
+                <!-- jacocoagent.jar, carried unchanged, which the SDK starts with
+                     includes= the app's classes when the command attaches no JaCoCo
+                     agent of its own (EmbeddedJacoco). It goes in under
+                     io/keploy/dedup, not at the jar's root where org.jacoco.agent
+                     keeps it, and without that artifact's AgentJar class:
+                     keploy-sdk.jar is on the system class path, so either one would
+                     be what an app's own org.jacoco.agent finds in a loader that
+                     asks the system class loader first (Spring Boot's
+                     BOOT-INF/lib), and an app's own on the class path ahead of
+                     keploy-sdk.jar would be the agent the SDK starts. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <!-- Unpacked once into target/jacocoagent, which also holds the
+                             plugin's marker, so deleting that directory unpacks it again.
+                             It is not unpacked into target/classes: replacing the file there
+                             would touch its directory, and jar:jar would rebuild the jar on
+                             release.yml's no-clean deploy pass. -->
+                        <id>unpack-jacocoagent</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>unpack</goal>
+                        </goals>
+                        <configuration>
+                            <markersDirectory>${project.build.directory}/jacocoagent/markers</markersDirectory>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.jacoco</groupId>
+                                    <artifactId>org.jacoco.agent</artifactId>
+                                    <version>${jacoco.version}</version>
+                                    <type>jar</type>
+                                    <includes>jacocoagent.jar</includes>
+                                    <outputDirectory>${project.build.directory}/jacocoagent/classes/io/keploy/dedup</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!-- Copies the unpacked jacocoagent.jar into target/classes. It copies
+                     only a missing or older file, so a cleared target/classes gets it
+                     back and a build without clean leaves the jar as it was. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-jacocoagent</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.build.directory}/jacocoagent/classes</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -117,7 +226,7 @@
                                         <Premain-Class>io.keploy.dedup.KeployDedupAgent</Premain-Class>
                                         <Agent-Class>io.keploy.dedup.KeployDedupAgent</Agent-Class>
                                         <Can-Redefine-Classes>false</Can-Redefine-Classes>
-                                        <Can-Retransform-Classes>false</Can-Retransform-Classes>
+                                        <Can-Retransform-Classes>true</Can-Retransform-Classes>
                                         <Implementation-Title>${project.name}</Implementation-Title>
                                         <Implementation-Version>${project.version}</Implementation-Version>
                                         <Automatic-Module-Name>io.keploy.sdk</Automatic-Module-Name>
