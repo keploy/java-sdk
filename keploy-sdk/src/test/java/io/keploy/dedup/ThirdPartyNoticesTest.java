@@ -1,6 +1,7 @@
 package io.keploy.dedup;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -37,12 +38,10 @@ public class ThirdPartyNoticesTest {
         assertContains(notices, "the classes of org.jacoco:org.jacoco.core:" + jacoco + ",");
         String agent = mavenVersion("org.jacoco", "org.jacoco.agent");
         assertContains(notices, "- jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:"
-                + agent + ";");
-        // keploy-sdk.jar carries AgentJar from the same artifact, under its own
-        // name, outside jacocoagent.jar.
-        assertContains(notices, "- the class " + org.jacoco.agent.AgentJar.class.getName()
-                + " and its package-info, unchanged and not renamed, from"
-                + " org.jacoco:org.jacoco.agent:" + agent + ",");
+                + agent + ", at " + EmbeddedJacoco.AGENT_JAR + " in the jar;");
+        // keploy-sdk.jar carries only that jar from the artifact, not its AgentJar.
+        assertFalse("THIRD-PARTY-NOTICES.txt still names AgentJar, which keploy-sdk.jar no longer carries",
+                notices.contains("AgentJar"));
 
         String asm = org.objectweb.asm.ClassReader.class.getPackage().getImplementationVersion();
         assertNotNull("ASM's jar names no Implementation-Version", asm);

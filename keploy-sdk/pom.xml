@@ -71,12 +71,13 @@
             <version>${jacoco.version}</version>
         </dependency>
         <dependency>
-            <!-- jacocoagent.jar, carried unchanged, which the SDK starts with
-                 includes= the app's classes when the command attaches no JaCoCo
-                 agent of its own (EmbeddedJacoco). Same version as above. -->
+            <!-- The tests' copy of jacocoagent.jar (AgentJar). keploy-sdk.jar
+                 carries only the jacocoagent.jar inside this artifact, unpacked
+                 below as io/keploy/dedup/jacocoagent.jar, not its AgentJar class. -->
             <groupId>org.jacoco</groupId>
             <artifactId>org.jacoco.agent</artifactId>
             <version>${jacoco.version}</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.kohlschutter.junixsocket</groupId>
@@ -140,6 +141,73 @@
         </resources>
         <plugins>
             <plugin>
+                <!-- jacocoagent.jar, carried unchanged, which the SDK starts with
+                     includes= the app's classes when the command attaches no JaCoCo
+                     agent of its own (EmbeddedJacoco). It goes in under
+                     io/keploy/dedup, not at the jar's root where org.jacoco.agent
+                     keeps it, and without that artifact's AgentJar class:
+                     keploy-sdk.jar is on the system class path, so either one would
+                     be what an app's own org.jacoco.agent finds in a loader that
+                     asks the system class loader first (Spring Boot's
+                     BOOT-INF/lib), and an app's own on the class path ahead of
+                     keploy-sdk.jar would be the agent the SDK starts. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <!-- Unpacked once into target/jacocoagent, which also holds the
+                             plugin's marker, so deleting that directory unpacks it again.
+                             It is not unpacked into target/classes: replacing the file there
+                             would touch its directory, and jar:jar would rebuild the jar on
+                             release.yml's no-clean deploy pass. -->
+                        <id>unpack-jacocoagent</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>unpack</goal>
+                        </goals>
+                        <configuration>
+                            <markersDirectory>${project.build.directory}/jacocoagent/markers</markersDirectory>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.jacoco</groupId>
+                                    <artifactId>org.jacoco.agent</artifactId>
+                                    <version>${jacoco.version}</version>
+                                    <type>jar</type>
+                                    <includes>jacocoagent.jar</includes>
+                                    <outputDirectory>${project.build.directory}/jacocoagent/classes/io/keploy/dedup</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!-- Copies the unpacked jacocoagent.jar into target/classes. It copies
+                     only a missing or older file, so a cleared target/classes gets it
+                     back and a build without clean leaves the jar as it was. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-jacocoagent</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.build.directory}/jacocoagent/classes</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.3</version>
@@ -197,19 +265,6 @@
                                         <exclude>META-INF/*.RSA</exclude>
                                         <exclude>module-info.class</exclude>
                                         <exclude>META-INF/versions/*/module-info.class</exclude>
-                                    </excludes>
-                                </filter>
-                                <!-- org.jacoco.core and org.jacoco.agent each hold an about.html
-                                     at their root, and the jar can hold one. The jar's is
-                                     org.jacoco.core's, the notice of the classes it carries
-                                     renamed. org.jacoco.agent's, the notice of AgentJar and
-                                     jacocoagent.jar, is the same file as the about.html inside
-                                     jacocoagent.jar, which the jar carries whole.
-                                     scripts/smoke-javaagent.sh checks both. -->
-                                <filter>
-                                    <artifact>org.jacoco:org.jacoco.agent</artifact>
-                                    <excludes>
-                                        <exclude>about.html</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

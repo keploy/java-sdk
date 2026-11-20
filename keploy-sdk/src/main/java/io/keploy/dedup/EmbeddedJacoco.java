@@ -1,7 +1,5 @@
 package io.keploy.dedup;
 
-import org.jacoco.agent.AgentJar;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -32,13 +30,18 @@ import java.util.jar.Manifest;
  * <p>
  * JaCoCo is Eclipse Public License 2.0 software
  * (https://github.com/jacoco/jacoco), carried unchanged as the
- * {@code jacocoagent.jar} of {@code org.jacoco:org.jacoco.agent}; see
- * {@code META-INF/THIRD-PARTY-NOTICES.txt} in keploy-sdk.jar.
+ * {@code jacocoagent.jar} of {@code org.jacoco:org.jacoco.agent}, at
+ * {@link #AGENT_JAR} in keploy-sdk.jar; see
+ * {@code META-INF/THIRD-PARTY-NOTICES.txt} there.
  */
 final class EmbeddedJacoco {
 
     // A class every JaCoCo agent jar holds.
     static final String RUNTIME_CLASS = "org/jacoco/agent/rt/RT.class";
+    // The JaCoCo agent jar keploy-sdk.jar carries, under keploy-sdk's own
+    // package, so neither an app's own org.jacoco.agent nor this one is
+    // found in the other's place (keploy-sdk/pom.xml).
+    static final String AGENT_JAR = "io/keploy/dedup/jacocoagent.jar";
     private static final String JAVAAGENT = "-javaagent:";
     // A pattern takes in at most this many parts of a class's package, so
     // that an app over many packages needs only a few patterns; a package of
@@ -189,6 +192,18 @@ final class EmbeddedJacoco {
     }
 
     /**
+     * agentJar opens the JaCoCo agent jar keploy-sdk.jar carries, at
+     * {@link #AGENT_JAR} of loader, the one that loaded keploy-sdk.
+     */
+    static InputStream agentJar(ClassLoader loader) {
+        InputStream input = loader.getResourceAsStream(AGENT_JAR);
+        if (input == null) {
+            throw new IllegalStateException("keploy-sdk.jar holds no " + AGENT_JAR);
+        }
+        return input;
+    }
+
+    /**
      * start writes the JaCoCo agent jar into a new temp dir only this user
      * can read, puts it on the system classpath as the JVM does a
      * -javaagent jar, and runs its premain with options. It returns
@@ -202,7 +217,7 @@ final class EmbeddedJacoco {
         dir.deleteOnExit();
         File jar = new File(dir, "jacocoagent.jar");
         jar.deleteOnExit();
-        try (InputStream input = AgentJar.getResourceAsStream()) {
+        try (InputStream input = agentJar(EmbeddedJacoco.class.getClassLoader())) {
             Files.copy(input, jar.toPath());
         }
         String premain;
