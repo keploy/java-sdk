@@ -283,8 +283,10 @@ public class ControlSocketTest {
             Files.write(out.toPath(), f.bytes);
             ids.add(String.format("%016x", CRC64.classId(f.bytes)));
         }
-        // Keploy's codecoverage.JavaBuildID: the ids as 16 hex, sorted (as hex: unsigned), joined by newlines.
-        String build = "jv1-" + sha256(String.join("\n", ids).getBytes(StandardCharsets.UTF_8)).substring(0, 32);
+        // Keploy's codecoverage.JavaBuildID: the table format, the analyzer's JaCoCo release, then
+        // the ids as 16 hex, sorted (as hex: unsigned), joined by newlines.
+        String build = "jv1-" + sha256(("keploy-java-table 1\njacoco " + IndexReportTest.jacocoCore() + "\n"
+                + String.join("\n", ids)).getBytes(StandardCharsets.UTF_8)).substring(0, 32);
         assertNotEquals("the file no class reader reads is in the build",
                 new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim(), build);
         System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());

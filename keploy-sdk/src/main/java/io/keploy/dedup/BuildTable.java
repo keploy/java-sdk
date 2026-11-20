@@ -107,6 +107,15 @@ final class BuildTable {
 
     /** The control-socket command Keploy sends for the build table. */
     static final String COMMAND = "TABLE";
+    /**
+     * The table's format, F of the build id (IndexReport.buildId): the contract's section 3.3 records as this
+     * class writes them and the probe map of leaf ranges, with every bound that decides what a class's records
+     * are ({@link #MAX_RECORD_BYTES}, {@link #MAX_MAP_BYTES}, {@link #MAX_MAP_STEPS}, how
+     * KeployBranchCoverage.Hits counts its steps, and the reason a unit past one is not measured). Raise it in
+     * any release where the table or probe-map records written for the same class bytes can change, so they
+     * name another build. The KTB1 frames that carry the records are not in it: their header's "v" names them.
+     */
+    static final int TABLE_FORMAT = 1;
     /** A TABLE frame's size cap, magic and length included. */
     static final int MAX_FRAME_BYTES = 1 << 20;
     /** A record (with its newline) larger than a whole inflated chunk can never be sent: record_too_large. */

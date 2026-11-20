@@ -259,6 +259,26 @@ public final class SmokeHarness {
             throw new IllegalStateException("the INDEX report did not name keploy-sdk " + wantSdkVersion
                     + " and JaCoCo " + wantJacocoVersion + " in " + mode + ": " + report);
         }
+        // The build id's V: the release of the JaCoCo core keploy-sdk.jar carries renamed, as the SDK reads it
+        // from that core's own version resource, must be the one the core's Maven build named. A jar whose
+        // renamed core cannot say gives V "", and a JaCoCo upgrade would then keep the build id. It is read as
+        // the SDK loaded here (from the class path, with this mode's agents and libraries) and from the jar alone
+        // in a loader of its own with no parent, so V is the jar's own core's with nothing else visible.
+        File sdkJar = new File(System.getProperty("smoke.sdkJar"));
+        String core = corePomVersion(sdkJar);
+        String analyzer = analyzerJacoco(ClassLoader.getSystemClassLoader());
+        URLClassLoader alone = new URLClassLoader(new URL[] {sdkJar.toURI().toURL()}, null);
+        String analyzerAlone;
+        try {
+            analyzerAlone = analyzerJacoco(alone);
+        } finally {
+            alone.close();
+        }
+        if (core.isEmpty() || !core.equals(analyzer) || !core.equals(analyzerAlone)) {
+            throw new IllegalStateException("keploy-sdk's analyzer names JaCoCo '" + analyzer + "' ('"
+                    + analyzerAlone + "' in a loader of its own) and its org.jacoco.core is '" + core + "' in " + mode);
+        }
+        System.out.println(mode + ": analyzer JaCoCo " + analyzer);
         String ownLibraries = System.getProperty("smoke.ownLibraries", "");
         if (!ownLibraries.isEmpty()) {
             loadsItsOwn(ownLibraries);
@@ -382,6 +402,28 @@ public final class SmokeHarness {
             }
             String version = manifest == null ? null : manifest.getMainAttributes().getValue("Implementation-Version");
             return version == null ? "" : version;
+        }
+    }
+
+    // analyzerJacoco is IndexReport.Analyzer.JACOCO, V of the build id, of keploy-sdk as loader loads it.
+    private static String analyzerJacoco(ClassLoader loader) throws Exception {
+        java.lang.reflect.Field field = Class.forName("io.keploy.dedup.IndexReport$Analyzer", true, loader)
+                .getDeclaredField("JACOCO");
+        field.setAccessible(true);
+        return (String) field.get(null);
+    }
+
+    private static String corePomVersion(File jar) throws Exception {
+        try (JarFile file = new JarFile(jar)) {
+            java.util.zip.ZipEntry entry = file.getEntry("META-INF/maven/org.jacoco/org.jacoco.core/pom.properties");
+            if (entry == null) {
+                return "";
+            }
+            java.util.Properties p = new java.util.Properties();
+            try (InputStream in = file.getInputStream(entry)) {
+                p.load(in);
+            }
+            return p.getProperty("version", "");
         }
     }
 

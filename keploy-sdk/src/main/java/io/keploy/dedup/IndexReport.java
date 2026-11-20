@@ -11,6 +11,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * IndexReport is the INDEX record: what the SDK took as the app's classes,
@@ -53,7 +55,8 @@ final class IndexReport {
     // Serialized in this order, by name.
     final String kind = KIND;
     final int v = VERSION;
-    // "jv1-" + 32 hex (buildId), or "" when the index holds no class.
+    // "jv1-" + 32 hex (buildId: the class ids, the table format and the analyzer's JaCoCo), or "" when the
+    // index holds no class.
     final String build;
     final String source;
     // How the JVM was launched, or why the app's classes could not be told
@@ -143,24 +146,87 @@ final class IndexReport {
     }
 
     /**
-     * buildId is the build's id from its classes' JaCoCo ids: "jv1-" and the
-     * first 32 hex of classIdsSum, or "" when there is no id. Keploy's
-     * codecoverage.JavaBuildID computes the same from the same ids. It is the
-     * one build id: the INDEX record and the build table (BuildTable.write)
-     * both take it over the id of every class the index holds, read or not,
-     * so Keploy finds the table under the build the INDEX record named.
+     * buildId is the build's id: "jv1-" and the first 32 lowercase hex of the sha256 over the ASCII bytes
+     * {@code "keploy-java-table " F "\n" "jacoco " V "\n"} and the ids as {@link #classIdsSum} joins them, where
+     * F is the build table's format ({@link BuildTable#TABLE_FORMAT}) and V the JaCoCo release the SDK's analyzer
+     * runs ({@link Analyzer#JACOCO}); "" when there is no id. Keploy's codecoverage.JavaBuildID computes the same
+     * from the same bytes. It is the one build id: the INDEX record and the build table (BuildTable.write) both
+     * take it over the id of every class the index holds, read or not, so Keploy finds the table under the build
+     * the INDEX record named. An SDK whose table or probe map can differ for the same class bytes (another F or
+     * V) names another build, so Keploy never holds its table against one an older SDK saved for that build.
      */
     static String buildId(long[] ids) {
-        return ids.length == 0 ? "" : "jv1-" + classIdsSum(ids).substring(0, 32);
+        return buildId(ids, BuildTable.TABLE_FORMAT, Analyzer.JACOCO);
+    }
+
+    /** buildId is the build id of the ids for a table of format F and an analyzer of JaCoCo release V. */
+    static String buildId(long[] ids, int format, String jacoco) {
+        if (ids.length == 0) {
+            return "";
+        }
+        return "jv1-" + sha256("keploy-java-table " + format + "\njacoco " + jacoco + "\n", joinedIds(ids))
+                .substring(0, 32);
+    }
+
+    /**
+     * Analyzer holds V of the build id apart from IndexReport, so reading it (JaCoCo's class init and its
+     * version resource) is paid by the first build id alone, never by the class-id helpers a testcase's END
+     * runs before its ACK, and a JaCoCo core that cannot load leaves those helpers working.
+     */
+    static final class Analyzer {
+        /**
+         * JACOCO is the release of the JaCoCo core whose analyzer builds the table (the one keploy-sdk.jar
+         * carries renamed, read from its own JaCoCo.VERSION less the build qualifier, as "0.8.15"), not the
+         * measuring agent's: an attached JaCoCo agent of another version only records the probes. "" if that
+         * core cannot say (its version resource is missing), so the INDEX record and the table still name one
+         * build; the release smoke test fails a jar whose analyzer cannot say.
+         */
+        static final String JACOCO = analyzerJacoco();
+
+        private Analyzer() {
+        }
+
+        private static String analyzerJacoco() {
+            try {
+                return release(org.jacoco.core.JaCoCo.VERSION);
+            } catch (Throwable t) {
+                // JaCoCo reads its version from a resource bundle when the class loads (MissingResourceException,
+                // ExceptionInInitializerError): a jar without it still names one build in INDEX and TABLE.
+                // Logged here, not through BuildTable, whose link needs the JaCoCo core that may be missing.
+                try {
+                    Logger.getLogger(IndexReport.class.getName()).log(Level.INFO, "Keploy coverage: keploy-sdk"
+                            + " cannot read its JaCoCo core's version, so the build id names none", t);
+                } catch (Throwable ignored) {
+                    // Nowhere left to say it: the log is what failed.
+                }
+                return "";
+            }
+        }
+    }
+
+    /** release is a JaCoCo version less its build qualifier: its first three dot-separated parts. */
+    static String release(String version) {
+        int dots = 0;
+        for (int i = 0; i < version.length(); i++) {
+            if (version.charAt(i) == '.' && ++dots == 3) {
+                return version.substring(0, i);
+            }
+        }
+        return version;
     }
 
     /**
      * classIdsSum is the sha256, as 64 lowercase hex, over the ids sorted as
      * unsigned numbers, de-duplicated, each as 16 lowercase hex, joined by
-     * newlines. The build id is its first 32 hex; a build table unit's hash
-     * is all of it, over that unit's class ids.
+     * newlines: a build table unit's hash, over that unit's class ids.
      */
     static String classIdsSum(long[] ids) {
+        return sha256("", joinedIds(ids));
+    }
+
+    // joinedIds is the ids sorted as unsigned numbers, de-duplicated, each as 16 lowercase hex, joined by
+    // newlines, with none after the last.
+    private static String joinedIds(long[] ids) {
         long[] sorted = Arrays.copyOf(ids, ids.length);
         // Unsigned order: flipping the sign bit maps it onto signed order.
         for (int i = 0; i < sorted.length; i++) {
@@ -177,14 +243,21 @@ final class IndexReport {
             }
             joined.append(hexId(sorted[i] ^ Long.MIN_VALUE));
         }
-        byte[] sum;
+        return joined.toString();
+    }
+
+    // sha256 is the sha256, as 64 lowercase hex, over the ASCII bytes of prefix and then of ids, taken in
+    // two parts so the ids (about 17 bytes a class) are not copied once more behind the prefix.
+    private static String sha256(String prefix, String ids) {
+        MessageDigest digest;
         try {
-            sum = MessageDigest.getInstance("SHA-256").digest(joined.toString().getBytes(StandardCharsets.US_ASCII));
+            digest = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
             // Every Java platform has SHA-256.
             throw new IllegalStateException(e);
         }
-        return hex(sum);
+        digest.update(prefix.getBytes(StandardCharsets.US_ASCII));
+        return hex(digest.digest(ids.getBytes(StandardCharsets.US_ASCII)));
     }
 
     /** hex is b as lowercase hex, two digits a byte: the build id's and a TABLE frame's sha256. */

@@ -8,6 +8,7 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
@@ -23,6 +25,7 @@ import java.util.zip.ZipEntry;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -31,27 +34,125 @@ public class IndexReportTest {
     @Rule
     public final TemporaryFolder tmp = new TemporaryFolder();
 
-    // Keploy's codecoverage.JavaBuildID of the ids 1, 0xff and
-    // 0xffffffffffffffff (its TestBuildIDs): sha256 over
-    // "0000000000000001\n00000000000000ff\nffffffffffffffff".
-    private static final String GO_BUILD_ID = "jv1-73ab094cbaa75db7d27e1cc885ca2260";
+    // The build id's golden vectors (shared with Keploy's codecoverage.JavaBuildID): the sha256 over
+    // "keploy-java-table 1\njacoco 0.8.15\n0000000000000001\n00000000000000ff\nffffffffffffffff".
+    private static final long[] GOLDEN_IDS = {1, 0xff, 0xffffffffffffffffL};
+    private static final String GOLDEN_BUILD_ID = "jv1-ac2499a6a1d337817534c44eb82f6ab3";
 
     @Test
     public void theBuildIdIsKeploysForTheSameIdsInAnyOrderAndRepeated() {
-        assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {1, 0xff, 0xffffffffffffffffL}));
+        assertEquals(GOLDEN_BUILD_ID, IndexReport.buildId(GOLDEN_IDS, 1, "0.8.15"));
         // A signed sort puts 0xffffffffffffffff (-1) first, a different id.
-        assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
-        assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {0xff, 0xffffffffffffffffL, 0xff, 1}));
+        assertEquals(GOLDEN_BUILD_ID,
+                IndexReport.buildId(new long[] {0xffffffffffffffffL, 1, 0xff, 1}, 1, "0.8.15"));
+        assertEquals(GOLDEN_BUILD_ID,
+                IndexReport.buildId(new long[] {0xff, 0xffffffffffffffffL, 0xff, 1}, 1, "0.8.15"));
+    }
+
+    @Test
+    public void anotherTableFormatOrAnalyzerNamesAnotherBuildOfTheSameClasses() {
+        // An SDK whose table can differ for the same class bytes must not name the build an older SDK saved a
+        // table under: Keploy would refuse every later save of it (409 build_table_mismatch).
+        assertEquals("jv1-32f6f460d59e38d89bac87928b9421ae", IndexReport.buildId(GOLDEN_IDS, 2, "0.8.15"));
+        assertEquals("jv1-776b07757cb4a25493b652ff31a8ca86", IndexReport.buildId(GOLDEN_IDS, 1, "0.8.14"));
+        // Over the ids alone (the build id before the format and the analyzer were in it): none of the above.
+        assertEquals("jv1-73ab094cbaa75db7d27e1cc885ca2260",
+                "jv1-" + IndexReport.classIdsSum(GOLDEN_IDS).substring(0, 32));
+    }
+
+    @Test
+    public void theSdksBuildIdIsOfThisTablesFormatAndItsAnalyzersJacoco() {
+        assertEquals(1, BuildTable.TABLE_FORMAT);
+        assertEquals(jacocoCore(), IndexReport.Analyzer.JACOCO);
+        assertEquals(IndexReport.buildId(GOLDEN_IDS, 1, jacocoCore()), IndexReport.buildId(GOLDEN_IDS));
+    }
+
+    /**
+     * An END reads class ids (hexId, classId) before its ACK; only the build id needs V, so those helpers must
+     * not run JaCoCo's class init and its version lookup. Run in a loader of its own over the SDK's classes,
+     * JaCoCo's core and Gson, so the classes it loads are its own to count.
+     */
+    @Test
+    public void theClassIdHelpersNeverLoadTheAnalyzersJacoco() throws Exception {
+        URL[] urls = {
+            IndexReport.class.getProtectionDomain().getCodeSource().getLocation(),
+            org.jacoco.core.JaCoCo.class.getProtectionDomain().getCodeSource().getLocation(),
+            com.google.gson.Gson.class.getProtectionDomain().getCodeSource().getLocation(),
+        };
+        byte[] classBytes = Files.readAllBytes(new File(urls[0].toURI()).toPath()
+                .resolve(IndexReport.class.getName().replace('.', '/') + ".class"));
+        try (Counting loader = new Counting(urls)) {
+            Class<?> report = Class.forName(IndexReport.class.getName(), true, loader);
+            assertTrue(report != IndexReport.class);
+            assertEquals("0000000000000001", call(report, "hexId", long.class, 1L));
+            assertEquals(IndexReport.classId(classBytes), call(report, "classId", byte[].class, classBytes));
+            assertFalse("V was read by a class-id helper", loader.loaded(IndexReport.Analyzer.class.getName()));
+            assertFalse("JaCoCo's version was loaded by a class-id helper",
+                    loader.loaded(org.jacoco.core.JaCoCo.class.getName()));
+            assertEquals(IndexReport.buildId(new long[] {1}), call(report, "buildId", long[].class, new long[] {1}));
+            assertTrue(loader.loaded(IndexReport.Analyzer.class.getName()));
+            assertTrue(loader.loaded(org.jacoco.core.JaCoCo.class.getName()));
+        }
+    }
+
+    private static final class Counting extends URLClassLoader {
+        Counting(URL[] urls) {
+            super(urls, null);
+        }
+
+        boolean loaded(String name) {
+            return findLoadedClass(name) != null;
+        }
+    }
+
+    private static Object call(Class<?> c, String name, Class<?> parameter, Object argument) throws Exception {
+        java.lang.reflect.Method m = c.getDeclaredMethod(name, parameter);
+        m.setAccessible(true);
+        return m.invoke(null, argument);
+    }
+
+    @Test
+    public void aJacocoReleaseIsItsVersionLessTheBuildQualifier() {
+        assertEquals("0.8.15", IndexReport.release("0.8.15.202606040825"));
+        assertEquals("0.8.15", IndexReport.release("0.8.15"));
+        assertEquals("1.0.0", IndexReport.release("1.0.0.SNAPSHOT.x"));
+        assertEquals("0.8", IndexReport.release("0.8"));
+        assertEquals("", IndexReport.release(""));
+    }
+
+    /**
+     * jacocoCore is the release of the org.jacoco.core jar the analyzer runs, as its Maven build named it (its
+     * pom.properties, read from the jar JaCoCo's class was loaded from, so another jar's pom.properties on the
+     * class path cannot answer), not as JaCoCo.VERSION says: what IndexReport.Analyzer.JACOCO must be.
+     */
+    static String jacocoCore() {
+        try {
+            File jar = new File(org.jacoco.core.JaCoCo.class.getProtectionDomain().getCodeSource().getLocation()
+                    .toURI());
+            assertTrue(jar + " is org.jacoco.core's jar", jar.isFile());
+            try (java.util.jar.JarFile file = new java.util.jar.JarFile(jar)) {
+                ZipEntry entry = file.getEntry("META-INF/maven/org.jacoco/org.jacoco.core/pom.properties");
+                assertNotNull("org.jacoco.core's pom.properties in " + jar, entry);
+                Properties p = new Properties();
+                try (InputStream in = file.getInputStream(entry)) {
+                    p.load(in);
+                }
+                String version = p.getProperty("version");
+                assertTrue(version, version.matches("\\d+\\.\\d+\\.\\d+"));
+                return version;
+            }
+        } catch (IOException | java.net.URISyntaxException e) {
+            throw new AssertionError(e);
+        }
     }
 
     // The whole sha256 over the same three ids: what a build table unit's
-    // hash is for a unit of those class ids. The build id is its first 32 hex.
+    // hash is for a unit of those class ids.
     private static final String IDS_SUM = "73ab094cbaa75db7d27e1cc885ca22604fb30a4555ebac8aae6e264612a027d0";
 
     @Test
-    public void theUnitHashIsTheWholeSumAndTheBuildIdItsFirstHalf() {
+    public void theUnitHashIsTheSumOverTheUnitsIdsAlone() {
         assertEquals(IDS_SUM, IndexReport.classIdsSum(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
-        assertEquals(GO_BUILD_ID, IndexReport.buildId(new long[] {0xffffffffffffffffL, 1, 0xff, 1}));
     }
 
     @Test
@@ -92,13 +193,13 @@ public class IndexReportTest {
 
     @Test
     public void theReportIsOneSmallJsonObjectWithNoClassList() {
-        IndexReport report = new IndexReport(GO_BUILD_ID, IndexReport.SOURCE_DERIVED, "java -jar /app/app.jar",
+        IndexReport report = new IndexReport(GOLDEN_BUILD_ID, IndexReport.SOURCE_DERIVED, "java -jar /app/app.jar",
                 Arrays.asList("/app/libs/b.jar", "/app/classes", "/app/libs/b.jar"),
                 Collections.singletonList("org.acme"), 3, "org.acme.*", IndexReport.JACOCO_EMBEDDED, "2.2.0", "0.8.15");
         JsonObject json = JsonParser.parseString(report.toJson()).getAsJsonObject();
         assertEquals("index", json.get("kind").getAsString());
         assertEquals(1, json.get("v").getAsInt());
-        assertEquals(GO_BUILD_ID, json.get("build").getAsString());
+        assertEquals(GOLDEN_BUILD_ID, json.get("build").getAsString());
         assertEquals("derived", json.get("source").getAsString());
         assertEquals("java -jar /app/app.jar", json.get("launch").getAsString());
         assertEquals("[\"/app/classes\",\"/app/libs/b.jar\"]", json.get("roots").toString());
