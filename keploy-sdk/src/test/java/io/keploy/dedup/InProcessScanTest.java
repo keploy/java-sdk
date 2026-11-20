@@ -991,7 +991,7 @@ public class InProcessScanTest {
         // A filter's code after the chain runs after Keploy has the response
         // and sent END: read at once, END missed it, and the next START
         // cleared it as background, so the test's hits changed run to run.
-        System.setProperty("keploy.java.end.wait.ms", "10000");
+        System.setProperty("keploy.java.end.wait.ms", "2000");
         System.setProperty("keploy.java.dedup.diagnostics", "true");
         boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
@@ -1004,7 +1004,7 @@ public class InProcessScanTest {
                 long began = System.nanoTime();
                 assertEquals(TAKEN, send("END test-set-0/test-1"));
                 assertTrue("END ended when the request did, not at its bound",
-                        System.nanoTime() - began < TimeUnit.SECONDS.toNanos(5));
+                        System.nanoTime() - began < TimeUnit.MILLISECONDS.toNanos(1500));
                 assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1,2]}}",
                         data.next());
                 assertTrue(logged(" END test-set-0/test-1 took ").contains(" requests="));
@@ -1059,7 +1059,7 @@ public class InProcessScanTest {
     public void anEndDoesNotWaitForARequestThatCameInBeforeItsStart() throws Exception {
         // A stream opened before the test, or a request of the test before
         // cut at its bound: never this test's to wait for.
-        System.setProperty("keploy.java.end.wait.ms", "20000");
+        System.setProperty("keploy.java.end.wait.ms", "2000");
         boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
         try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath);
                 Request stream = new Request(hit(shop, 0), hit(shop, 3))) {
@@ -1069,7 +1069,7 @@ public class InProcessScanTest {
             shop[1] = true;
             long began = System.nanoTime();
             assertEquals(TAKEN, send("END test-set-0/test-1"));
-            assertTrue(System.nanoTime() - began < TimeUnit.SECONDS.toNanos(10));
+            assertTrue(System.nanoTime() - began < TimeUnit.MILLISECONDS.toNanos(1500));
             assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
                     data.next());
         }
@@ -1105,15 +1105,15 @@ public class InProcessScanTest {
         assertEquals(0, KeployDedupAgent.endWaitMillis());
         System.setProperty("keploy.java.end.wait.ms", "1500");
         assertEquals(1500, KeployDedupAgent.endWaitMillis());
-        System.setProperty("keploy.java.end.wait.ms", "10000");
-        assertEquals(10000, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "2000");
+        assertEquals(2000, KeployDedupAgent.endWaitMillis());
         assertEquals(0, count("its most"));
-        System.setProperty("keploy.java.end.wait.ms", "10001");
-        assertEquals(10000, KeployDedupAgent.endWaitMillis());
-        System.setProperty("keploy.java.end.wait.ms", "60000");
-        assertEquals(10000, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "2001");
+        assertEquals(2000, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "10000");
+        assertEquals(2000, KeployDedupAgent.endWaitMillis());
         assertEquals("said once in a JVM", 1,
-                count("KEPLOY_JAVA_END_WAIT_MS is 10001, so a test's END waits up to 10000 ms, its most"));
+                count("KEPLOY_JAVA_END_WAIT_MS is 2001, so a test's END waits up to 2000 ms, its most"));
         assertEquals(1, count("its most"));
         System.setProperty("keploy.java.end.wait.ms", "-1");
         assertEquals(200, KeployDedupAgent.endWaitMillis());

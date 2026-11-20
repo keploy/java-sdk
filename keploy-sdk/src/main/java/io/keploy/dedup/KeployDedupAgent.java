@@ -114,9 +114,9 @@ public final class KeployDedupAgent {
     private static final int SOCKET_BACKLOG = 50;
     // How long a test's END waits for its requests to finish by default.
     static final long DEFAULT_END_WAIT_MILLIS = 200;
-    // Well inside the 30 s Keploy's k8s collector waits for an END's answer:
-    // past it, the record would be lost.
-    static final long MAX_END_WAIT_MILLIS = 10000;
+    // A longer wait would cost each test more than the SDK's overhead
+    // target. Keploy must wait longer than this for an END's answer.
+    static final long MAX_END_WAIT_MILLIS = 2000;
     private static final AtomicBoolean END_WAIT_INVALID_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean END_WAIT_CAPPED_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean NOT_COUNTED_LOGGED = new AtomicBoolean(false);
@@ -284,11 +284,13 @@ public final class KeployDedupAgent {
         }
 
         if (instrumentation != null) {
-            // JaCoCo's transformer first: transformers run in the order they
-            // were added, so JaCoCo instruments, and ids, a server's class as
-            // the index read it, and ServerEntries counts in JaCoCo's copy.
+            // JaCoCo's transformer first: it cannot retransform, so the JVM
+            // runs it before ServerEntries, which can, and so in the order
+            // they were added where the jar may not retransform: JaCoCo
+            // instruments, and ids, a server's class as the index read it,
+            // and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
-            countRequests(instrumentation);
+            countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco));
         }
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
@@ -301,16 +303,28 @@ public final class KeployDedupAgent {
     // countRequests makes the requests of the app's server count in
     // RequestGate (ServerEntries), so that a test's END waits for them to
     // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0. From premain, before the
-    // app's main loads its server, and after startJacoco: a JaCoCo agent
-    // attached after keploy-sdk.jar adds its transformer after this one, so
-    // it ids the changed server class, which classMismatch then names when
-    // the index holds it.
-    private static void countRequests(Instrumentation instrumentation) {
+    // app's main loads its server, and after startJacoco. ServerEntries can
+    // retransform when keploy-sdk.jar's manifest lets it (Can-Retransform-
+    // Classes), so the JVM runs it after JaCoCo's transformer even when a
+    // JaCoCo agent was attached after keploy-sdk.jar. In a jar that does not
+    // let it, it runs in the order it was added, before such a JaCoCo's,
+    // which then ids the changed server class: classMismatch names it when
+    // the index holds it, and the log says so when the JVM has a JaCoCo
+    // agent of its own (jacocoAttached).
+    private static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
         if (endWaitMillis() == 0) {
             return;
         }
         try {
-            instrumentation.addTransformer(new ServerEntries(), false);
+            boolean retransformable = instrumentation.isRetransformClassesSupported();
+            if (!retransformable && jacocoAttached) {
+                log(Level.WARNING, "Keploy dedup: the jar keploy-sdk.jar runs from has no Can-Retransform-Classes:"
+                        + " true in its manifest, or this JVM cannot retransform, so a JaCoCo agent attached after"
+                        + " it instruments the server classes it changes, and each test's classMismatch names them"
+                        + " when Keploy measures them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
+                        null);
+            }
+            instrumentation.addTransformer(new ServerEntries(), retransformable);
         } catch (RuntimeException e) {
             log(Level.WARNING, "Keploy dedup does not count the app's requests: their server could not be"
                     + " changed to count them", e);
@@ -333,7 +347,7 @@ public final class KeployDedupAgent {
 
     // endWaitMillis is how long a test's END waits for the requests that
     // came in since its START to finish: KEPLOY_JAVA_END_WAIT_MS (or
-    // keploy.java.end.wait.ms), 200 by default, 10000 at most; 0 turns the
+    // keploy.java.end.wait.ms), 200 by default, 2000 at most; 0 turns the
     // wait and the count off.
     static long endWaitMillis() {
         String value = envOrProperty("KEPLOY_JAVA_END_WAIT_MS", "keploy.java.end.wait.ms", "").trim();
@@ -345,8 +359,8 @@ public final class KeployDedupAgent {
             if (millis > MAX_END_WAIT_MILLIS) {
                 if (END_WAIT_CAPPED_LOGGED.compareAndSet(false, true)) {
                     log(Level.WARNING, "Keploy dedup: KEPLOY_JAVA_END_WAIT_MS is " + millis + ", so a test's END"
-                            + " waits up to " + MAX_END_WAIT_MILLIS + " ms, its most, so that Keploy has the"
-                            + " test's record before it stops waiting for it", null);
+                            + " waits up to " + MAX_END_WAIT_MILLIS + " ms, its most: a longer wait would cost"
+                            + " each test more than the agent's overhead allows", null);
                 }
                 return MAX_END_WAIT_MILLIS;
             }

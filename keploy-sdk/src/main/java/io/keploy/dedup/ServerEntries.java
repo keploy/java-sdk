@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -31,8 +32,18 @@ import org.objectweb.asm.Type;
  * {@link RequestGate#exit(Object)}, however it returns or throws. Nothing
  * else in the server's code changes.
  *
- * <p>Only classes loaded from now on change (keploy-sdk.jar asks for no
- * retransform), so a server started before the SDK is not counted, and
+ * <p>It is added as a transformer that can retransform, so the JVM runs it
+ * after every transformer that cannot, as JaCoCo's, whatever the order the
+ * agents were attached in: JaCoCo instruments, and ids, the server's own
+ * class, and this wraps JaCoCo's copy. When another agent retransforms or
+ * redefines a class this changed as it loaded, the JVM passes the class as
+ * it was before this changed it (a retransform) or the redefiner's bytes (a
+ * redefine), and this changes them again, as the JVM refuses a class that
+ * has lost a method, unless they already carry the change, which the JVM
+ * then takes as they are.
+ *
+ * <p>Only classes loaded from now on change (the JVM refuses a method added
+ * to a loaded class), so a server started before the SDK is not counted, and
  * neither is one whose class loader does not see keploy-sdk.jar's classes,
  * as in a module system (both said in the log). A server in a named module
  * (Tomcat's jar on the module path) is counted: the JVM makes a module whose
@@ -79,6 +90,10 @@ final class ServerEntries implements ClassFileTransformer {
     private static final Set<String> COUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNCOUNTED = new CopyOnWriteArraySet<>();
 
+    // The classes this changed as they loaded, by their loader: the ones it
+    // changes again when another agent retransforms them.
+    private final Map<ClassLoader, Set<String>> changed = new WeakHashMap<>();
+
     private static void add(String server, String className, String... methods) {
         ENTRIES.put(className, new Entry(server, new HashSet<>(Arrays.asList(methods))));
     }
@@ -104,7 +119,7 @@ final class ServerEntries implements ClassFileTransformer {
     public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined,
             ProtectionDomain protectionDomain, byte[] classfileBuffer) {
         if (classBeingRedefined != null) {
-            return null;
+            return changedAgain(loader, className, classfileBuffer);
         }
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
@@ -128,13 +143,24 @@ final class ServerEntries implements ClassFileTransformer {
                         + " reads its hits without waiting for its requests to finish");
                 return null;
             }
-            byte[] wrapped = wrap(classfileBuffer, entry.methods);
-            if (wrapped == null) {
+            // Bytes that already carry the change (another agent's copy of
+            // the class as this changed it) count as they are.
+            boolean carries = carriesChange(classfileBuffer);
+            byte[] wrapped = carries ? null : wrap(classfileBuffer, entry.methods);
+            if (!carries && wrapped == null) {
                 LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.server + "'s requests: "
                         + name + " has no method " + entry.methods + " to count them in");
                 return null;
             }
             COUNTED.add(entry.server);
+            synchronized (changed) {
+                Set<String> names = changed.get(loader);
+                if (names == null) {
+                    names = new HashSet<>();
+                    changed.put(loader, names);
+                }
+                names.add(className);
+            }
             LOGGER.log(Level.INFO, "Keploy dedup counts " + entry.server + "'s requests (" + name + "): a"
                     + " test's END waits for them to finish");
             return wrapped;
@@ -142,6 +168,45 @@ final class ServerEntries implements ClassFileTransformer {
             // Never fail the server's class: it loads unchanged.
             LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.server + "'s requests: " + name
                     + " could not be changed", t);
+            return null;
+        }
+    }
+
+    // changedAgain is a class another agent retransforms or redefines, when
+    // this changed it as it loaded. The JVM passes a retransform the class as
+    // it was before this changed it, and a redefine the redefiner's bytes,
+    // and refuses a class that has lost a method this added: so either is
+    // changed again, unless the bytes already carry the change (a redefiner's
+    // copy of the class as this changed it), which the JVM then takes as they
+    // are. Any other class is left as it is: it was loaded unchanged, and the
+    // JVM refuses a method added to it.
+    private byte[] changedAgain(ClassLoader loader, String className, byte[] classfile) {
+        Entry entry = ENTRIES.get(className);
+        if (entry == null) {
+            // Most classes an agent retransforms: no lock taken for them.
+            return null;
+        }
+        synchronized (changed) {
+            Set<String> names = changed.get(loader);
+            if (names == null || !names.contains(className)) {
+                return null;
+            }
+        }
+        String name = className.replace('/', '.');
+        try {
+            if (carriesChange(classfile)) {
+                return null;
+            }
+            byte[] wrapped = wrap(classfile, entry.methods);
+            if (wrapped == null) {
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.server + "'s requests in " + name
+                        + " as another agent changes it: it has no method " + entry.methods + " any more, so"
+                        + " the JVM refuses that agent's change");
+            }
+            return wrapped;
+        } catch (Throwable t) {
+            LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.server + "'s requests in " + name
+                    + " as another agent changes it, so the JVM refuses that agent's change", t);
             return null;
         }
     }
@@ -160,6 +225,23 @@ final class ServerEntries implements ClassFileTransformer {
 
     private static boolean isInterface(byte[] classfile) {
         return (new ClassReader(classfile).getAccess() & Opcodes.ACC_INTERFACE) != 0;
+    }
+
+    // carriesChange says whether the class already declares a method this
+    // renamed: only wrap names a method so.
+    static boolean carriesChange(byte[] classfile) {
+        final boolean[] carries = {false};
+        new ClassReader(classfile).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                if (name.startsWith(RENAMED)) {
+                    carries[0] = true;
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return carries[0];
     }
 
     // wrap returns the class with each method of these names counted, or

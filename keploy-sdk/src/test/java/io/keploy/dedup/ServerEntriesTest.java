@@ -1,5 +1,6 @@
 package io.keploy.dedup;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -12,6 +13,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
@@ -277,9 +279,81 @@ public class ServerEntriesTest {
                 getClass().getClassLoader()));
         assertNotNull(logged("WARNING Keploy dedup does not count Tomcat's requests:"
                 + " org.apache.catalina.connector.CoyoteAdapter has no method"));
-        // A class redefined later is never changed: the SDK asks for no retransform.
+        // A class retransformed later that was not changed as it loaded (it
+        // loaded before the SDK started) is left as it is.
         assertNull(new ServerEntries().transform(getClass().getClassLoader(), ENTRIES[0][0], Object.class, null,
                 standIn(ENTRIES[0][0], "service", false, Opcodes.V1_8, 0)));
+    }
+
+    @Test
+    public void aClassChangedAsItLoadedIsChangedAgainWhenRetransformed() throws Exception {
+        ServerEntries entries = new ServerEntries();
+        ClassLoader loader = getClass().getClassLoader();
+        byte[] classfile = standIn(ENTRIES[0][0], "service", false, Opcodes.V1_8, 0);
+        assertNull("loaded before the SDK started",
+                entries.transform(loader, ENTRIES[0][0], Object.class, null, classfile));
+        byte[] loaded = entries.transform(loader, ENTRIES[0][0], null, null, classfile);
+        assertNotNull(loaded);
+        // Another agent retransforms it: the JVM passes the class as it was
+        // before the SDK changed it, which changes it the same way again.
+        byte[] again = entries.transform(loader, ENTRIES[0][0], Object.class, null, classfile);
+        assertArrayEquals(loaded, again);
+        Class<?> type = load(ENTRIES[0][0], again);
+        runningInBody = -1;
+        type.getMethod("service", BODY_TYPES).invoke(type.getDeclaredConstructor().newInstance(), args(4));
+        assertEquals("counted while the server ran it", 1, runningInBody);
+        // Not another loader's class of that name, nor another class of that
+        // loader, nor a class another ServerEntries changed.
+        try (URLClassLoader other = new URLClassLoader(new URL[0], loader)) {
+            assertNull(entries.transform(other, ENTRIES[0][0], Object.class, null, classfile));
+        }
+        assertNull(entries.transform(loader, ENTRIES[6][0], Object.class, null,
+                standIn(ENTRIES[6][0], "executeRootHandler", true, Opcodes.V1_8, 0)));
+        assertNull(new ServerEntries().transform(loader, ENTRIES[0][0], Object.class, null, classfile));
+        assertNull(logged.toString(), logged("WARNING"));
+        // A class it cannot change again: the JVM refuses that retransform,
+        // and the log says why.
+        assertNull(entries.transform(loader, ENTRIES[0][0], Object.class, null,
+                standIn(ENTRIES[0][0], "other", false, Opcodes.V1_8, 0)));
+        assertNotNull(logged.toString(), logged("WARNING Keploy dedup cannot count Tomcat's requests in"
+                + " org.apache.catalina.connector.CoyoteAdapter as another agent changes it: it has no method"));
+        assertNull(entries.transform(loader, ENTRIES[0][0], Object.class, null, new byte[] {1, 2, 3}));
+        assertNotNull(logged.toString(), logged("WARNING Keploy dedup cannot count Tomcat's requests in"
+                + " org.apache.catalina.connector.CoyoteAdapter as another agent changes it, so the JVM"));
+    }
+
+    @Test
+    public void bytesThatAlreadyCarryTheChangeAreTakenAsTheyAre() throws Exception {
+        ServerEntries entries = new ServerEntries();
+        ClassLoader loader = getClass().getClassLoader();
+        byte[] classfile = standIn(ENTRIES[0][0], "service", false, Opcodes.V1_8, 0);
+        byte[] loaded = entries.transform(loader, ENTRIES[0][0], null, null, classfile);
+        assertNotNull(loaded);
+        assertTrue(ServerEntries.carriesChange(loaded));
+        assertFalse(ServerEntries.carriesChange(classfile));
+        // Changed twice, the class would declare the renamed method twice,
+        // which the JVM refuses.
+        try {
+            load(ENTRIES[0][0], ServerEntries.wrap(loaded, Collections.singleton("service")));
+            fail("a class changed twice loaded");
+        } catch (ClassFormatError e) {
+            // As the JVM refuses it.
+        }
+        // Another agent redefines it with its copy of the class as the SDK
+        // changed it (as a tool's dump has it): the JVM takes it as it is.
+        assertNull(entries.transform(loader, ENTRIES[0][0], Object.class, null, loaded));
+        // A class that loads with the change already in it counts as it is,
+        // and a later redefine with the server's own class changes it again.
+        ServerEntries fresh = new ServerEntries();
+        logged.clear();
+        assertNull(fresh.transform(loader, ENTRIES[0][0], null, null, loaded));
+        assertNotNull(logged.toString(), logged("INFO Keploy dedup counts Tomcat's requests"));
+        Class<?> type = load(ENTRIES[0][0], loaded);
+        runningInBody = -1;
+        type.getMethod("service", BODY_TYPES).invoke(type.getDeclaredConstructor().newInstance(), args(4));
+        assertEquals("counted while the server ran it", 1, runningInBody);
+        assertArrayEquals(loaded, fresh.transform(loader, ENTRIES[0][0], Object.class, null, classfile));
+        assertNull(logged.toString(), logged("WARNING"));
     }
 
     @Test

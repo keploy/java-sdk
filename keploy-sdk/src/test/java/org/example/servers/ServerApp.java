@@ -57,6 +57,7 @@ public final class ServerApp {
             } catch (NoSuchMethodException e) {
                 // Java 8.
             }
+            Retransformer.afterStart();
         } else if (args[0].equals("jetty")) {
             Server jetty = new Server(0);
             ServletContextHandler context = new ServletContextHandler();
