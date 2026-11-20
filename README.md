@@ -170,6 +170,13 @@ supported ceiling is the lower of two limits — not one:
 
 Both currently sit at **Java 26**, so that is the effective ceiling.
 
+The floor is **Java 8**. keploy-sdk's and keploy-junit5's own code is compiled
+for Java 8 (class file version 52), and, when built on JDK 9 or later (the
+releases are built on JDK 17), against Java 8's API too (keploy-sdk since
+2.2.0, keploy-junit5 from its first release): a call in that code to a method
+Java 8 lacks fails the build, instead of failing on Java 8 at run time. The
+check covers this repo's code, not the libraries shaded into `keploy-sdk.jar`.
+
 ### Why this repo is part of the ceiling
 
 It is easy to assume the JaCoCo agent alone decides this. It does not. The dedup
