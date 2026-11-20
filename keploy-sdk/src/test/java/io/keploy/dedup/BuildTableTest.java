@@ -794,6 +794,19 @@ public class BuildTableTest {
             records.add(record);
         }
 
+        /** mine is the records the calling thread logged: a send of another row's class may log meanwhile. */
+        @SuppressWarnings("deprecation") // getLongThreadID is JDK 16+; this SDK builds for Java 8
+        List<LogRecord> mine() {
+            int me = (int) Thread.currentThread().getId();
+            List<LogRecord> out = new ArrayList<>();
+            for (LogRecord r : records) {
+                if (r.getThreadID() == me) {
+                    out.add(r);
+                }
+            }
+            return out;
+        }
+
         @Override
         public void flush() {
         }

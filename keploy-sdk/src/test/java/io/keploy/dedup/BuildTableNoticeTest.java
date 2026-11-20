@@ -14,6 +14,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -22,7 +23,8 @@ import static org.junit.Assert.assertTrue;
  */
 public class BuildTableNoticeTest {
 
-    private static final String EXIT_LINE = "Keploy coverage: the JVM exits before its build table is sent whole: ";
+    private static final String EXIT_LINE = "Keploy coverage: the JVM is exiting while its build table is being sent."
+            + " So far: ";
     private static final String DEFERRED = "Keploy asked for the build table while this JVM sends one";
     private static final String PACED = "Keploy coverage: the build table's send is paced";
 
@@ -70,17 +72,25 @@ public class BuildTableNoticeTest {
         BuildTablePacerTest.Clock c = new BuildTablePacerTest.Clock();
         try (BuildTableTest.Logs logs = new BuildTableTest.Logs()) {
             BuildTable.Pacer p = new BuildTable.Pacer(c);
+            c.now += 400_000_000L; // the index's read: 400 ms, longer than the 1st unit owes, so the floor is hit
             p.begin(1_000);
             for (int i = 0; i < 1_000; i++) {
                 c.now += 1_000_000L;
-                c.gc += 1; // 1 ms of collections a unit: over the 0.5% goal, so it waits after many units
+                c.gc += 1; // 1 ms of collections a unit: over the 0.5% goal, so it waits
                 c.units++;
                 p.unitDone(1);
             }
             assertTrue("the row's pacer waited " + c.sleeps.size() + " times", c.sleeps.size() > 1);
             List<String> got = lines(logs, PACED);
             assertEquals(got.toString(), 1, got.size());
-            assertTrue(got.get(0), got.get(0).contains("for its 1000), and none ends the table past 50000 ms"));
+            // The 1st unit owes 200 ms, less its 401 ms: 0, never below. The 2nd owes 200 ms less its 1 ms: 199 ms,
+            // its first wait (200 times the 2 ms of collections less the 402 ms since the start is below 0).
+            assertTrue(got.get(0), got.get(0).contains("the JVM's collections took 2 ms in the 402 ms since it began,"
+                    + " so it owes 199 ms now (each ms of collection adds 200, and each ms the send works or waits"
+                    + " takes one off, never below 0)"));
+            assertTrue(got.get(0), got.get(0).contains("its waits add up to at most its own work time (plus one"
+                    + " sleep's overrun), so the table takes about twice as long as unpaced at most, and none ends the"
+                    + " table past 20000 ms from its start"));
         }
     }
 
@@ -104,7 +114,7 @@ public class BuildTableNoticeTest {
     public void aJvmThatExitsMidSendSaysSoOnce() throws Exception {
         String out = runChild("mid");
         assertEquals(out, 1, count(out, EXIT_LINE));
-        assertTrue(out, out.contains(" class files were analyzed; 0 frames sent in "));
+        assertTrue(out, out.contains(" class files analyzed; 0 frames sent in "));
         assertTrue(out, out.contains("CHILD exiting"));
     }
 
@@ -113,6 +123,33 @@ public class BuildTableNoticeTest {
         String out = runChild("after");
         assertEquals(out, 0, count(out, EXIT_LINE));
         assertTrue(out, out.contains("CHILD sent"));
+    }
+
+    @Test(timeout = 60_000)
+    public void aSendRemovesItsExitHookWhenItEnds() throws Exception {
+        List<BuildTable.ClassFile> app = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            String n = BuildTableBudgetTest.name(i);
+            app.add(new BuildTable.ClassFile(n, BuildTableBudgetTest.gen(n, i, 3)));
+        }
+        // A send that ends whole, and one whose socket fails at its first frame.
+        BuildTable.FrameSender whole = frame -> { };
+        BuildTable.FrameSender failing = frame -> {
+            throw new IOException("row: the data socket is closed");
+        };
+        try {
+            for (BuildTable.FrameSender sender : new BuildTable.FrameSender[] {whole, failing}) {
+                BuildTable.ExitNotice.LAST_HOOK.remove();
+                BuildTable.send(() -> app, sender); // on this thread, so LAST_HOOK is this send's
+                Thread hook = BuildTable.ExitNotice.LAST_HOOK.get();
+                assertTrue("the send added an exit hook", hook != null);
+                // Removing it again finds none: the send removed it (else this removes it, for the rows after).
+                assertFalse("the send left its exit hook registered",
+                        Runtime.getRuntime().removeShutdownHook(hook));
+            }
+        } finally {
+            BuildTable.ExitNotice.LAST_HOOK.remove();
+        }
     }
 
     /** runChild runs ExitMain in a JVM of its own (an exit ends it), and returns its stdout and stderr. */
@@ -169,9 +206,10 @@ public class BuildTableNoticeTest {
         }
     }
 
+    /** lines are the messages with part that this row's thread logged (a send of another class may log too). */
     private static List<String> lines(BuildTableTest.Logs logs, String part) {
         List<String> out = new ArrayList<>();
-        for (LogRecord r : logs.records) {
+        for (LogRecord r : logs.mine()) {
             if (r.getMessage() != null && r.getMessage().contains(part)) {
                 out.add(r.getMessage());
             }
@@ -181,7 +219,7 @@ public class BuildTableNoticeTest {
 
     private static String levels(BuildTableTest.Logs logs, String part) {
         List<Level> out = new ArrayList<>();
-        for (LogRecord r : logs.records) {
+        for (LogRecord r : logs.mine()) {
             if (r.getMessage() != null && r.getMessage().contains(part)) {
                 out.add(r.getLevel());
             }
