@@ -209,28 +209,34 @@ public class BuildTablePacerTest {
 
     @Test
     public void anInterruptEndsTheSendAndIsKept() throws Exception {
-        // During a wait.
-        Clock c = new Clock();
-        BuildTable.Pacer p = new BuildTable.Pacer(c);
-        c.interrupt = true;
         try {
-            run(p, c, 100, 20_000, 10);
-            fail("an interrupt during a wait ends the send");
-        } catch (InterruptedIOException e) {
-            assertEquals("the build table's thread was interrupted", e.getMessage());
-            assertTrue("the interrupt is kept for the thread", Thread.interrupted());
-        }
-        assertEquals("it came at the first wait", K, c.units);
-        // Between waits, and on a Pacer that never waits.
-        for (BuildTable.Pacer q : new BuildTable.Pacer[] {new BuildTable.Pacer(new Clock()), BuildTable.Pacer.off()}) {
-            q.unitDone(1);
-            Thread.currentThread().interrupt();
+            // During a wait.
+            Clock c = new Clock();
+            BuildTable.Pacer p = new BuildTable.Pacer(c);
+            c.interrupt = true;
             try {
-                q.unitDone(1);
-                fail("an interrupt ends the send at the next unit");
+                run(p, c, 100, 20_000, 10);
+                fail("an interrupt during a wait ends the send");
             } catch (InterruptedIOException e) {
+                assertEquals("the build table's thread was interrupted", e.getMessage());
                 assertTrue("the interrupt is kept for the thread", Thread.interrupted());
             }
+            assertEquals("it came at the first wait", K, c.units);
+            // Between waits, and on a Pacer that never waits.
+            for (BuildTable.Pacer q : new BuildTable.Pacer[] {new BuildTable.Pacer(new Clock()),
+                    BuildTable.Pacer.off()}) {
+                q.unitDone(1);
+                Thread.currentThread().interrupt();
+                try {
+                    q.unitDone(1);
+                    fail("an interrupt ends the send at the next unit");
+                } catch (InterruptedIOException e) {
+                    assertTrue("the interrupt is kept for the thread", Thread.interrupted());
+                }
+            }
+        } finally {
+            // A failing row must not leave the runner's thread interrupted for the rows after it.
+            Thread.interrupted();
         }
     }
 
@@ -256,6 +262,23 @@ public class BuildTablePacerTest {
         assertEquals(50_000 * MS, BuildTable.Pacer.deadlineNanos(50_000));
         assertEquals("1 ms a class file past 50,000", 100_000 * MS, BuildTable.Pacer.deadlineNanos(100_000));
         assertEquals(50_000 * MS, BuildTable.Pacer.deadlineNanos(10));
+    }
+
+    @Test
+    public void theRateLeavesOutTheTimeBeforeTheAnalysis() throws Exception {
+        // The index's read takes 10 s before the analysis begins; then 50,000 class files of 0.5 ms work each
+        // (25 s), 10 ms of collection in each. The rate is the analysis's own (0.5 ms a class file), so the first
+        // wait comes as soon as the allowance reaches the smallest wait; the deadline still counts the 10 s, so
+        // the waits fill the 15 s left and no more.
+        Clock c = new Clock();
+        BuildTable.Pacer p = new BuildTable.Pacer(c);
+        long start = c.now;
+        c.now += 10_000 * MS;
+        p.begin(50_000);
+        run(p, c, 50_000, MS / 2, 10);
+        assertEquals("the first wait as soon as the allowance allows", K, (long) c.sleptAt.get(0));
+        assertTrue("took " + (c.now - start), c.now - start <= BuildTable.Pacer.deadlineNanos(50_000));
+        assertTrue("waited " + p.waitedNanos(), p.waitedNanos() > 15_000 * MS - 2 * MIN);
     }
 
     @Test

@@ -42,7 +42,9 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -53,7 +55,9 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -871,11 +875,13 @@ public class BuildTableTest {
 
     @Test(timeout = 30_000)
     public void anInterruptEndsTheSendAndIsSaidSo() throws Exception {
-        // Before the send, the next unit ends it, so no frame goes. After the table's last frame, the interrupt
-        // closes the probe map's temp file (an interruptible channel) as it is read back. Either way the WARNING
-        // names the interrupt, not the temp file, the interrupt is kept, and no temp file is left.
+        // Before the send, it reads no class (on JDK 8 a class file's read fails on an interrupted thread, and the
+        // index would keep what it got), so no frame goes. After the table's last frame, the interrupt closes the
+        // probe map's temp file (an interruptible channel) as it is read back. Either way the WARNING names the
+        // interrupt, not the temp file, the interrupt is kept, and no temp file is left.
         List<BuildTable.ClassFile> app = javaDedup();
         for (boolean afterTable : new boolean[] {false, true}) {
+            AtomicInteger read = new AtomicInteger();
             File dir = tmp.newFolder("spill-" + afterTable);
             List<String> heads = new ArrayList<>();
             BuildTable.FrameSender sender = frame -> {
@@ -894,7 +900,10 @@ public class BuildTableTest {
                     Thread.currentThread().interrupt();
                 }
                 try {
-                    BuildTable.send(() -> app, sender, dir);
+                    BuildTable.send(() -> {
+                        read.incrementAndGet();
+                        return app;
+                    }, sender, dir);
                     assertTrue(afterTable + ": the interrupt is kept", Thread.currentThread().isInterrupted());
                 } finally {
                     Thread.interrupted();
@@ -914,6 +923,7 @@ public class BuildTableTest {
             } else {
                 assertEquals(heads.toString(), 0, heads.size());
             }
+            assertEquals(afterTable + ": the classes read", afterTable ? 1 : 0, read.get());
             assertArrayEquals("no temp file left", new String[0], dir.list());
         }
     }
@@ -1012,6 +1022,171 @@ public class BuildTableTest {
         }));
         assertTrue("a request after them runs", after.await(10, TimeUnit.SECONDS));
         assertEquals(Arrays.asList("failing", "next", "after"), new ArrayList<>(ran));
+    }
+
+    @Test(timeout = 30_000)
+    public void aRequestMadeWhileASendIsInterruptedRunsOnANewThread() throws Exception {
+        // An interrupt ends a send and is kept for its thread. The request made while it ran names the agent's
+        // newest index, not read yet: it must not run on that thread, where on JDK 8 the index's read of a class
+        // file fails. It runs on a new thread, uninterrupted, and Sends takes requests after it.
+        CountDownLatch inFirst = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch next = new CountDownLatch(1);
+        CountDownLatch after = new CountDownLatch(1);
+        AtomicReference<Thread> first = new AtomicReference<>();
+        AtomicReference<Thread> second = new AtomicReference<>();
+        AtomicReference<Boolean> secondInterrupted = new AtomicReference<>();
+        AtomicInteger made = new AtomicInteger();
+        BuildTable.Sends sends = new BuildTable.Sends(r -> {
+            made.incrementAndGet();
+            return BuildTable.thread(r);
+        });
+        assertTrue(sends.request(() -> {
+            first.set(Thread.currentThread());
+            inFirst.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            Thread.currentThread().interrupt();
+        }));
+        assertTrue(inFirst.await(10, TimeUnit.SECONDS));
+        assertTrue(sends.request(() -> {
+            second.set(Thread.currentThread());
+            secondInterrupted.set(Thread.currentThread().isInterrupted());
+            next.countDown();
+        }));
+        release.countDown();
+        assertTrue("the request made while it ran ran", next.await(10, TimeUnit.SECONDS));
+        assertNotSame("on a new thread", first.get(), second.get());
+        assertEquals("not interrupted", Boolean.FALSE, secondInterrupted.get());
+        assertEquals(2, made.get());
+        assertTrue(sends.request(after::countDown));
+        assertTrue("a request after them runs", after.await(10, TimeUnit.SECONDS));
+    }
+
+    @Test(timeout = 30_000)
+    public void aRequestMadeWhileTheNextThreadStartsRunsAfterItOnThatThread() throws Exception {
+        // Sends stays running while the interrupted thread starts the next one, so sends stay one at a time: a
+        // request made in that window starts no thread of its own and runs after the one being started, on the
+        // new thread. The factory holds the window open; it runs on the interrupted thread, so it spins rather
+        // than waits.
+        CountDownLatch inFirst = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch inHandover = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicBoolean go = new AtomicBoolean();
+        AtomicInteger made = new AtomicInteger();
+        List<String> ran = Collections.synchronizedList(new ArrayList<>());
+        List<Thread> on = Collections.synchronizedList(new ArrayList<>());
+        BuildTable.Sends sends = new BuildTable.Sends(r -> {
+            if (made.incrementAndGet() == 2) {
+                inHandover.countDown();
+                spin(go);
+            }
+            return BuildTable.thread(r);
+        });
+        assertTrue(sends.request(() -> {
+            on.add(Thread.currentThread());
+            inFirst.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            Thread.currentThread().interrupt();
+        }));
+        assertTrue(inFirst.await(10, TimeUnit.SECONDS));
+        assertTrue(sends.request(() -> {
+            on.add(Thread.currentThread());
+            ran.add("next");
+        }));
+        release.countDown();
+        assertTrue("the interrupted thread starts the next one", inHandover.await(10, TimeUnit.SECONDS));
+        try {
+            assertTrue("a request made meanwhile is taken", sends.request(() -> {
+                on.add(Thread.currentThread());
+                ran.add("meanwhile");
+                done.countDown();
+            }));
+            assertEquals("and starts no thread of its own", 2, made.get());
+        } finally {
+            go.set(true);
+        }
+        assertTrue("it runs", done.await(10, TimeUnit.SECONDS));
+        assertEquals("after the one being started", Arrays.asList("next", "meanwhile"), new ArrayList<>(ran));
+        assertEquals(2, made.get());
+        assertNotSame("on the new thread", on.get(0), on.get(1));
+        assertSame("both", on.get(1), on.get(2));
+    }
+
+    /** spin waits, without being interruptible, until go is set or 10 s pass. */
+    private static void spin(AtomicBoolean go) {
+        long end = System.nanoTime() + 10_000_000_000L;
+        while (!go.get() && System.nanoTime() - end < 0) {
+            Thread.yield();
+        }
+    }
+
+    @Test(timeout = 30_000)
+    public void anInterruptedSendWhoseNextThreadCannotStartLetsSendsTakeRequests() throws Exception {
+        // The new thread for the request made during an interrupted send cannot start: that request is dropped
+        // with a WARNING (Keploy asks again), and so is one made while the thread was being started (ACKed, never
+        // sent). The next request starts a thread. The factory holds that window open by spinning: it runs on the
+        // interrupted thread.
+        CountDownLatch inFirst = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch inHandover = new CountDownLatch(1);
+        CountDownLatch after = new CountDownLatch(1);
+        AtomicBoolean go = new AtomicBoolean();
+        AtomicInteger made = new AtomicInteger();
+        AtomicInteger dropped = new AtomicInteger();
+        BuildTable.Sends sends = new BuildTable.Sends(r -> {
+            if (made.incrementAndGet() == 2) {
+                inHandover.countDown();
+                spin(go);
+                throw new OutOfMemoryError("unable to create native thread");
+            }
+            return BuildTable.thread(r);
+        });
+        try (Logs logs = new Logs()) {
+            assertTrue(sends.request(() -> {
+                inFirst.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                Thread.currentThread().interrupt();
+            }));
+            assertTrue(inFirst.await(10, TimeUnit.SECONDS));
+            assertTrue(sends.request(dropped::incrementAndGet));
+            release.countDown();
+            assertTrue("the interrupted thread tries to start one", inHandover.await(10, TimeUnit.SECONDS));
+            try {
+                assertTrue("a request made meanwhile is ACKed", sends.request(dropped::incrementAndGet));
+                assertEquals(2, made.get());
+            } finally {
+                go.set(true);
+            }
+            // The WARNING is logged once Sends has let go of the dropped requests.
+            long end = System.nanoTime() + 10_000_000_000L;
+            boolean warned = false;
+            while (!warned && System.nanoTime() < end) {
+                for (LogRecord rec : logs.records) {
+                    warned |= rec.getLevel() == Level.WARNING
+                            && rec.getMessage().contains("the build table's thread did not start");
+                }
+                Thread.sleep(10);
+            }
+            assertTrue("a WARNING says so", warned);
+            assertEquals(2, made.get());
+            assertTrue("the next request starts a thread", sends.request(after::countDown));
+            assertTrue(after.await(10, TimeUnit.SECONDS));
+            assertEquals("the dropped requests never ran", 0, dropped.get());
+            assertEquals(3, made.get());
+        }
     }
 
     /** Throwing is a JUL handler on BuildTable's logger that throws on every record, as an app's bridge can. */
