@@ -1,14 +1,18 @@
 package io.keploy.dedup;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -18,6 +22,17 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
+import java.util.Properties;
+import java.util.Random;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import org.jacoco.core.data.ExecutionData;
 import org.junit.After;
 import org.junit.Before;
@@ -42,6 +57,12 @@ public class CoverageTcpClientTest {
     private static final int ROUND_TRIPS = 25;
     // Linux delays an ACK at least 40 ms; an END answered at once takes a few ms.
     private static final long END_ROUND_TRIP_BOUND_MICROS = 20_000;
+    // The SDK's reply buffer is 64 KiB. Its thread serving Keploy allocates
+    // well under this much (about 2.7 MB on JDK 21) in a connection with a
+    // CLASSES frame of about 137 KB (100 KB of class bytes) and 25 round
+    // trips; a buffer sized for a large app's CLASSES frame (tens of MiB) is
+    // over it, while a buffer of a few MiB would pass.
+    private static final long CONNECTION_ALLOCATION_BOUND_BYTES = 16L << 20;
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -316,7 +337,8 @@ public class CoverageTcpClientTest {
     }
 
     // The socket to Keploy has Nagle off, so a reply that does not fit in one
-    // write (the first END's CLASSES frame) does not wait between its writes.
+    // write (one with a CLASSES or MANIFEST frame larger than the reply
+    // buffer) does not wait between its writes.
     @Test
     public void theSocketToKeployHasNagleOff() throws Exception {
         assertTrue(KeployDedupAgent.start());
@@ -330,19 +352,202 @@ public class CoverageTcpClientTest {
             Object client = worker.get(null);
             Field socket = client.getClass().getDeclaredField("socket");
             socket.setAccessible(true);
-            assertTrue(((Socket) socket.get(client)).getTcpNoDelay());
+            assertTrue("TCP_NODELAY on the SDK's socket to Keploy", ((Socket) socket.get(client)).getTcpNoDelay());
         }
+    }
+
+    // A frame larger than the reply buffer (here a CLASSES frame of about
+    // 137 KB, from 100 KB of class bytes that do not compress) arrives whole,
+    // the ACK follows on a line of its own, and the round trips after it stay
+    // fast. The thread that serves Keploy allocates under 16 MiB in all, so it
+    // holds no buffer sized for a large app's frame (tens of MiB); a buffer of
+    // a few MiB would pass.
+    @Test
+    public void aFrameLargerThanTheReplyBufferArrivesWholeAndTheRepliesAfterItStayFast() throws Exception {
+        byte[] classBytes = new byte[100 * 1024];
+        new Random(7).nextBytes(classBytes);
+        File big = new File(tmp.newFolder("classes"), "com/acme/Big.class");
+        big.getParentFile().mkdirs();
+        Files.write(big.toPath(), classBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, big.getParentFile().getParentFile().getParent());
+        System.setProperty(BUILD_TAG_PROPERTY, "tag");
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(classBytes), "com/acme/Big", 2);
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            InputStream in = sdk.getInputStream();
+            send(out, "START test-set-0/test-0");
+            assertEquals("ACK\n", readReply(in));
+            probes[0] = true;
+            send(out, "END test-set-0/test-0");
+            String reply = readReply(in);
+            String[] lines = reply.split("\n", -1);
+            assertEquals("COV, CLASSES, ACK and the end of the reply; lines of "
+                    + lengths(lines), 4, lines.length);
+            assertEquals("COV {\"id\":\"test-set-0/test-0\",\"executedLinesByFile\":{\"com/acme/Big\":[0]}}",
+                    lines[0]);
+            String[] classes = lines[1].split(" ");
+            assertEquals("CLASSES", classes[0]);
+            assertTrue("the frame is larger than the reply buffer: " + lines[1].length() + " bytes",
+                    lines[1].length() > 64 * 1024);
+            assertArrayEquals(classBytes, unzipped(Base64.getDecoder().decode(classes[3]), "com/acme/Big.class"));
+            assertEquals("ACK", lines[2]);
+            assertEquals("", lines[3]);
+
+            long[] micros = new long[ROUND_TRIPS];
+            for (int i = 1; i <= ROUND_TRIPS; i++) {
+                send(out, "START test-set-0/test-" + i);
+                assertEquals("ACK\n", readReply(in));
+                long sent = System.nanoTime();
+                send(out, "END test-set-0/test-" + i);
+                reply = readReply(in);
+                micros[i - 1] = (System.nanoTime() - sent) / 1000;
+                assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\"")
+                        && reply.endsWith("}\nACK\n"));
+            }
+            long[] sorted = micros.clone();
+            Arrays.sort(sorted);
+            assertTrue("median END round trip " + sorted[ROUND_TRIPS / 2] + " us, each: " + Arrays.toString(micros),
+                    sorted[ROUND_TRIPS / 2] < END_ROUND_TRIP_BOUND_MICROS);
+
+            long allocated = allocatedByTheSdksThread();
+            assertTrue("the SDK's thread serving Keploy allocated " + allocated + " bytes",
+                    allocated < CONNECTION_ALLOCATION_BOUND_BYTES);
+        }
+    }
+
+    // END writes its COV into the reply before it builds the CLASSES frame, so
+    // a failure there (here, reading the build tag throws) skips only that
+    // frame: Keploy still gets the COV, then the ACK. The row also checks that
+    // the failure reached END's own handler, so it fails, and asks for another
+    // fault, once this one stops escaping the frame's build.
+    @Test
+    public void anEndWhoseClassesFrameFailsStillSendsItsCovThenAck() throws Exception {
+        assumeTrue("the build tag is read from the environment", System.getenv("KEPLOY_BUILD_TAG") == null);
+        inProcessJacoco();
+        assertTrue(KeployDedupAgent.start());
+        Properties jvm = System.getProperties();
+        Logger logger = Logger.getLogger(KeployDedupAgent.class.getName());
+        Level level = logger.getLevel();
+        List<LogRecord> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                logged.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.setLevel(Level.FINE);
+        logger.addHandler(handler);
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            InputStream in = sdk.getInputStream();
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK\n", readReply(in));
+            BuildTagUnreadable unreadable = new BuildTagUnreadable(jvm);
+            System.setProperties(unreadable);
+            send(out, "END test-set-0/test-1");
+            String reply = readReply(in);
+            assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-1\"") && reply.endsWith("}\nACK\n"));
+            assertEquals("COV, ACK and the end of the reply: " + reply, 3, reply.split("\n", -1).length);
+            assertTrue("the build tag's read threw", unreadable.thrown.get() > 0);
+            boolean escaped = false;
+            for (LogRecord record : logged) {
+                escaped |= "Failed to send the COV or CLASSES frame for test-set-0/test-1".equals(record.getMessage())
+                        && record.getThrown() instanceof IllegalStateException
+                        && "the build tag cannot be read".equals(record.getThrown().getMessage());
+            }
+            assertTrue("the build tag's failure reached END's handler", escaped);
+        } finally {
+            System.setProperties(jvm);
+            logger.removeHandler(handler);
+            logger.setLevel(level);
+        }
+    }
+
+    // The JVM's system properties, but a read of the build tag throws.
+    private static final class BuildTagUnreadable extends Properties {
+
+        private static final long serialVersionUID = 1L;
+
+        final AtomicInteger thrown = new AtomicInteger();
+
+        BuildTagUnreadable(Properties jvm) {
+            super(jvm);
+        }
+
+        @Override
+        public String getProperty(String key) {
+            if (BUILD_TAG_PROPERTY.equals(key)) {
+                thrown.incrementAndGet();
+                throw new IllegalStateException("the build tag cannot be read");
+            }
+            return super.getProperty(key);
+        }
+    }
+
+    // allocatedByTheSdksThread is what the SDK's thread serving Keploy has
+    // allocated so far.
+    private static long allocatedByTheSdksThread() throws ReflectiveOperationException {
+        Field field = KeployDedupAgent.class.getDeclaredField("coverageThread");
+        field.setAccessible(true);
+        Thread thread = (Thread) field.get(null);
+        com.sun.management.ThreadMXBean threads =
+                (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        long allocated = threads.getThreadAllocatedBytes(thread.getId());
+        assertTrue("the JVM counts the SDK thread's allocation", allocated > 0);
+        return allocated;
+    }
+
+    private static byte[] unzipped(byte[] zip, String name) throws IOException {
+        try (ZipInputStream entries = new ZipInputStream(new ByteArrayInputStream(zip))) {
+            for (ZipEntry entry; (entry = entries.getNextEntry()) != null; ) {
+                if (entry.getName().equals(name)) {
+                    return readAll(entries);
+                }
+            }
+        }
+        throw new AssertionError(name + " is not in the zip");
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream all = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        for (int n; (n = in.read(buf)) > 0; ) {
+            all.write(buf, 0, n);
+        }
+        return all.toByteArray();
+    }
+
+    private static String lengths(String[] lines) {
+        StringBuilder text = new StringBuilder();
+        for (String line : lines) {
+            text.append(line.length() > 60 ? line.substring(0, 60) + "... (" + line.length() + ")" : line)
+                    .append(" | ");
+        }
+        return text.toString();
     }
 
     // inProcessJacoco has the SDK read coverage from a JaCoCo agent in this
     // JVM, as it reads its own JaCoCo's, so an END waits on no socket but
     // Keploy's. (A JaCoCo reached over TCP has sockets of its own.)
-    private void inProcessJacoco() throws ReflectiveOperationException {
+    private InProcessScanTest.Agent inProcessJacoco() throws ReflectiveOperationException {
         // A port nothing listens on: no command may reach JaCoCo over TCP.
         System.setProperty(JACOCO_PORT_PROPERTY, "1");
         savedContextLoader = Thread.currentThread().getContextClassLoader();
+        InProcessScanTest.Agent agent = new InProcessScanTest.Agent();
         Thread.currentThread().setContextClassLoader(
-                new InProcessScanTest.RtLoader(new InProcessScanTest.Agent(), getClass().getClassLoader()));
+                new InProcessScanTest.RtLoader(agent, getClass().getClassLoader()));
+        return agent;
     }
 
     // readReply reads up to the end of a reply: its ACK line.
