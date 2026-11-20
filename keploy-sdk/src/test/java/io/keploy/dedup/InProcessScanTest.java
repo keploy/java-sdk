@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -53,7 +54,7 @@ public class InProcessScanTest {
 
     private static final String[] PROPERTIES = {"keploy.java.dedup.diagnostics", "keploy.java.class.dirs",
             "keploy.jacoco.port", "keploy.coverage.endpoint", "keploy.java.dedup.warmup.disabled",
-            "keploy.build.tag", "keploy.java.scan"};
+            "keploy.build.tag", "keploy.java.scan", "keploy.java.end.wait.ms"};
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
     private static final String SHOP = "com/acme/Shop";
@@ -178,6 +179,7 @@ public class InProcessScanTest {
                     data.next());
             String end = logged(" END test-set-0/test-1 took ");
             assertTrue(end, end.contains(" scan=") && end.contains(" filter=") && !end.contains("dump="));
+            assertFalse("no request ran: END did not wait", end.contains(" requests="));
             assertTrue("a library class is left alone", lib[0]);
 
             // Nothing ran between the tests, or in the second one.
@@ -904,6 +906,231 @@ public class InProcessScanTest {
             }
         };
         return Class.forName("test.BrokenAgent", true, loader).getConstructor().newInstance();
+    }
+
+    // Request is a request of the app's server, as ServerEntries counts it:
+    // in RequestGate from when it comes in until it is done, on a thread of
+    // its own. Its response reaches Keploy (responded) before it is done:
+    // tail runs after it, once release opens.
+    private static final class Request implements Closeable {
+
+        private final CountDownLatch responded = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final CountDownLatch done = new CountDownLatch(1);
+        private final Thread thread;
+
+        Request(final Runnable before, final Runnable tail) {
+            thread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    Object token = RequestGate.enter();
+                    try {
+                        before.run();
+                        responded.countDown();
+                        release.await();
+                        tail.run();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        RequestGate.exit(token);
+                        done.countDown();
+                    }
+                }
+            }, "app-request");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void awaitResponse() throws InterruptedException {
+            assertTrue(responded.await(10, TimeUnit.SECONDS));
+        }
+
+        // finishOnceEndWaits lets the tail run, from another thread, once a
+        // thread (the END the caller sends) waits in RequestGate, or after
+        // 10 s; so the END reads the hits only if it waited for the tail.
+        void finishOnceEndWaits() {
+            Thread later = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (!endWaits() && System.nanoTime() < deadline) {
+                        Thread.yield();
+                    }
+                    release.countDown();
+                }
+            });
+            later.setDaemon(true);
+            later.start();
+        }
+
+        void finish() throws InterruptedException {
+            release.countDown();
+            assertTrue(done.await(10, TimeUnit.SECONDS));
+        }
+
+        @Override
+        public void close() {
+            release.countDown();
+            thread.interrupt();
+        }
+    }
+
+    private static Runnable hit(final boolean[] probes, final int... indices) {
+        return new Runnable() {
+            @Override
+            public void run() {
+                for (int index : indices) {
+                    probes[index] = true;
+                }
+            }
+        };
+    }
+
+    @Test
+    public void anEndWaitsForItsTestsRequestToFinishAfterItsResponse() throws Exception {
+        // A filter's code after the chain runs after Keploy has the response
+        // and sent END: read at once, END missed it, and the next START
+        // cleared it as background, so the test's hits changed run to run.
+        System.setProperty("keploy.java.end.wait.ms", "10000");
+        System.setProperty("keploy.java.dedup.diagnostics", "true");
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            try (Request request = new Request(hit(shop, 1), hit(shop, 2))) {
+                request.awaitResponse();
+                request.finishOnceEndWaits();
+                long began = System.nanoTime();
+                assertEquals(TAKEN, send("END test-set-0/test-1"));
+                assertTrue("END ended when the request did, not at its bound",
+                        System.nanoTime() - began < TimeUnit.SECONDS.toNanos(5));
+                assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1,2]}}",
+                        data.next());
+                assertTrue(logged(" END test-set-0/test-1 took ").contains(" requests="));
+            }
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{}}", data.next());
+            assertNull("the tail is test-1's, not background", data.background.poll());
+        }
+        assertEquals(0, count("windowCut"));
+    }
+
+    @Test
+    public void anEndWhoseRequestOutrunsTheWaitIsCutAndOpensNoWindow() throws Exception {
+        System.setProperty("keploy.java.end.wait.ms", "50");
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        boolean[] cart = agent.probes(CART_ID, CART, 3);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            assertEquals(TAKEN, send("BACKGROUND"));
+            try (Request request = new Request(hit(shop, 1), hit(shop, 2))) {
+                request.awaitResponse();
+                long began = System.nanoTime();
+                assertEquals(TAKEN, send("END test-set-0/test-1"));
+                assertTrue("END waited its bound",
+                        System.nanoTime() - began >= TimeUnit.MILLISECONDS.toNanos(50));
+                // What it read at the cut, and the flag, after classMismatch.
+                assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]},"
+                        + "\"windowCut\":true}", data.next());
+                assertNotNull(logged("test-set-0/test-1's requests still ran 50 ms after its END, so its"
+                        + " record says windowCut"));
+                // The tail runs after the END: the cut test's own late hit.
+                request.finish();
+            }
+            assertEquals(TAKEN, send("START test-set-0/test-2"));
+            assertFalse("cleared", shop[2]);
+            assertEquals(TAKEN, send("END test-set-0/test-2"));
+            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{}}", data.next());
+            // The windows after it count as usual.
+            cart[1] = true;
+            assertEquals(TAKEN, send("START test-set-0/test-3"));
+            assertEquals(TAKEN, send("END test-set-0/test-3"));
+            assertEquals("{\"id\":\"test-set-0/test-3\",\"executedLinesByFile\":{}}", data.next());
+            assertEquals("a START after a cut END is no window: test-1's late hit is not background",
+                    background("test-set-0/test-2", "test-set-0/test-3", probes(CART, "1")), data.nextBackground());
+            assertNull(data.background.poll());
+        }
+    }
+
+    @Test
+    public void anEndDoesNotWaitForARequestThatCameInBeforeItsStart() throws Exception {
+        // A stream opened before the test, or a request of the test before
+        // cut at its bound: never this test's to wait for.
+        System.setProperty("keploy.java.end.wait.ms", "20000");
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+                Request stream = new Request(hit(shop, 0), hit(shop, 3))) {
+            stream.awaitResponse();
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            shop[1] = true;
+            long began = System.nanoTime();
+            assertEquals(TAKEN, send("END test-set-0/test-1"));
+            assertTrue(System.nanoTime() - began < TimeUnit.SECONDS.toNanos(10));
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
+                    data.next());
+        }
+    }
+
+    @Test
+    public void withAWaitOfZeroAnEndReadsAtOnceAsBefore() throws Exception {
+        System.setProperty("keploy.java.end.wait.ms", "0");
+        boolean[] shop = agent.probes(SHOP_ID, SHOP, 4);
+        try (DataReceiver data = new DataReceiver(KeployDedupAgent.dataSocketPath)) {
+            assertTrue(KeployDedupAgent.start());
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            try (Request request = new Request(hit(shop, 1), hit(shop, 2))) {
+                request.awaitResponse();
+                assertEquals(TAKEN, send("END test-set-0/test-1"));
+                // The tail is lost to this test, and the record has no flag.
+                assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
+                        data.next());
+                request.finish();
+            }
+        }
+        assertEquals(0, count("windowCut"));
+    }
+
+    @Test
+    public void theEndWaitIsReadFromItsSetting() throws ReflectiveOperationException {
+        ((java.util.concurrent.atomic.AtomicBoolean) read(KeployDedupAgent.class, null, "END_WAIT_INVALID_LOGGED"))
+                .set(false);
+        ((java.util.concurrent.atomic.AtomicBoolean) read(KeployDedupAgent.class, null, "END_WAIT_CAPPED_LOGGED"))
+                .set(false);
+        assertEquals(200, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", " 0 ");
+        assertEquals(0, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "1500");
+        assertEquals(1500, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "10000");
+        assertEquals(10000, KeployDedupAgent.endWaitMillis());
+        assertEquals(0, count("its most"));
+        System.setProperty("keploy.java.end.wait.ms", "10001");
+        assertEquals(10000, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "60000");
+        assertEquals(10000, KeployDedupAgent.endWaitMillis());
+        assertEquals("said once in a JVM", 1,
+                count("KEPLOY_JAVA_END_WAIT_MS is 10001, so a test's END waits up to 10000 ms, its most"));
+        assertEquals(1, count("its most"));
+        System.setProperty("keploy.java.end.wait.ms", "-1");
+        assertEquals(200, KeployDedupAgent.endWaitMillis());
+        System.setProperty("keploy.java.end.wait.ms", "soon");
+        assertEquals(200, KeployDedupAgent.endWaitMillis());
+        assertEquals(200, KeployDedupAgent.endWaitMillis());
+        assertEquals("said once in a JVM", 1, count("KEPLOY_JAVA_END_WAIT_MS is not a number"));
+    }
+
+    // endWaits says whether a thread waits in RequestGate.
+    private static boolean endWaits() {
+        for (Thread thread : Thread.getAllStackTraces().keySet()) {
+            if (java.util.concurrent.locks.LockSupport.getBlocker(thread) == RequestGate.class) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // scanOf is the ProbeScan the running agent's collector looked up.

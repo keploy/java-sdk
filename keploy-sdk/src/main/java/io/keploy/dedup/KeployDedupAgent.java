@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.jar.JarEntry;
@@ -78,7 +79,12 @@ public final class KeployDedupAgent {
     }
 
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
-        return GSON.toJson(new DedupPayload(id, new TestCoverage(probesByClass, classMismatch)));
+        return toDedupJson(id, probesByClass, classMismatch, false);
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
+            boolean windowCut) {
+        return GSON.toJson(new DedupPayload(id, new TestCoverage(probesByClass, classMismatch, windowCut)));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -106,6 +112,14 @@ public final class KeployDedupAgent {
     private static final int DEFAULT_JACOCO_PORT = 36320;
     private static final int SOCKET_TIMEOUT_MILLIS = 3000;
     private static final int SOCKET_BACKLOG = 50;
+    // How long a test's END waits for its requests to finish by default.
+    static final long DEFAULT_END_WAIT_MILLIS = 200;
+    // Well inside the 30 s Keploy's k8s collector waits for an END's answer:
+    // past it, the record would be lost.
+    static final long MAX_END_WAIT_MILLIS = 10000;
+    private static final AtomicBoolean END_WAIT_INVALID_LOGGED = new AtomicBoolean(false);
+    private static final AtomicBoolean END_WAIT_CAPPED_LOGGED = new AtomicBoolean(false);
+    private static final AtomicBoolean NOT_COUNTED_LOGGED = new AtomicBoolean(false);
     // The answer to a command not taken (a START that could not clear the
     // counters, an END with no START for that test, as after a restart, an
     // END whose scan lost hits it had cleared): nothing is published
@@ -270,7 +284,11 @@ public final class KeployDedupAgent {
         }
 
         if (instrumentation != null) {
+            // JaCoCo's transformer first: transformers run in the order they
+            // were added, so JaCoCo instruments, and ids, a server's class as
+            // the index read it, and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
+            countRequests(instrumentation);
         }
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
@@ -278,6 +296,71 @@ public final class KeployDedupAgent {
         thread.start();
         registerShutdownHook();
         return true;
+    }
+
+    // countRequests makes the requests of the app's server count in
+    // RequestGate (ServerEntries), so that a test's END waits for them to
+    // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0. From premain, before the
+    // app's main loads its server, and after startJacoco: a JaCoCo agent
+    // attached after keploy-sdk.jar adds its transformer after this one, so
+    // it ids the changed server class, which classMismatch then names when
+    // the index holds it.
+    private static void countRequests(Instrumentation instrumentation) {
+        if (endWaitMillis() == 0) {
+            return;
+        }
+        try {
+            instrumentation.addTransformer(new ServerEntries(), false);
+        } catch (RuntimeException e) {
+            log(Level.WARNING, "Keploy dedup does not count the app's requests: their server could not be"
+                    + " changed to count them", e);
+        }
+    }
+
+    // notCounted says, once, why a test's END does not wait for its
+    // requests: the wait is off, or no server counts them (uncounted names
+    // a server the app loaded whose requests are not counted, as Netty).
+    static String notCounted(long endWaitMillis, List<String> uncounted) {
+        String why = endWaitMillis == 0 ? "KEPLOY_JAVA_END_WAIT_MS is 0"
+                : !uncounted.isEmpty() ? "the app's server is " + uncounted.get(0)
+                        + ", whose requests keploy-sdk does not count"
+                : "no Tomcat, Jetty or Undertow request entry loaded after keploy-sdk.jar started"
+                        + " (a Netty or WebFlux server, one started before the SDK, or the SDK not"
+                        + " started as a -javaagent)";
+        return "Keploy dedup: a test's END does not wait for its requests to finish: " + why
+                + ". Code a request runs after its response is sent can land after the test's END";
+    }
+
+    // endWaitMillis is how long a test's END waits for the requests that
+    // came in since its START to finish: KEPLOY_JAVA_END_WAIT_MS (or
+    // keploy.java.end.wait.ms), 200 by default, 10000 at most; 0 turns the
+    // wait and the count off.
+    static long endWaitMillis() {
+        String value = envOrProperty("KEPLOY_JAVA_END_WAIT_MS", "keploy.java.end.wait.ms", "").trim();
+        if (value.isEmpty()) {
+            return DEFAULT_END_WAIT_MILLIS;
+        }
+        try {
+            long millis = Long.parseLong(value);
+            if (millis > MAX_END_WAIT_MILLIS) {
+                if (END_WAIT_CAPPED_LOGGED.compareAndSet(false, true)) {
+                    log(Level.WARNING, "Keploy dedup: KEPLOY_JAVA_END_WAIT_MS is " + millis + ", so a test's END"
+                            + " waits up to " + MAX_END_WAIT_MILLIS + " ms, its most, so that Keploy has the"
+                            + " test's record before it stops waiting for it", null);
+                }
+                return MAX_END_WAIT_MILLIS;
+            }
+            if (millis >= 0) {
+                return millis;
+            }
+        } catch (NumberFormatException e) {
+            // Said below.
+        }
+        if (END_WAIT_INVALID_LOGGED.compareAndSet(false, true)) {
+            log(Level.WARNING, "Keploy dedup: KEPLOY_JAVA_END_WAIT_MS is not a number of milliseconds (" + value
+                    + "), so a test's END waits up to " + DEFAULT_END_WAIT_MILLIS + " ms", null);
+        }
+        return DEFAULT_END_WAIT_MILLIS;
     }
 
     // startJacoco starts the JaCoCo agent keploy-sdk.jar carries, with
@@ -791,12 +874,19 @@ public final class KeployDedupAgent {
             }
 
             try {
+                boolean cut = !collector.awaitRequests(command.testId, phases);
                 TestCoverage coverage = collector.capture(phases);
+                if (cut) {
+                    coverage = coverage.cut();
+                }
                 if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
                 publisher.publish(command.testId, coverage, phases);
-                lastEndedTestId = command.testId;
+                // After a cut END, what the next START clears holds this
+                // test's own late hits: not a window, as after an END not
+                // taken.
+                lastEndedTestId = cut ? null : command.testId;
                 return true;
             } catch (Exception e) {
                 // Not ACK for the same reason: nothing reached Keploy.
@@ -1012,7 +1102,11 @@ public final class KeployDedupAgent {
                     // exception would shift the collector onto the next test's frames.
                     TestCoverage coverage;
                     try {
+                        boolean cut = !collector.awaitRequests(command.testId, phases);
                         coverage = collector.capture(phases);
+                        if (cut) {
+                            coverage = coverage.cut();
+                        }
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
@@ -1119,6 +1213,8 @@ public final class KeployDedupAgent {
         // when the SDK was not started as a -javaagent.
         private final Instrumentation instrumentation;
         private final AtomicBoolean warmed = new AtomicBoolean(false);
+        // How long END waits for the test's requests; see awaitRequests.
+        private final long endWaitMillis;
         // The VM names of the app's classes, and the classes by those
         // names; see indexedClassNames.
         private volatile Set<String> appClassNames;
@@ -1158,6 +1254,7 @@ public final class KeployDedupAgent {
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex,
                 Instrumentation instrumentation) {
+            this.endWaitMillis = endWaitMillis();
             this.jacocoClient = jacocoClient;
             this.coverageIndex = coverageIndex;
             this.instrumentation = instrumentation;
@@ -1211,6 +1308,9 @@ public final class KeployDedupAgent {
         // hits. Without it, or when the pass fails (in any way: a START only
         // has to clear), JaCoCo resets every class, and cleared stays empty.
         private boolean begin(Phases phases, List<ProbeScan.Hit> cleared) {
+            // This test's requests come in from now on; END waits for them
+            // alone.
+            RequestGate.open();
             ProbeScan scan = probeScan();
             if (scan != null) {
                 try {
@@ -1228,6 +1328,29 @@ public final class KeployDedupAgent {
             boolean reset = reset();
             phases.mark("reset");
             return reset;
+        }
+
+        // awaitRequests waits, for at most endWaitMillis, until the requests
+        // that came in since this test's START are done, and says whether
+        // they are: a server writes a response before the request is done
+        // (a filter's code after the chain, a request log), so Keploy can
+        // send END while the test's own code still runs. False, the END is
+        // cut: what still runs lands after it.
+        private boolean awaitRequests(String testId, Phases phases) {
+            if (ServerEntries.countsNone() && NOT_COUNTED_LOGGED.compareAndSet(false, true)) {
+                log(Level.INFO, notCounted(endWaitMillis, ServerEntries.uncounted()), null);
+            }
+            if (endWaitMillis == 0 || RequestGate.running() <= 0) {
+                return true;
+            }
+            boolean done = RequestGate.await(TimeUnit.MILLISECONDS.toNanos(endWaitMillis));
+            phases.mark("requests");
+            if (!done) {
+                log(Level.WARNING, "Keploy dedup: " + testId + "'s requests still ran " + endWaitMillis
+                        + " ms after its END, so its record says windowCut and a Keploy that reads it does not"
+                        + " judge the test: what they ran after that is not in it (KEPLOY_JAVA_END_WAIT_MS sets the wait)", null);
+            }
+            return done;
         }
 
         // describe says how many classes and probes hits holds, and names a few classes.
@@ -2390,17 +2513,20 @@ public final class KeployDedupAgent {
         // Probes-by-class (see class note); serialized under the historical key.
         private final Map<String, List<Integer>> executedLinesByFile;
         private final List<String> classMismatch;
+        private final Boolean windowCut;
 
         private DedupPayload(String id, TestCoverage coverage) {
             this.id = id;
             this.executedLinesByFile = coverage.probesByClass;
             this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
+            this.windowCut = coverage.windowCut ? Boolean.TRUE : null;
         }
     }
 
     // TestCoverage is a test's coverage as its END read it: the probes hit
-    // by class, and the classes among them that are not the class the index
-    // read.
+    // by class, the classes among them that are not the class the index
+    // read, and whether the END was cut (its requests still ran at the end
+    // of its wait).
     private static final class TestCoverage {
 
         static final TestCoverage NONE = new TestCoverage(Collections.<String, List<Integer>>emptyMap(),
@@ -2408,10 +2534,21 @@ public final class KeployDedupAgent {
 
         final Map<String, List<Integer>> probesByClass;
         final List<String> classMismatch;
+        final boolean windowCut;
 
         TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
+            this(probesByClass, classMismatch, false);
+        }
+
+        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut) {
             this.probesByClass = probesByClass;
             this.classMismatch = classMismatch;
+            this.windowCut = windowCut;
+        }
+
+        // cut is this coverage, read at the end of a wait its requests outran.
+        TestCoverage cut() {
+            return new TestCoverage(probesByClass, classMismatch, true);
         }
     }
 
