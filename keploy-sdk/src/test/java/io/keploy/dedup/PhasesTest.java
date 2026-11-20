@@ -154,7 +154,7 @@ public class PhasesTest {
         assertStepsAddUp(awaitLogged("Java dedup diagnostics: START test-set-0/test-1 took " + MS + " ms: warmup="
                 + MS + "ms reset=" + MS + "ms"));
         assertStepsAddUp(awaitLogged("Java dedup diagnostics: END test-set-0/test-1 took " + MS + " ms: dump=" + MS
-                + "ms parse=" + MS + "ms filter=" + MS + "ms json=" + MS + "ms send=" + MS + "ms classes=" + MS
+                + "ms parse=" + MS + "ms filter=" + MS + "ms json=" + MS + "ms classes=" + MS + "ms send=" + MS
                 + "ms"));
         assertNoProbeScan();
     }

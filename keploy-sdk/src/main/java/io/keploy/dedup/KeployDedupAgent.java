@@ -11,6 +11,7 @@ import org.newsclub.net.unix.AFUNIXServerSocket;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -27,6 +28,7 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -1014,6 +1016,10 @@ public final class KeployDedupAgent {
     private static final class CoverageTcpClient implements CoverageWorker {
 
         private static final long RECONNECT_DELAY_MILLIS = 1000;
+        // A reply up to this size leaves in one write. Above it (the first END's
+        // CLASSES frame, a very large COV) a frame goes to the socket as it is,
+        // so it is never copied.
+        private static final int REPLY_BUFFER_BYTES = 64 * 1024;
 
         private final CoverageCollector collector;
         private final String host;
@@ -1061,6 +1067,17 @@ public final class KeployDedupAgent {
             // Bounded connect, but NO read timeout: the connection is long-lived and
             // idles between tests waiting for the next START/END command.
             open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
+            // Keploy waits on each reply, so no part of one may wait in this
+            // kernel for Keploy's ACK of the part before it (Nagle), which
+            // Keploy's kernel delays by about 40 ms, once per test. Each reply
+            // is also sent in one write (see out below).
+            try {
+                open.setTcpNoDelay(true);
+            } catch (SocketException e) {
+                log(Level.INFO, "Keploy dedup: TCP_NODELAY could not be set on the socket to " + host + ":" + port
+                        + " (" + e.getMessage() + "), so a reply sent in more than one write may wait about"
+                        + " 40 ms", null);
+            }
             socket = open;
             connectFailureLogged = false;
             // Fresh connection (possibly a new proxy replica after a drop): re-arm
@@ -1071,7 +1088,9 @@ public final class KeployDedupAgent {
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
-                OutputStream out = active.getOutputStream();
+                // dispatch writes a reply's lines here and ack sends them in one
+                // write once the reply is whole.
+                OutputStream out = new BufferedOutputStream(active.getOutputStream(), REPLY_BUFFER_BYTES);
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
@@ -1123,7 +1142,7 @@ public final class KeployDedupAgent {
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
-                    writeLine(out, "ACK");
+                    ack(out);
                     return;
                 }
 
@@ -1138,7 +1157,7 @@ public final class KeployDedupAgent {
                         // follows, as it ends the collector's wait, and a collector
                         // that does not know this frame skips it.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        writeLine(out, "ACK");
+                        ack(out);
                         return;
                     }
 
@@ -1156,7 +1175,7 @@ public final class KeployDedupAgent {
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                         activeTestId = "";
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        writeLine(out, "ACK");
+                        ack(out);
                         return;
                     }
                     if (coverage.probesByClass.isEmpty()) {
@@ -1168,29 +1187,35 @@ public final class KeployDedupAgent {
                         // transport likewise always publishes).
                         String cov = "COV " + GSON.toJson(new DedupPayload(command.testId, coverage));
                         phases.mark("json");
-                        writeLine(out, cov);
-                        phases.mark("send");
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building
-                        // or sending it must not skip the already-sent COV or the ACK.
+                        // it must not skip the COV or the ACK.
                         String classesFrame = collector.pollBytecodeFrame();
+                        phases.mark("classes");
+                        writeLine(out, cov);
                         if (classesFrame != null) {
                             writeLine(out, classesFrame);
                         }
-                        phases.mark("classes");
                     } catch (Exception e) {
-                        log(Level.FINE, "Failed to send CLASSES frame for " + command.testId, e);
+                        log(Level.FINE, "Failed to send the COV or CLASSES frame for " + command.testId, e);
                     } finally {
                         activeTestId = "";
-                        writeLine(out, "ACK");
+                        ack(out);
+                        phases.mark("send");
                     }
                 }
             }
         }
 
-        private void writeLine(OutputStream out, String message) throws IOException {
-            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+        // writeLine adds a line to the reply; ack ends the reply and sends it.
+        private static void writeLine(OutputStream out, String message) throws IOException {
+            out.write(message.getBytes(StandardCharsets.UTF_8));
+            out.write('\n');
+        }
+
+        private static void ack(OutputStream out) throws IOException {
+            writeLine(out, "ACK");
             out.flush();
         }
 
