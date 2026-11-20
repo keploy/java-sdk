@@ -207,8 +207,8 @@ public class BuildTableTest {
         Collect capped = new Collect();
         BuildTable.write(one, capped, new Collect(), BuildTable.MAX_RECORD_BYTES, mapBytes, steps[0] - 1);
         assertTrue(why, capped.records.get(0)
-                .contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"unit_too_complex\"}"));
-        assertEquals(why, "9b7d25b9091045ff4366ec799490ab35c3b1df10c5fcf8528eaaa66f1f746d26",
+                .contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"record_too_large\"}"));
+        assertEquals(why, "3ee7977c74cf5939ab7af3957bfc1bbd4e495614d4dcb7bd066c707618f7ec1c",
                 sha256Hex(capped.ndjson.toByteArray()));
         Collect chunked = new Collect();
         BuildTable.write(javaDedup(), chunked, 1600);
@@ -392,7 +392,7 @@ public class BuildTableTest {
     }
 
     @Test
-    public void aProbeMapPastItsBytesOrStepsIsUnitTooComplexWithNoProbeRecord() throws Exception {
+    public void aProbeMapPastItsBytesOrStepsIsRecordTooLargeWithNoProbeRecord() throws Exception {
         String name = "gen/big/Returns";
         byte[] bytes = BuildTableBudgetTest.returns(name, 200);
         List<BuildTable.ClassFile> one = Collections.singletonList(new BuildTable.ClassFile(name, bytes));
@@ -418,8 +418,9 @@ public class BuildTableTest {
             String why = "bytes " + bounds[i][0] + ", steps " + bounds[i][1];
             assertEquals(why, 1, s.records);
             assertEquals(why, at ? 0 : 1, s.notMeasured);
+            // Sent as record_too_large (the code Keploy's readers accept), counted apart in the SDK's own log.
             assertEquals(why, at ? 0 : 1, s.tooComplex);
-            assertEquals(why + ": a map past its bound is not a record too large", 0, s.tooLarge);
+            assertEquals(why + ": a map past its bound is not counted as a record too large", 0, s.tooLarge);
             assertEquals(why, 0, s.notMapped);
             assertEquals(why, at ? 1 : 0, s.probeRecords);
             assertEquals(why, at ? 1 : 0, map.records.size());
@@ -428,7 +429,7 @@ public class BuildTableTest {
                 assertTrue(rec, rec.contains("\"state\":\"ok\""));
                 assertEquals(probes.records.get(0), map.records.get(0));
             } else {
-                assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"unit_too_complex\"}")
+                assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"record_too_large\"}")
                         && rec.endsWith("\"methods\":[]}"));
             }
         }
@@ -450,8 +451,9 @@ public class BuildTableTest {
             }
             assertNotNull(line);
             assertTrue(line, line.contains("(1 classes, 1 not measured, 1 not measured as too complex to map"
-                    + " (unit_too_complex: a probe map over 8 MiB or 64 Mi steps; the FINE log names each);"));
-            assertFalse(line, line.contains("record_too_large"));
+                    + " (record_too_large: a probe map over 8 MiB or 64 Mi steps; the FINE log names each);"));
+            assertFalse(line, line.contains("not measured as too large"));
+            assertFalse(line, line.contains("unit_too_complex"));
         }
     }
 

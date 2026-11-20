@@ -295,11 +295,11 @@ public class BuildTableBudgetTest {
     }
 
     @Test(timeout = 600_000)
-    public void aChainOfEarlyReturnsIsMappedOrTooComplexAndNeverUnbounded() throws Exception {
+    public void aChainOfEarlyReturnsIsMappedOrTooLargeAndNeverUnbounded() throws Exception {
         // Probe k of a chain of n early returns walks back over the k checks before it and covers each one's
         // line and branch, so the map is about n * n ranges: 4.4 MB at 1,000 and 43 MB at 3,000; 4,500 ran a
         // 256 MiB heap out of memory (and 3,000 a 128 MiB one) before the map had a bound. Past it the class
-        // is unit_too_complex, given up as its map grows past the bound.
+        // is record_too_large, given up as its map grows past the bound.
         for (int n : new int[] {1000, 3000, 4500}) {
             String name = "gen/big/Returns" + n;
             List<BuildTable.ClassFile> one = new ArrayList<>();
@@ -309,7 +309,7 @@ public class BuildTableBudgetTest {
             assertEquals(1, b.tableRecords);
             assertEquals(name, mapped ? 1 : 0, b.probeRecords);
             assertEquals(name, mapped ? 0 : 1, b.notMeasured);
-            assertEquals(name, mapped ? 0 : 1, b.tooComplex);
+            assertEquals(name, mapped ? 0 : 1, b.tooLarge);
             assertTrue(name + ": the send took " + (b.cpuNanos / 1_000_000) + " ms of CPU",
                     b.cpuNanos < 1_000_000_000L);
             assertTrue(name + ": the send allocated " + (b.allocated >> 20) + " MiB",
@@ -459,8 +459,8 @@ public class BuildTableBudgetTest {
         int tableRecords;
         int probeRecords;
         int notMeasured;
-        /** How many of the table's records are unit_too_complex. */
-        int tooComplex;
+        /** How many of the table's records are record_too_large. */
+        int tooLarge;
         /** Bytes the send allocated on its thread (the sink's own allocation left out). */
         long allocated;
         /** The send thread's CPU time, in nanoseconds. */
@@ -569,12 +569,12 @@ public class BuildTableBudgetTest {
         long[] bytes = new long[2];
         boolean live = Boolean.getBoolean("keploy.budget.live");
         long[] liveMax = {-1};
-        // A record may run on into the next frame: not_measured and unit_too_complex are counted over the
+        // A record may run on into the next frame: not_measured and record_too_large are counted over the
         // table's stream, a match split over two frames included. The sink reads each frame where the writer
         // keeps it, as the socket's does: a copy or a String of a 1 MiB frame is a G1 humongous object, which
         // grows the heap this row measures.
         Matches notMeasured = new Matches("\"state\":\"not_measured\"");
-        Matches tooComplex = new Matches("\"reason\":{\"code\":\"unit_too_complex\"}");
+        Matches tooLarge = new Matches("\"reason\":{\"code\":\"record_too_large\"}");
         Budget b = new Budget();
         long gc0 = gcMillis();
         long process0 = processCpuNanos();
@@ -625,7 +625,7 @@ public class BuildTableBudgetTest {
                 }
                 if (!probes) {
                     notMeasured.add(frame, nl + 1, off + len);
-                    tooComplex.add(frame, nl + 1, off + len);
+                    tooLarge.add(frame, nl + 1, off + len);
                 }
                 sinkAllocated[0] += allocation.getThreadAllocatedBytes(self) - sink0;
                 // The sink's own time (a live run's collection) is not the send's gap.
@@ -633,7 +633,7 @@ public class BuildTableBudgetTest {
             }
         });
         b.notMeasured = notMeasured.n;
-        b.tooComplex = tooComplex.n;
+        b.tooLarge = tooLarge.n;
         long wall = System.nanoTime() - t0;
         long allocated = allocation.getThreadAllocatedBytes(self) - allocated0 - sinkAllocated[0];
         sending.set(false);
