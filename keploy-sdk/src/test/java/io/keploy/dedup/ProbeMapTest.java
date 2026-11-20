@@ -52,7 +52,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Rows for the probe map: for every class file of the java-dedup sample and of a class of code shapes (if and
@@ -616,6 +618,58 @@ public class ProbeMapTest {
             assertEquals("counted as a probe map failure", 1, s.notMapped);
             assertTrue("no probe record for a unit that is not measured", map.records.isEmpty());
             assertEquals(0, s.probeRecords);
+        }
+    }
+
+    @Test
+    public void aFailureInKeploysOwnStepsIsNotMappedAndTheCallersOwnPassesAsItIs() throws Exception {
+        byte[] bytes = copy(false, 10, 12);
+        // An index error in the probe walk, Keploy's step after JaCoCo's: here a caller that empties the
+        // method's branch rows before its probes are walked. It is NotMapped (the class is not measured and
+        // counted as a map that failed), not an error that blames JaCoCo for the class.
+        try {
+            KeployBranchCoverage.analyze(bytes, new HashMap<>(), new KeployBranchCoverage.EachProbe() {
+                @Override
+                public boolean wants(KeployBranchCoverage.Method m) {
+                    m.branches = new boolean[0][];
+                    return true;
+                }
+
+                @Override
+                public void probe(KeployBranchCoverage.Method m, int r, KeployBranchCoverage.Hits h) {
+                }
+            });
+            fail("an index error in the walk passed");
+        } catch (KeployBranchCoverage.NotMapped e) {
+            assertTrue(e.getMessage(), e.getMessage().startsWith("d/C#m"));
+            assertTrue(String.valueOf(e.getCause()), e.getCause() instanceof ArrayIndexOutOfBoundsException);
+        }
+        // What the caller's own callback throws passes as it is: BuildTable ends a map past its bound so.
+        IllegalArgumentException mine = new IllegalArgumentException("the caller's");
+        try {
+            KeployBranchCoverage.analyze(bytes, new HashMap<>(), (m, r, h) -> {
+                throw mine;
+            });
+            fail("the callback's exception was lost");
+        } catch (IllegalArgumentException e) {
+            assertSame(mine, e);
+        }
+        // And so does what its wants throws, though it runs under the same wrap as the walk.
+        IllegalStateException declined = new IllegalStateException("the caller's wants");
+        try {
+            KeployBranchCoverage.analyze(bytes, new HashMap<>(), new KeployBranchCoverage.EachProbe() {
+                @Override
+                public boolean wants(KeployBranchCoverage.Method m) {
+                    throw declined;
+                }
+
+                @Override
+                public void probe(KeployBranchCoverage.Method m, int r, KeployBranchCoverage.Hits h) {
+                }
+            });
+            fail("the wants exception was lost");
+        } catch (IllegalStateException e) {
+            assertSame(declined, e);
         }
     }
 

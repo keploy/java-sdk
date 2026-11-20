@@ -206,8 +206,9 @@ public class BuildTableTest {
         assertTrue(why, mapped.records.get(0).contains("\"state\":\"ok\""));
         Collect capped = new Collect();
         BuildTable.write(one, capped, new Collect(), BuildTable.MAX_RECORD_BYTES, mapBytes, steps[0] - 1);
-        assertTrue(why, capped.records.get(0).contains("\"state\":\"not_measured\""));
-        assertEquals(why, "3ee7977c74cf5939ab7af3957bfc1bbd4e495614d4dcb7bd066c707618f7ec1c",
+        assertTrue(why, capped.records.get(0)
+                .contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"unit_too_complex\"}"));
+        assertEquals(why, "9b7d25b9091045ff4366ec799490ab35c3b1df10c5fcf8528eaaa66f1f746d26",
                 sha256Hex(capped.ndjson.toByteArray()));
         Collect chunked = new Collect();
         BuildTable.write(javaDedup(), chunked, 1600);
@@ -360,6 +361,7 @@ public class BuildTableTest {
         assertEquals(3, s.notMeasured);
         assertEquals("JaCoCo's refusals are not counted as maps that failed", 0, s.notMapped);
         assertEquals(0, s.tooLarge);
+        assertEquals(0, s.tooComplex);
 
         // The other classes are as they were.
         for (String id : golden.keySet()) {
@@ -385,10 +387,12 @@ public class BuildTableTest {
         // DedupController and Product are the two records past 1600 bytes.
         assertEquals(2, tooLarge);
         assertEquals(2, s.notMeasured);
+        assertEquals(2, s.tooLarge);
+        assertEquals("a record too large is not a unit too complex", 0, s.tooComplex);
     }
 
     @Test
-    public void aProbeMapPastItsBytesOrStepsIsRecordTooLargeWithNoProbeRecord() throws Exception {
+    public void aProbeMapPastItsBytesOrStepsIsUnitTooComplexWithNoProbeRecord() throws Exception {
         String name = "gen/big/Returns";
         byte[] bytes = BuildTableBudgetTest.returns(name, 200);
         List<BuildTable.ClassFile> one = Collections.singletonList(new BuildTable.ClassFile(name, bytes));
@@ -414,7 +418,8 @@ public class BuildTableTest {
             String why = "bytes " + bounds[i][0] + ", steps " + bounds[i][1];
             assertEquals(why, 1, s.records);
             assertEquals(why, at ? 0 : 1, s.notMeasured);
-            assertEquals(why, at ? 0 : 1, s.tooLarge);
+            assertEquals(why, at ? 0 : 1, s.tooComplex);
+            assertEquals(why + ": a map past its bound is not a record too large", 0, s.tooLarge);
             assertEquals(why, 0, s.notMapped);
             assertEquals(why, at ? 1 : 0, s.probeRecords);
             assertEquals(why, at ? 1 : 0, map.records.size());
@@ -423,9 +428,30 @@ public class BuildTableTest {
                 assertTrue(rec, rec.contains("\"state\":\"ok\""));
                 assertEquals(probes.records.get(0), map.records.get(0));
             } else {
-                assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"record_too_large\"}")
+                assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"unit_too_complex\"}")
                         && rec.endsWith("\"methods\":[]}"));
             }
+        }
+    }
+
+    @Test
+    public void theSendsLineCountsUnitsTooComplexApartFromRecordsTooLarge() throws Exception {
+        // A chain of 3,000 early returns: its probe map (about 43 MB) is past the 8 MiB bound.
+        String name = "gen/big/Returns3000";
+        List<BuildTable.ClassFile> one = Collections.singletonList(
+                new BuildTable.ClassFile(name, BuildTableBudgetTest.returns(name, 3000)));
+        try (Logs logs = new Logs()) {
+            BuildTable.send(() -> one, frame -> { });
+            String line = null;
+            for (LogRecord r : logs.mine()) {
+                if (r.getMessage().contains(" sent (")) {
+                    line = r.getMessage();
+                }
+            }
+            assertNotNull(line);
+            assertTrue(line, line.contains("(1 classes, 1 not measured, 1 not measured as too complex to map"
+                    + " (unit_too_complex: a probe map over 8 MiB or 64 Mi steps; the FINE log names each);"));
+            assertFalse(line, line.contains("record_too_large"));
         }
     }
 
@@ -795,8 +821,13 @@ public class BuildTableTest {
         }
 
         /** mine is the records the calling thread logged: a send of another row's class may log meanwhile. */
-        @SuppressWarnings("deprecation") // getLongThreadID is JDK 16+; this SDK builds for Java 8
         List<LogRecord> mine() {
+            return mine(records);
+        }
+
+        /** mine is those of records the calling thread logged. */
+        @SuppressWarnings("deprecation") // getLongThreadID is JDK 16+; this SDK builds for Java 8
+        static List<LogRecord> mine(List<LogRecord> records) {
             int me = (int) Thread.currentThread().getId();
             List<LogRecord> out = new ArrayList<>();
             for (LogRecord r : records) {
@@ -1204,7 +1235,7 @@ public class BuildTableTest {
 
     /** Throwing is a JUL handler on BuildTable's logger that throws on every record, as an app's bridge can. */
     static final class Throwing extends Handler implements AutoCloseable {
-        final AtomicInteger published = new AtomicInteger();
+        final List<LogRecord> published = new java.util.concurrent.CopyOnWriteArrayList<>();
         private final Logger logger = Logger.getLogger(BuildTable.class.getName());
 
         Throwing() {
@@ -1213,8 +1244,36 @@ public class BuildTableTest {
 
         @Override
         public void publish(LogRecord record) {
-            published.incrementAndGet();
+            published.add(record);
             throw new IllegalStateException("a log handler that throws (this row's own)");
+        }
+
+        /**
+         * mine is the messages of the records the calling thread logged (another row's send may log meanwhile),
+         * each with its exception's message after " | ".
+         */
+        List<String> mine() {
+            List<String> out = new ArrayList<>();
+            for (LogRecord r : Logs.mine(published)) {
+                Throwable t = r.getThrown();
+                out.add(r.getMessage() + (t == null ? "" : " | " + t.getMessage()));
+            }
+            return out;
+        }
+
+        /** count is how many of mine hold each of parts. */
+        int count(String... parts) {
+            int n = 0;
+            next:
+            for (String m : mine()) {
+                for (String p : parts) {
+                    if (!m.contains(p)) {
+                        continue next;
+                    }
+                }
+                n++;
+            }
+            return n;
         }
 
         @Override
@@ -1238,7 +1297,12 @@ public class BuildTableTest {
             BuildTable.send(() -> {
                 throw new IllegalStateException("classes that cannot be read (this row's own)");
             }, f -> fail("nothing to send"));
-            assertEquals("both sends logged through the handler", 2, h.published.get());
+            // Each send's outcome went through the handler. Only those lines are counted: a collection during
+            // the first send adds its paced line.
+            assertEquals("the send logged through the handler: " + h.mine(), 1,
+                    h.count("Keploy coverage: build table ", " sent (5 classes"));
+            assertEquals("the failed send logged through the handler: " + h.mine(), 1,
+                    h.count("Keploy coverage: the build table was not sent | classes that cannot be read"));
             // Sends logs a send that throws through the same handler: the request made after it still runs.
             BuildTable.Sends sends = new BuildTable.Sends(BuildTable::thread);
             CountDownLatch failing = new CountDownLatch(1);
