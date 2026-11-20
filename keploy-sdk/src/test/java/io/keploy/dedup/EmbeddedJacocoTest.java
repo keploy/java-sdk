@@ -2,8 +2,10 @@ package io.keploy.dedup;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -76,6 +78,66 @@ public class EmbeddedJacocoTest {
         // No class passes the index's cut, so JaCoCo would only slow the app.
         assertNull(EmbeddedJacoco.includes(true, Collections.<String>emptyList()));
         assertNull(EmbeddedJacoco.includes(false, Collections.<String>emptyList()));
+    }
+
+    @Test
+    public void theAgentJarIsOrgJacocoAgentsUnchangedUnderKeploysOwnPackage() throws Exception {
+        // The build puts org.jacoco.agent's jacocoagent.jar, byte for byte,
+        // under io/keploy/dedup, and none at the root, where an app's own
+        // org.jacoco.agent (its AgentJar) looks for one.
+        assertEquals("io/keploy/dedup/jacocoagent.jar", EmbeddedJacoco.AGENT_JAR);
+        try (InputStream carried = EmbeddedJacoco.agentJar(EmbeddedJacoco.class.getClassLoader());
+             InputStream jacocos = AgentJar.getResourceAsStream()) {
+            assertTrue(Arrays.equals(readAll(jacocos), readAll(carried)));
+        }
+        try (URLClassLoader sdkAlone = new URLClassLoader(new URL[] {sdkClasses()}, null)) {
+            assertNotNull(sdkAlone.getResource(EmbeddedJacoco.AGENT_JAR));
+            assertNull("keploy-sdk's classes hold a jacocoagent.jar at the root, where an app's own"
+                    + " AgentJar would read it", sdkAlone.getResource("jacocoagent.jar"));
+        }
+    }
+
+    @Test
+    public void anAppsOwnJacocoAgentAheadOfTheSdkIsNotTheAgentStarted() throws Exception {
+        // An app's org.jacoco.agent ahead of keploy-sdk on the class path
+        // holds a jacocoagent.jar at its root: agentJar still reads the
+        // SDK's own.
+        File app = tmp.newFile("org.jacoco.agent-0.7.9.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(app))) {
+            out.putNextEntry(new ZipEntry("jacocoagent.jar"));
+            out.write("the app's own JaCoCo agent".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        try (URLClassLoader appFirst = new URLClassLoader(
+                new URL[] {app.toURI().toURL(), sdkClasses()}, null);
+             InputStream carried = EmbeddedJacoco.agentJar(appFirst);
+             InputStream jacocos = AgentJar.getResourceAsStream()) {
+            assertTrue("agentJar read the app's jacocoagent.jar, not keploy-sdk's",
+                    Arrays.equals(readAll(jacocos), readAll(carried)));
+        }
+    }
+
+    private static URL sdkClasses() {
+        return EmbeddedJacoco.class.getProtectionDomain().getCodeSource().getLocation();
+    }
+
+    @Test
+    public void aLoaderWithoutTheAgentJarIsANamedError() throws Exception {
+        try (URLClassLoader empty = new URLClassLoader(new URL[0], null)) {
+            EmbeddedJacoco.agentJar(empty).close();
+            fail("agentJar opened a jar an empty loader does not hold");
+        } catch (IllegalStateException e) {
+            assertEquals("keploy-sdk.jar holds no io/keploy/dedup/jacocoagent.jar", e.getMessage());
+        }
+    }
+
+    private static byte[] readAll(InputStream input) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        for (int n; (n = input.read(buffer)) != -1; ) {
+            out.write(buffer, 0, n);
+        }
+        return out.toByteArray();
     }
 
     @Test

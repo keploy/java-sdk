@@ -83,7 +83,8 @@ test's coverage would be measured. Application code should not import `io.keploy
 java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar
 ```
 
-It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0; see
+It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0,
+unchanged, at `io/keploy/dedup/jacocoagent.jar`; see
 `META-INF/THIRD-PARTY-NOTICES.txt` in the jar) and starts it itself, before the
 app's `main`, with `includes=` set to the app's own classes, which it finds from
 how the JVM was launched (Spring Boot, Jib, shaded and plain jars, class dirs;
@@ -97,6 +98,13 @@ INFO: Keploy dedup: started JaCoCo 0.8.15 on the app's <n> classes alone (includ
 When the SDK cannot tell the app's classes from its libraries, it says so at
 WARNING and starts JaCoCo on every class; set `KEPLOY_JAVA_CLASS_DIRS` to the
 app's class dirs and jars to fix that.
+
+An app that ships its own `org.jacoco.agent` (any JaCoCo version) keeps it, and
+the SDK keeps its own: `keploy-sdk.jar` holds none of that artifact's classes,
+and its `jacocoagent.jar` is not where that artifact's `AgentJar` looks, so the
+SDK starts JaCoCo 0.8.15 whether the app's jar comes before or after
+`keploy-sdk.jar` on the class path, and the app's `AgentJar` reads the app's own
+`jacocoagent.jar`, also in a Spring Boot fat jar.
 
 If the command attaches a JaCoCo agent of its own (`-javaagent:jacocoagent.jar`,
 before or after keploy-sdk.jar, or in `JAVA_TOOL_OPTIONS`), the SDK starts none

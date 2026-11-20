@@ -39,7 +39,7 @@ trap cleanup EXIT
 licenses_dir="${work_dir}/licenses"
 jacoco_maven=META-INF/maven/org.jacoco
 license_entries=(META-INF/LICENSE META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt about.html
-  "${jacoco_maven}/org.jacoco.core/pom.properties" "${jacoco_maven}/org.jacoco.agent/pom.properties")
+  "${jacoco_maven}/org.jacoco.core/pom.properties" io/keploy/dedup/jacocoagent.jar)
 mkdir -p "${licenses_dir}"
 (cd "${licenses_dir}" && jar xf "${agent_jar}" "${license_entries[@]}")
 for entry in "${license_entries[@]}"; do
@@ -58,22 +58,29 @@ for entry in META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt; do
     exit 1
   fi
 done
-# about.html at the jar's root is org.jacoco.core's, as the notices say, and
-# org.jacoco.agent's, which the shade filter leaves out, is the same file as
-# the about.html inside jacocoagent.jar.
+# about.html at the jar's root is org.jacoco.core's, as the notices say. Of
+# org.jacoco.agent, built from the same JaCoCo release, the jar carries the
+# jacocoagent.jar alone, unchanged, under io/keploy/dedup (not its AgentJar,
+# nor its about.html, which is the same file as the about.html inside
+# jacocoagent.jar).
+jacoco_version="$(sed -n 's/^version=//p' "${licenses_dir}/${jacoco_maven}/org.jacoco.core/pom.properties" | tr -d '\r')"
 for artifact in org.jacoco.core org.jacoco.agent; do
-  version="$(sed -n 's/^version=//p' "${licenses_dir}/${jacoco_maven}/${artifact}/pom.properties" | tr -d '\r')"
   mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
-    -Dartifact="org.jacoco:${artifact}:${version}" -DoutputDirectory="${licenses_dir}"
+    -Dartifact="org.jacoco:${artifact}:${jacoco_version}" -DoutputDirectory="${licenses_dir}"
   mkdir -p "${licenses_dir}/${artifact}"
-  (cd "${licenses_dir}/${artifact}" && jar xf "../${artifact}-${version}.jar" about.html)
+  (cd "${licenses_dir}/${artifact}" && jar xf "../${artifact}-${jacoco_version}.jar" about.html)
 done
 if ! cmp -s "${licenses_dir}/org.jacoco.core/about.html" "${licenses_dir}/about.html"; then
   echo "licenses: the jar's about.html is not org.jacoco.core's" >&2
   exit 1
 fi
+(cd "${licenses_dir}/org.jacoco.agent" && jar xf "../org.jacoco.agent-${jacoco_version}.jar" jacocoagent.jar)
+if ! cmp -s "${licenses_dir}/org.jacoco.agent/jacocoagent.jar" "${licenses_dir}/io/keploy/dedup/jacocoagent.jar"; then
+  echo "licenses: the jar's io/keploy/dedup/jacocoagent.jar is not org.jacoco.agent ${jacoco_version}'s jacocoagent.jar" >&2
+  exit 1
+fi
 mkdir -p "${licenses_dir}/jacocoagent"
-(cd "${licenses_dir}/jacocoagent" && jar xf "${agent_jar}" jacocoagent.jar && jar xf jacocoagent.jar about.html)
+(cd "${licenses_dir}/jacocoagent" && jar xf "${licenses_dir}/io/keploy/dedup/jacocoagent.jar" about.html)
 if ! cmp -s "${licenses_dir}/org.jacoco.agent/about.html" "${licenses_dir}/jacocoagent/about.html"; then
   echo "licenses: org.jacoco.agent's about.html is not the one inside the jar's jacocoagent.jar" >&2
   exit 1
@@ -81,10 +88,11 @@ fi
 # The jar holds keploy-sdk's own packages and the parts the notices name, and
 # nothing else: a dependency or a package that lands in the jar without its
 # notice fails here. A third-party part goes in THIRD-PARTY-NOTICES.txt first,
-# then in want_parts; a new package of keploy-sdk's own, in want_parts.
+# then in want_parts; a new package of keploy-sdk's own, in want_parts. A file
+# in keploy-sdk's own packages that is not a class is a part by its own name.
 jar_parts="$(jar tf "${agent_jar}" | grep -v '/$' | awk -F/ '
   $1 == "io" && $2 == "keploy" && $3 == "shaded" { print $1 "/" $2 "/" $3 "/" $4 "/" $5 "/" $6; next }
-  $1 == "org" && $2 == "jacoco" && $3 == "agent" { print; next }
+  $1 == "io" && $2 == "keploy" && $3 != "shaded" && $NF !~ /\.class$/ { print; next }
   $1 == "META-INF" && $2 == "versions" && NF > 6 { print $1 "/" $2 "/*/" $4 "/" $5 "/" $6; next }
   $1 == "META-INF" && ($2 == "maven" || $2 == "native-image") && NF > 3 { print $1 "/" $2 "/" $3; next }
   $1 == "lib" && NF == 4 && $3 == "jni" && $4 ~ /^(lib)?junixsocket-native-/ { print "lib/*/jni/junixsocket-native"; next }
@@ -104,14 +112,12 @@ META-INF/versions/*/org/newsclub/lib
 META-INF/versions/*/org/newsclub/net
 about.html
 io/keploy/dedup
+io/keploy/dedup/jacocoagent.jar
 io/keploy/servlet
 io/keploy/shaded/com/google/gson
 io/keploy/shaded/org/jacoco/core
 io/keploy/shaded/org/objectweb/asm
-jacocoagent.jar
 lib/*/jni/junixsocket-native
-org/jacoco/agent/AgentJar.class
-org/jacoco/agent/package-info.class
 org/newsclub/lib
 org/newsclub/net
 PARTS
@@ -246,7 +252,7 @@ public final class SmokeHarness {
         String wantJacocoVersion = "attached".equals(wantJacoco)
                 ? versionOf(new File(System.getProperty("smoke.jacocoJar")), null)
                 : "embedded".equals(wantJacoco)
-                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "jacocoagent.jar") : "";
+                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "io/keploy/dedup/jacocoagent.jar") : "";
         if (wantSdkVersion.isEmpty() || wantJacocoVersion.isEmpty() != !wantJacoco.matches("attached|embedded")
                 || !report.endsWith(",\"sdkVersion\":\"" + wantSdkVersion + "\",\"jacocoVersion\":\""
                         + wantJacocoVersion + "\"}")) {
@@ -304,11 +310,13 @@ public final class SmokeHarness {
         return record;
     }
 
-    // loadsItsOwn loads ASM, Gson and JaCoCo's core from the app's own jars
-    // as Spring Boot's launcher loads BOOT-INF/lib: through a loader that asks
-    // its parent, the system class loader, first. keploy-sdk.jar is on the
-    // system class path, so a copy of these it carried under their own names
-    // would be what the app gets, in keploy-sdk's version, not the app's.
+    // loadsItsOwn loads ASM, Gson, JaCoCo's core and JaCoCo's AgentJar from
+    // the app's own jars as Spring Boot's launcher loads BOOT-INF/lib: through
+    // a loader that asks its parent, the system class loader, first.
+    // keploy-sdk.jar is on the system class path, so a copy of these it
+    // carried under their own names would be what the app gets, in
+    // keploy-sdk's version, not the app's; and so would a jacocoagent.jar it
+    // carried at its root, which is where the app's AgentJar looks for its own.
     private static void loadsItsOwn(String jars) throws Exception {
         String[] paths = jars.split(File.pathSeparator);
         URL[] urls = new URL[paths.length];
@@ -318,7 +326,8 @@ public final class SmokeHarness {
         URLClassLoader libraries = new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
         try {
             for (String name : new String[] {
-                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo"}) {
+                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo",
+                    "org.jacoco.agent.AgentJar"}) {
                 Class<?> type = Class.forName(name, false, libraries);
                 URL from = type.getProtectionDomain().getCodeSource() == null
                         ? null : type.getProtectionDomain().getCodeSource().getLocation();
@@ -330,6 +339,16 @@ public final class SmokeHarness {
                     throw new IllegalStateException("the app's " + name + " came from " + from
                             + ", not from the app's own jars " + jars);
                 }
+            }
+            URL agent = (URL) Class.forName("org.jacoco.agent.AgentJar", false, libraries)
+                    .getMethod("getResource").invoke(null);
+            boolean ownAgent = false;
+            for (URL url : urls) {
+                ownAgent |= agent != null && agent.toString().equals("jar:" + url + "!/jacocoagent.jar");
+            }
+            if (!ownAgent) {
+                throw new IllegalStateException("the app's AgentJar read the JaCoCo agent jar " + agent
+                        + ", not the one in the app's own jars " + jars);
             }
         } finally {
             libraries.close();
@@ -819,13 +838,16 @@ java_with_sdk_only() {
       -jar plain-app.jar "sdk-only-plain-jar" derived embedded
 )
 
-# The app's own ASM, Gson and JaCoCo core, in versions other than the ones
-# keploy-sdk.jar carries. keploy-sdk.jar carries its copies renamed under
-# io/keploy/shaded, so the app gets its own and keploy-sdk its own, whichever
-# comes first: the app's on the class path before keploy-sdk.jar (Jib's
-# launch), or the app's in a loader under the system class loader (Spring
-# Boot's BOOT-INF/lib).
-for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9; do
+# The app's own ASM, Gson, JaCoCo core and JaCoCo agent, in versions other
+# than the ones keploy-sdk.jar carries. keploy-sdk.jar carries its copies
+# renamed under io/keploy/shaded, and its jacocoagent.jar under
+# io/keploy/dedup without JaCoCo's AgentJar, so the app gets its own and
+# keploy-sdk its own, whichever comes first: the app's on the class path before
+# keploy-sdk.jar (Jib's launch; the INDEX report names the JaCoCo keploy-sdk
+# started, which must be its own), or the app's in a loader under the system
+# class loader (Spring Boot's BOOT-INF/lib).
+for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9 \
+  org.jacoco:org.jacoco.agent:0.7.9; do
   mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
     -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/app-libs"
 done

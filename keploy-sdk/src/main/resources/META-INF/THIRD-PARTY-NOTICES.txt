@@ -11,20 +11,16 @@ the jar; https://www.eclipse.org/legal/epl-2.0/)
   https://github.com/jacoco/jacoco, tag v0.8.15 (jacocoagent.jar is built
   from its org.jacoco.agent.rt module), and org.jacoco.core's also from
   Maven Central as org.jacoco:org.jacoco.core:0.8.15:sources.
-  - jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:0.8.15; keploy-sdk
-    starts it when the JVM attaches no JaCoCo agent of its own. It holds its
-    own about.html.
-  - the class org.jacoco.agent.AgentJar and its package-info, unchanged and
-    not renamed, from org.jacoco:org.jacoco.agent:0.8.15, which keploy-sdk
-    uses to read jacocoagent.jar.
+  - jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:0.8.15, at
+    io/keploy/dedup/jacocoagent.jar in the jar; keploy-sdk starts it when the
+    JVM attaches no JaCoCo agent of its own. It holds its own about.html,
+    which is also org.jacoco.agent's.
   - the classes of org.jacoco:org.jacoco.core:0.8.15, unchanged but for their
     package, renamed from org.jacoco.core to io.keploy.shaded.org.jacoco.core
     (maven-shade-plugin relocation, keploy-sdk/pom.xml), so that they never meet
     an app's own JaCoCo.
-  about.html at the root of the jar is org.jacoco.core's, unchanged.
-  org.jacoco.agent's, which covers AgentJar and jacocoagent.jar, is the same
-  file as the about.html inside jacocoagent.jar. Neither covers the rest of
-  the jar.
+  about.html at the root of the jar is org.jacoco.core's, unchanged. Neither
+  it nor the one inside jacocoagent.jar covers the rest of the jar.
 
 ASM 9.10.1 - BSD 3-Clause License
   Source: https://gitlab.ow2.org/asm/asm

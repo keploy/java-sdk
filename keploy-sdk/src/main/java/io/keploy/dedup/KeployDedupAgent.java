@@ -417,8 +417,11 @@ public final class KeployDedupAgent {
                     + (includes.length() > 300 ? includes.substring(0, 300) + "..." : includes) + ")"), null);
         } catch (Throwable t) {
             // Never let premain fail the app's start: run it unmeasured. This
-            // must stay Throwable: an Error (NoClassDefFoundError for JaCoCo's
-            // AgentJar, a LinkageError from its premain) would abort the JVM.
+            // must stay Throwable: loading or initializing JaCoCo's PreMain
+            // can throw an Error (a LinkageError or an
+            // ExceptionInInitializerError), which would abort the JVM. A jar
+            // without the agent is agentJar's IllegalStateException, logged
+            // here with it.
             log(Level.WARNING, "Keploy dedup could not start the JaCoCo agent keploy-sdk.jar carries, so no"
                     + " test's coverage is measured: attach jacocoagent.jar with -javaagent to measure it", t);
         }
@@ -2355,9 +2358,10 @@ public final class KeployDedupAgent {
         }
 
         // shouldSkipClass keeps keploy-sdk.jar's own classes out of the index:
-        // its code, the ASM, Gson and JaCoCo core it carries renamed under
-        // io/keploy/shaded, JaCoCo's agent (the AgentJar it starts, and the
-        // runtime of any JaCoCo agent), and junixsocket, which it carries under
+        // its code (with the jacocoagent.jar it starts, under io/keploy/dedup),
+        // the ASM, Gson and JaCoCo core it carries renamed under
+        // io/keploy/shaded, JaCoCo itself (the runtime of any JaCoCo agent,
+        // and an app's own copy), and junixsocket, which it carries under
         // its own names because its native library is bound to them. An app's
         // own ASM or Gson is one of the app's libraries, as Jackson is. The
         // shade plugin rewrites every string constant that starts with a
