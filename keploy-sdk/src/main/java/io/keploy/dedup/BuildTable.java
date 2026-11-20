@@ -13,9 +13,9 @@ import org.objectweb.asm.Opcodes;
 
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -475,8 +475,9 @@ final class BuildTable {
             FrameWriter frames = new FrameWriter(sender, PART_TABLE, MAX_FRAME_BYTES);
             FrameWriter maps = new FrameWriter(sender, PART_PROBES, MAX_FRAME_BYTES);
             Summary s;
+            Pacer pacer = Pacer.jvm();
             try (Spill spill = Spill.open(spillDir)) {
-                s = write(classes.get(), frames, spill);
+                s = write(classes.get(), frames, spill, MAX_RECORD_BYTES, MAX_MAP_BYTES, MAX_MAP_STEPS, pacer);
                 frames.finish(s.build, s.records);
                 spill.sendTo(maps, s.build);
             }
@@ -504,10 +505,14 @@ final class BuildTable {
             }
             m.append("; probe map of ").append(s.probeRecords).append(" class files; ").append(frames.seq + maps.seq)
                     .append(" frames, ").append((System.nanoTime() - t0) / 1_000_000)
-                    .append(" ms, cpu ").append((threadCpuNanos() - cpu0) / 1_000_000).append(" ms)");
+                    .append(" ms, cpu ").append((threadCpuNanos() - cpu0) / 1_000_000).append(" ms, paced ")
+                    .append(pacer.waitedNanos() / 1_000_000).append(" ms)");
             log(Level.INFO, m.toString(), null);
         } catch (IOException e) {
-            log(Level.WARNING, "Keploy coverage: the build table was not sent: " + e.getMessage()
+            // An interrupt ends the send: the Pacer's, or a temp file's channel that it closed. Name it, and not
+            // the channel's error, which would point at java.io.tmpdir.
+            String why = Thread.currentThread().isInterrupted() ? "its thread was interrupted" : e.getMessage();
+            log(Level.WARNING, "Keploy coverage: the build table was not sent: " + why
                     + "; it goes again when Keploy asks for it again", null);
         } catch (Throwable t) {
             // Never let the table take the app down: Keploy names the coverage it did not get.
@@ -520,6 +525,213 @@ final class BuildTable {
             return java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime();
         } catch (Throwable t) {
             return 0;
+        }
+    }
+
+    /**
+     * Pacer paces the table's thread by the JVM's collections, so its garbage does not make the collector grow
+     * the app's heap. The analysis allocates fast (about 80-90 KiB a class, over 1 GB/s at full speed, nearly
+     * all of it short-lived), and G1 and Parallel commit more heap when collecting takes more than their goal
+     * of the time (Parallel 1%; G1 a few percent, as low as 1% while it has committed a small part of its cap).
+     * So after each unit the thread owes {@link #WAIT_PER_GC} times the time the collections took since the
+     * send began (the app's and its own) less the time since, and waits it out: collections then take at most
+     * 1/200 of the send's time, and a JVM that does not collect is not paced at all. The time read is every
+     * collector bean's: on a collector whose beans count concurrent cycles (ZGC, Shenandoah) the send is paced
+     * at its full allowance.
+     *
+     * <p>The waits are bounded. They are drawn from an allowance of {@link #ALLOWANCE_NANOS_PER_CLASS} per
+     * class file analyzed, of which at most {@link #MAX_BANK_NANOS} is saved up: no one wait is over a second,
+     * the waits over any k class files add up to at most a second plus 0.8 k ms, so frames keep coming (Keploy's
+     * wait for the table is a bound on the time since its last frame), and all of them to at most 0.8 ms a
+     * class file (40 s at 50,000). And no wait is taken that would end the table past {@link #deadlineNanos}
+     * (50 s at 50,000 class files), reckoned as the time so far plus the rest of its class files at the rate
+     * the work went so far: on a slow or busy CPU the pacing gives way to the table's 60 s bound, with 10 s
+     * left for the probe map's frames and the estimate's error. A clock or collector bean that fails ends the
+     * pacing, and the rest is sent unpaced. An interrupt ends the send: unitDone throws, and the interrupt is
+     * kept for the thread.
+     */
+    static final class Pacer {
+        /** Each millisecond of collection asks for this many of the send's: at most 0.5% of it collecting. */
+        static final long WAIT_PER_GC = 200;
+        /** The wait each analyzed class file adds to what the thread may wait: the table's time bound. */
+        static final long ALLOWANCE_NANOS_PER_CLASS = 800_000L;
+        /** The most of the allowance kept for a later wait: the longest wait after a quiet stretch. */
+        static final long MAX_BANK_NANOS = 1_000_000_000L;
+        /** Waits shorter than this are put off to the next unit, so the thread does not sleep per class. */
+        static final long MIN_WAIT_NANOS = 10_000_000L;
+        /** The pacing's time bound up to {@link #DEADLINE_CLASS_FILES} class files: see deadlineNanos. */
+        static final long DEADLINE_NANOS = 50_000_000_000L;
+        static final long DEADLINE_CLASS_FILES = 50_000;
+        // The most the thread may owe (an hour), so the sum cannot overflow; the allowance bounds it anyway.
+        private static final long MAX_DEBT_NANOS = 3_600_000_000_000L;
+
+        /** The clock, the collections' time and the sleep a Pacer reads; the JVM's, or a row's. */
+        interface Clock {
+            long nanoTime();
+
+            /** The collectors' total time in ms since the JVM started. */
+            long gcMillis();
+
+            void sleep(long nanos) throws InterruptedException;
+        }
+
+        private final Clock clock;
+        private boolean off;
+        private long start;
+        private long total;
+        private long done;
+        private long last;
+        private long gc;
+        private long debt;
+        private long bank;
+        private long waited;
+
+        Pacer(Clock clock) {
+            this.clock = clock;
+            try {
+                last = clock.nanoTime();
+                start = last;
+                gc = clock.gcMillis();
+            } catch (RuntimeException e) {
+                stop("its clock failed", e);
+            }
+        }
+
+        /** off is a Pacer that never waits: write's, outside a send. */
+        static Pacer off() {
+            Pacer p = new Pacer(JvmClock.NONE);
+            p.off = true;
+            return p;
+        }
+
+        /** jvm paces by this JVM's collectors; off when the runtime has no collector beans to read. */
+        static Pacer jvm() {
+            List<GarbageCollectorMXBean> beans;
+            try {
+                beans = ManagementFactory.getGarbageCollectorMXBeans();
+            } catch (RuntimeException | LinkageError e) {
+                log(Level.FINE, "Keploy coverage: the build table is sent unpaced: no collector beans", e);
+                return off();
+            }
+            return new Pacer(new JvmClock(beans));
+        }
+
+        /**
+         * deadlineNanos is the most the pacing lets a table of classFiles take: 50 s, and 1 ms a class file past
+         * 50,000 (the table's bound, 60 s at 50,000, scales the same way).
+         */
+        static long deadlineNanos(long classFiles) {
+            return Math.max(DEADLINE_NANOS, DEADLINE_NANOS / DEADLINE_CLASS_FILES * classFiles);
+        }
+
+        /** begin says how many class files the send analyzes, for its deadline; not called, the deadline is 50 s. */
+        void begin(long classFiles) {
+            total = Math.max(0, classFiles);
+        }
+
+        /** waitedNanos is how long the thread waited, in all. */
+        long waitedNanos() {
+            return waited;
+        }
+
+        /**
+         * unitDone is called after each unit, whose classFiles were analyzed: it waits what is owed and may be.
+         * It throws on an interrupt, which it keeps for the thread: an interrupt ends the send.
+         */
+        void unitDone(int classFiles) throws InterruptedIOException {
+            if (Thread.currentThread().isInterrupted()) {
+                throw interrupted();
+            }
+            if (off) {
+                return;
+            }
+            try {
+                long now = clock.nanoTime();
+                long g = clock.gcMillis();
+                if (g > gc) {
+                    long perMs = WAIT_PER_GC * 1_000_000L;
+                    debt = Math.min(MAX_DEBT_NANOS, debt + Math.min(g - gc, MAX_DEBT_NANOS / perMs) * perMs);
+                    gc = g;
+                }
+                debt = Math.max(0, debt - Math.max(0, now - last));
+                int files = Math.max(0, classFiles);
+                bank = Math.min(MAX_BANK_NANOS, bank + ALLOWANCE_NANOS_PER_CLASS * files);
+                done += files;
+                last = now;
+                long wait = Math.min(Math.min(debt, bank), room(now));
+                if (wait < MIN_WAIT_NANOS) {
+                    return;
+                }
+                try {
+                    clock.sleep(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw interrupted();
+                }
+                long after = clock.nanoTime();
+                long took = Math.max(0, after - now);
+                // What the sleep overran comes off the bank too, so the bound holds for the time slept; and at
+                // least the wait asked for, so it holds on a clock that does not move across a sleep.
+                long charged = Math.max(took, wait);
+                bank -= charged;
+                debt = Math.max(0, debt - charged);
+                waited += took;
+                last = after;
+            } catch (RuntimeException e) {
+                stop("its clock failed", e);
+            }
+        }
+
+        /** room is how long the thread may wait at now and still end the table by its deadline. */
+        private long room(long now) {
+            long elapsed = Math.max(0, now - start);
+            double rest = 0;
+            if (done > 0 && total > done) {
+                rest = (double) Math.max(0, elapsed - waited) / done * (total - done);
+            }
+            return (long) Math.max(-1.0, deadlineNanos(total) - elapsed - rest);
+        }
+
+        static InterruptedIOException interrupted() {
+            return new InterruptedIOException("the build table's thread was interrupted");
+        }
+
+        private void stop(String why, Throwable thrown) {
+            off = true;
+            log(Level.FINE, "Keploy coverage: the build table is sent unpaced: " + why, thrown);
+        }
+
+        /** JvmClock reads System.nanoTime and the JVM's collector beans, and sleeps the thread. */
+        static final class JvmClock implements Clock {
+            static final JvmClock NONE = new JvmClock(Collections.<GarbageCollectorMXBean>emptyList());
+            private final List<GarbageCollectorMXBean> beans;
+
+            JvmClock(List<GarbageCollectorMXBean> beans) {
+                this.beans = beans;
+            }
+
+            @Override
+            public long nanoTime() {
+                return System.nanoTime();
+            }
+
+            @Override
+            public long gcMillis() {
+                long sum = 0;
+                for (GarbageCollectorMXBean b : beans) {
+                    // -1: this collector does not report its time.
+                    long t = b.getCollectionTime();
+                    if (t > 0) {
+                        sum += t;
+                    }
+                }
+                return sum;
+            }
+
+            @Override
+            public void sleep(long nanos) throws InterruptedException {
+                Thread.sleep(nanos / 1_000_000L, (int) (nanos % 1_000_000L));
+            }
         }
     }
 
@@ -589,6 +801,12 @@ final class BuildTable {
     /** write with the bounds of a unit's table record (maxRecord) and probe map (maxMap bytes, maxSteps). */
     static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes, int maxRecord, int maxMap,
             long maxSteps) throws IOException {
+        return write(classes, sink, probes, maxRecord, maxMap, maxSteps, Pacer.off());
+    }
+
+    /** write with the bounds, its thread paced by pacer after each unit. */
+    static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes, int maxRecord, int maxMap,
+            long maxSteps, Pacer pacer) throws IOException {
         Grouped g = group(classes);
         if (g.build.isEmpty()) {
             return new Summary("", 0, 0, 0, g.unnamed, 0, 0, 0);
@@ -600,6 +818,11 @@ final class BuildTable {
         int notMapped = 0;
         int tooLarge = 0;
         int probeRecords = 0;
+        long classFiles = 0;
+        for (Unit u : units) {
+            classFiles += u.files.size();
+        }
+        pacer.begin(classFiles);
         for (int i = 0; i < units.size(); i++) {
             // A unit written is dropped: what stays is the class list (names, ids), not the table.
             Unit u = units.set(i, null);
@@ -625,6 +848,7 @@ final class BuildTable {
                 }
             }
             sink.record(build, rec);
+            pacer.unitDone(u.files.size());
         }
         return new Summary(build, units.size(), notMeasured, noLines, g.unnamed, notMapped, tooLarge,
                 probeRecords);
@@ -1764,6 +1988,14 @@ final class BuildTable {
     /** Sends one whole frame; it throws when the receiver did not take it. */
     interface FrameSender {
         void send(byte[] frame) throws IOException;
+
+        /**
+         * send sends the frame in b[off, off + len). The bytes are the writer's own and change once it returns,
+         * so a sender that keeps them copies them (as this default does); FrameWriter sends through this one.
+         */
+        default void send(byte[] b, int off, int len) throws IOException {
+            send(Arrays.copyOfRange(b, off, off + len));
+        }
     }
 
     /**
@@ -1774,7 +2006,12 @@ final class BuildTable {
         private final FrameSender sender;
         private final String part;
         private final int bodyCap;
-        private final ByteArrayOutputStream body = new ByteArrayOutputStream();
+        // The frame being filled, made at the first write and reused for every frame: its body from
+        // HEADER_ROOM on, its magic, length and header just before it at each flush. A frame allocated anew
+        // (twice: the body's copy and the frame) is a G1 humongous object at 1 MiB, for which G1 grows the
+        // heap when its free regions run short: 70-150 MiB of a 4 GiB pod's heap at 50,000 classes.
+        private byte[] frame;
+        private int bodyLen;
         private final MessageDigest digest;
         int seq;
         private String build;
@@ -1812,16 +2049,24 @@ final class BuildTable {
 
         private void write(byte[] b, int off, int len) throws IOException {
             while (len > 0) {
-                int room = bodyCap - body.size();
+                int room = bodyCap - bodyLen;
                 if (room == 0) {
                     flush(false, -1);
                     continue;
                 }
                 int take = Math.min(room, len);
-                body.write(b, off, take);
+                System.arraycopy(b, off, frame(), HEADER_ROOM + bodyLen, take);
+                bodyLen += take;
                 off += take;
                 len -= take;
             }
+        }
+
+        private byte[] frame() {
+            if (frame == null) {
+                frame = new byte[HEADER_ROOM + bodyCap];
+            }
+            return frame;
         }
 
         /** bytes adds whole records, each ended by its newline, to the stream as they are. */
@@ -1848,23 +2093,26 @@ final class BuildTable {
             }
             h.append("}\n");
             byte[] header = h.toString().getBytes(StandardCharsets.UTF_8);
-            byte[] payload = body.toByteArray();
-            int n = header.length + payload.length;
-            byte[] frame = new byte[8 + n];
-            System.arraycopy(MAGIC.getBytes(StandardCharsets.US_ASCII), 0, frame, 0, 4);
-            frame[4] = (byte) (n >>> 24);
-            frame[5] = (byte) (n >>> 16);
-            frame[6] = (byte) (n >>> 8);
-            frame[7] = (byte) n;
-            System.arraycopy(header, 0, frame, 8, header.length);
-            System.arraycopy(payload, 0, frame, 8 + header.length, payload.length);
+            int start = HEADER_ROOM - header.length - 8;
+            if (start < 0) {
+                // A build id or record count no header can carry: never one this class makes.
+                throw new IOException("TABLE frame " + seq + ": a header of " + header.length + " bytes");
+            }
+            int n = header.length + bodyLen;
+            byte[] f = frame();
+            System.arraycopy(MAGIC.getBytes(StandardCharsets.US_ASCII), 0, f, start, 4);
+            f[start + 4] = (byte) (n >>> 24);
+            f[start + 5] = (byte) (n >>> 16);
+            f[start + 6] = (byte) (n >>> 8);
+            f[start + 7] = (byte) n;
+            System.arraycopy(header, 0, f, start + 8, header.length);
             try {
-                sender.send(frame);
+                sender.send(f, start, 8 + n);
             } catch (IOException e) {
                 throw new IOException("TABLE frame " + (PART_TABLE.equals(part) ? "" : part + " ") + seq + ": "
                         + e.getMessage(), e);
             }
-            body.reset();
+            bodyLen = 0;
             seq++;
         }
     }
@@ -1970,11 +2218,16 @@ final class BuildTable {
 
         @Override
         public void send(byte[] frame) throws IOException {
+            send(frame, 0, frame.length);
+        }
+
+        @Override
+        public void send(byte[] b, int off, int len) throws IOException {
             AFUNIXSocket s = connect();
             try {
                 s.setSoTimeout(REPLY_TIMEOUT_MILLIS);
                 OutputStream out = s.getOutputStream();
-                out.write(frame);
+                out.write(b, off, len);
                 out.flush();
                 // Through the channel: junixsocket's Socket.shutdownOutput says "not connected" after connect.
                 s.getChannel().shutdownOutput();
