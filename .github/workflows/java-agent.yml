@@ -19,6 +19,11 @@ jobs:
   verify:
     name: JDK ${{ matrix.java-version }}
     runs-on: ubuntu-latest
+    # A hung step would otherwise hold its runner for GitHub's default of
+    # 6 hours. The build, unit tests and smoke below take about 2 minutes on
+    # 4 CPUs with an empty Maven cache, and the smoke stops its own Tomcat
+    # case after 180 s, so a run that reaches 10 minutes is stuck, not slow.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
