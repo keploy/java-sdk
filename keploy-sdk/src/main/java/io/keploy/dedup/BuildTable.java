@@ -441,11 +441,15 @@ final class BuildTable {
             }
             // Called on the control path: a thread that cannot start (a pids limit, a security manager) must not
             // end the control server. Keploy reads IGNORED as no table from this SDK.
-            return start(send);
+            return start(send, false);
         }
 
-        /** start runs send and the requests after it on a new thread; false, with a WARNING, if none starts. */
-        private boolean start(Runnable send) {
+        /**
+         * start runs send and the requests after it on a new thread; false, with a WARNING, if none starts.
+         * handover is true when send is an ask that waited for the send before it (its thread was interrupted):
+         * the WARNING then says that ask is not sent, as it was ACKed and logged as sent later.
+         */
+        private boolean start(Runnable send, boolean handover) {
             try {
                 threads.newThread(() -> loop(send)).start();
                 return true;
@@ -454,7 +458,9 @@ final class BuildTable {
                     running = false;
                     pending = null;
                 }
-                log(Level.WARNING, "Keploy coverage: the build table's thread did not start", t);
+                log(Level.WARNING, "Keploy coverage: the build table's thread did not start" + (handover
+                        ? ": the ask for the build table that waited for the send before it is not sent (Keploy"
+                        + " asks again on its next run)" : ""), t);
                 return false;
             }
         }
@@ -481,7 +487,7 @@ final class BuildTable {
                     // The interrupt ended this thread's send and is kept for it: the next one runs on a new
                     // thread, uninterrupted. Sends stays running meanwhile, so a request made now waits for it.
                     // start's factory and log calls run on this interrupted thread: keep them non-interruptible.
-                    start(send);
+                    start(send, true);
                     return;
                 }
             }
@@ -560,16 +566,24 @@ final class BuildTable {
     }
 
     /**
-     * ExitNotice says, once, on System.err, that the JVM exits while a send runs: a native keploy test stops the
-     * app at each test set's end, and a send cut short there would otherwise leave no line in the app's log.
+     * ExitNotice says, once, on System.err, that the JVM is exiting while a send runs: a native keploy test stops
+     * the app at each test set's end, and a send cut short there would otherwise leave no line in the app's log.
      * It is a shutdown hook added for the send and removed when it ends. It writes to System.err, not
      * java.util.logging: the JVM runs its shutdown hooks at once and in no order, and LogManager's own hook (and
      * an app's logging framework's) may have closed the handlers already. A JVM that is killed (SIGKILL) or
      * halted runs no hook and says nothing. The hook reads the send's progress, which the send's thread writes:
-     * the Pacer's class-file counts and wait, and each FrameWriter's frame count.
+     * the Pacer's class-file counts and wait, and each FrameWriter's frame count. What it says is that progress
+     * at the exit's start, not the send's outcome: the send's daemon thread runs on while the other hooks run, and
+     * may still send the rest.
      */
     static final class ExitNotice implements Runnable {
         static final String NAME = "keploy-build-table-exit";
+        /**
+         * The hook the last add on this thread made, for the rows that check a send removes it. Per thread, so a
+         * row reads its own send's hook, not another class's, and the app keeps none past its table's thread:
+         * the value (and the send it holds) goes when that thread ends, with its last send.
+         */
+        static final ThreadLocal<Thread> LAST_HOOK = new ThreadLocal<>();
         private final long t0;
         private final Pacer pacer;
         private final FrameWriter table;
@@ -586,13 +600,20 @@ final class BuildTable {
             this.out = out;
         }
 
-        /** add makes the notice and adds its hook; a JVM that takes no hook (exiting, a security manager) has none. */
+        /**
+         * add makes the notice and adds its hook. A JVM that takes no hook (a security manager) has none; one that
+         * is exiting already has none either, and the notice says its line at once, as the exit may cut the send.
+         * A notice that fails never ends the send.
+         */
         static ExitNotice add(long t0, Pacer pacer, FrameWriter table, FrameWriter probes) {
             ExitNotice n = new ExitNotice(t0, pacer, table, probes, System.err);
-            Thread h = new Thread(n, NAME);
             try {
+                Thread h = new Thread(n, NAME);
                 Runtime.getRuntime().addShutdownHook(h);
                 n.hook = h;
+                LAST_HOOK.set(h);
+            } catch (IllegalStateException exiting) {
+                n.run();
             } catch (Throwable t) {
                 log(Level.FINE, "Keploy coverage: no exit notice for the build table's send", t);
             }
@@ -624,22 +645,23 @@ final class BuildTable {
             }
         }
 
-        /** line is what the notice says, with the send's progress read now. */
+        /** line is what the notice says: the send's progress, read now. */
         String line() {
             long total = pacer.totalClassFiles();
             long done = pacer.doneClassFiles();
             String where;
             if (total == 0) {
-                where = "it was still reading the app's class files";
+                where = "reading the app's class files";
             } else if (done < total) {
-                where = done + " of " + total + " class files were analyzed";
+                where = done + " of " + total + " class files analyzed";
             } else {
-                where = "all " + total + " class files were analyzed";
+                where = "all " + total + " class files analyzed";
             }
-            return "Keploy coverage: the JVM exits before its build table is sent whole: " + where + "; "
+            return "Keploy coverage: the JVM is exiting while its build table is being sent. So far: " + where + "; "
                     + (table.seq + probes.seq) + " frames sent in " + (System.nanoTime() - t0) / 1_000_000
-                    + " ms (" + pacer.waitedNanos() / 1_000_000 + " ms of it paced). Keploy gets this build's table"
-                    + " only from a JVM that runs until it is sent";
+                    + " ms (" + pacer.waitedNanos() / 1_000_000 + " ms of it paced). A table the exit cuts short"
+                    + " does not reach Keploy: Keploy gets this build's table only from a JVM that runs until it is"
+                    + " sent";
         }
     }
 
@@ -656,36 +678,37 @@ final class BuildTable {
      * the app's heap. The analysis allocates fast (about 80-90 KiB a class, over 1 GB/s at full speed, nearly
      * all of it short-lived), and G1 and Parallel commit more heap when collecting takes more than their goal
      * of the time (Parallel 1%; G1 a few percent, as low as 1% while it has committed a small part of its cap).
-     * So after each unit the thread owes {@link #WAIT_PER_GC} times the time the collections took since the
-     * send began (the app's and its own) less the time since, and waits it out: collections then take at most
-     * 1/200 of the send's time, and a JVM that does not collect is not paced at all. The time read is every
-     * collector bean's: on a collector whose beans count concurrent cycles (ZGC, Shenandoah) the send is paced
-     * at its full allowance.
+     * So the thread owes {@link #WAIT_PER_GC} ms for each ms the collections take while it sends (the app's and
+     * its own), each ms it works or waits pays one off (never below 0), and after each unit it waits what it owes
+     * as far as its bounds let it. The time read is every collector bean's: a busy app's own collections (or
+     * ZGC's and Shenandoah's concurrent cycles, which their beans count) make the thread owe more than its bounds
+     * let it wait, and so do the send's own collections on every JVM measured (G1 and Parallel, JDK 8 to 21,
+     * quiet or busy): in practice the send waits about as long as it works.
      *
-     * <p>The waits are bounded. They are drawn from an allowance of {@link #ALLOWANCE_NANOS_PER_CLASS} per
-     * class file analyzed, of which at most {@link #MAX_BANK_NANOS} is saved up: no one wait is over a second,
-     * the waits over any k class files add up to at most a second plus 0.8 k ms, so frames keep coming (Keploy's
-     * wait for the table is a bound on the time since its last frame), and all of them to at most 0.8 ms a
-     * class file (40 s at 50,000). And no wait is taken that would end the table past {@link #deadlineNanos}
-     * (50 s at 50,000 class files), reckoned as the time since the send began (the index's read included) plus
-     * the rest of its class files at the rate the analysis went so far (from {@link #begin}, its waits left
-     * out): on a slow or busy CPU the pacing gives way to the table's 60 s bound, with 10 s left for the probe
-     * map's frames and the estimate's error. A clock or collector bean that fails ends the pacing, and the rest
-     * is sent unpaced. An interrupt ends the send: unitDone throws, and the interrupt is kept for the thread.
+     * <p>The waits are bounded by the send's own work: each unit's wall time (the time since the unit before,
+     * its frames' socket writes included and its waits left out; the first unit's includes the index's read) is
+     * added to what the thread may wait, and at most {@link #MAX_BANK_NANOS} of it is saved up. So all the
+     * waits add up to at most the send's own work time plus one sleep's overrun (a table paced takes at most
+     * about twice as long as unpaced, whatever the app's collections), no one wait is over a second, and the
+     * waits over any run of units add up to at most a second plus those units' own time, so frames keep coming
+     * (Keploy's wait for the table is a bound on the time since its last frame).
+     * And no wait is taken that would end the table past {@link #deadlineNanos} (20 s at 50,000 class files),
+     * reckoned as the time since the send began (the index's read included) plus the rest of its class files at
+     * the rate the analysis went so far (from {@link #begin}, its waits left out): on a slow or busy CPU the
+     * pacing gives way first. A clock or collector bean that fails ends the pacing, and the rest is sent
+     * unpaced. An interrupt ends the send: unitDone throws, and the interrupt is kept for the thread.
      */
     static final class Pacer {
         /** Each millisecond of collection asks for this many of the send's: at most 0.5% of it collecting. */
         static final long WAIT_PER_GC = 200;
-        /** The wait each analyzed class file adds to what the thread may wait: the table's time bound. */
-        static final long ALLOWANCE_NANOS_PER_CLASS = 800_000L;
-        /** The most of the allowance kept for a later wait: the longest wait after a quiet stretch. */
+        /** The most of the send's own work time kept for a later wait: the longest wait after a quiet stretch. */
         static final long MAX_BANK_NANOS = 1_000_000_000L;
         /** Waits shorter than this are put off to the next unit, so the thread does not sleep per class. */
         static final long MIN_WAIT_NANOS = 10_000_000L;
         /** The pacing's time bound up to {@link #DEADLINE_CLASS_FILES} class files: see deadlineNanos. */
-        static final long DEADLINE_NANOS = 50_000_000_000L;
+        static final long DEADLINE_NANOS = 20_000_000_000L;
         static final long DEADLINE_CLASS_FILES = 50_000;
-        // The most the thread may owe (an hour), so the sum cannot overflow; the allowance bounds it anyway.
+        // The most the thread may owe (an hour), so the sum cannot overflow; the work-time bound limits it anyway.
         private static final long MAX_DEBT_NANOS = 3_600_000_000_000L;
 
         /** The clock, the collections' time and the sleep a Pacer reads; the JVM's, or a row's. */
@@ -752,7 +775,7 @@ final class BuildTable {
         }
 
         /**
-         * deadlineNanos is the most the pacing lets a table of classFiles take: 50 s, and 1 ms a class file past
+         * deadlineNanos is the most the pacing lets a table of classFiles take: 20 s, and 0.4 ms a class file past
          * 50,000 (the table's bound, 60 s at 50,000, scales the same way).
          */
         static long deadlineNanos(long classFiles) {
@@ -761,7 +784,7 @@ final class BuildTable {
 
         /**
          * begin is called as the analysis begins, after the index's read: it says how many class files the send
-         * analyzes, for its deadline (not called, the deadline is 50 s), and reads the clock the rate is taken
+         * analyzes, for its deadline (not called, the deadline is 20 s), and reads the clock the rate is taken
          * from, so the index's read does not count as the analysis's work.
          */
         void begin(long classFiles) {
@@ -809,8 +832,10 @@ final class BuildTable {
                     debt = Math.min(MAX_DEBT_NANOS, debt + Math.min(g - gc, MAX_DEBT_NANOS / perMs) * perMs);
                     gc = g;
                 }
-                debt = Math.max(0, debt - Math.max(0, now - last));
-                bank = Math.min(MAX_BANK_NANOS, bank + ALLOWANCE_NANOS_PER_CLASS * files);
+                // The send's own time since the last unit pays off what it owes, and is what it may wait.
+                long worked = Math.max(0, now - last);
+                debt = Math.max(0, debt - worked);
+                bank = Math.min(MAX_BANK_NANOS, bank + worked);
                 last = now;
                 long wait = Math.min(Math.min(debt, bank), room(now));
                 if (wait < MIN_WAIT_NANOS) {
@@ -821,11 +846,12 @@ final class BuildTable {
                     told = true;
                     log(Level.INFO, "Keploy coverage: the build table's send is paced, so its garbage does not grow"
                             + " the app's heap: the JVM's collections took " + (g - gc0) + " ms in the "
-                            + Math.max(0, now - start) / 1_000_000 + " ms since it began, and it waits " + WAIT_PER_GC
-                            + " times that; its waits add up to at most " + ALLOWANCE_NANOS_PER_CLASS / 1000
-                            + " us a class file (" + ALLOWANCE_NANOS_PER_CLASS * total / 1_000_000 + " ms for its "
-                            + total + "), and none ends the table past " + deadlineNanos(total) / 1_000_000
-                            + " ms from its start", null);
+                            + Math.max(0, now - start) / 1_000_000 + " ms since it began, so it owes "
+                            + debt / 1_000_000 + " ms now (each ms of collection adds " + WAIT_PER_GC + ", and each"
+                            + " ms the send works or waits takes one off, never below 0); its"
+                            + " waits add up to at most its own work time (plus one sleep's overrun), so the table"
+                            + " takes about twice as long as unpaced at most, and none ends the table past "
+                            + deadlineNanos(total) / 1_000_000 + " ms from its start", null);
                 }
                 try {
                     clock.sleep(wait);

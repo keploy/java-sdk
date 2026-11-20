@@ -23,8 +23,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.LogRecord;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.management.NotificationEmitter;
 import javax.management.NotificationListener;
 import javax.management.openmbean.CompositeData;
@@ -95,8 +99,9 @@ public class BuildTableBudgetTest {
      * maxCommittedGrowth is the most the send may add to an app pod's committed heap over the heap just after a
      * full collection: 128 MiB, but more on G1 with a heap cap of 512 MiB or more before JDK 21. There the
      * collection has shrunk G1's heap, its pause raises G1's pause-time ratio, and G1 grows the heap back while
-     * the table is sent, paced or not: at 50,000 classes in a 4 GiB pod, 420-421 MiB on JDK 8 (unpaced 422-707) and
-     * 13-166 MiB on JDK 17. Unpaced, JDK 21's G1 there grew 175-343 MiB (paced, 19-20), past the bound.
+     * the table is sent, paced or not: at 50,000 classes in a 4 GiB pod, 300 MiB on JDK 8 (unpaced 422-707) and
+     * 145 MiB on JDK 17, paced by the send's own work time (one run each; earlier pacers saw 420-421 and 13-166).
+     * Unpaced, JDK 21's G1 there grew 175-343 MiB (paced, 59), past the bound.
      */
     static long maxCommittedGrowth(boolean g1, long maxHeap, String javaSpec) {
         if (g1 && maxHeap >= 512L << 20) {
@@ -115,8 +120,8 @@ public class BuildTableBudgetTest {
 
     /**
      * maxWallNanos is the table's time bound: 60 s at 50,000 classes, at least 60 s for fewer, and 1.2 ms a class
-     * past 50,000. At 50,000 that is 10 s past the pacing's own deadline (BuildTable.Pacer.deadlineNanos), which
-     * leaves the probe map's frames that time; past 50,000 it leaves more.
+     * past 50,000. At 50,000 that is 40 s past the pacing's own deadline (BuildTable.Pacer.deadlineNanos), which
+     * leaves a slow or busy CPU's own work that time; past 50,000 it leaves more.
      */
     static long maxWallNanos(int classes) {
         return Math.max(60_000_000_000L, 60_000_000_000L / 50_000 * classes);
@@ -124,6 +129,147 @@ public class BuildTableBudgetTest {
 
     /** The most a generated class's table and probe map may allocate on the send's thread: below two analyses'. */
     static final long ALLOCATED_PER_CLASS = 112 << 10;
+
+    /** The busy app's allocation, in MB/s over its threads: a JVM serving a test run's requests. */
+    static final int BUSY_MBPS = 400;
+    static final int BUSY_THREADS = 2;
+    static final int BUSY_ARRAY = 64 << 10;
+    /** How long the app's load runs before Keploy asks for the table. */
+    static final long BUSY_SETTLE_MS = 2_000;
+    /** What the waits may run past the send's own work: one sleep's overrun (a collection's pause in it). */
+    static final long BUSY_OVERRUN_MS = 500;
+    /** The send's INFO line: its classes, those not measured, its time, its CPU and its waits. */
+    static final Pattern SENT = Pattern.compile("sent \\((\\d+) classes, (\\d+) not measured.*; \\d+ frames,"
+            + " (\\d+) ms, cpu -?\\d+ ms, paced (\\d+) ms\\)$");
+
+    /**
+     * A busy app's table, the native keploy test's case: app threads allocate BUSY_MBPS of short-lived garbage
+     * while the table is sent, so the JVM collects often for the app's own sake, and the pacing (which reads
+     * every collection, the app's too) is owed far more than it may wait. Its waits must stay within the send's
+     * own work time (one sleep's overrun past it at most), so a busy app's table takes at most about twice as
+     * long as unpaced: before, they took the whole allowance of 0.8 ms a class (40 s at 50,000), and the app's
+     * test set ended before its table was sent. The class count is -Dkeploy.budget.classes (5,000 by default).
+     */
+    @Test(timeout = 900_000)
+    public void aBusyAppsTableIsPacedAtMostItsOwnWork() throws Exception {
+        int n = Integer.getInteger("keploy.budget.classes", 5000);
+        List<BuildTable.ClassFile> app = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            app.add(new BuildTable.ClassFile(name(i), gen(name(i), i, BRANCHES)));
+        }
+        AtomicBoolean stop = new AtomicBoolean();
+        AtomicLong appBytes = new AtomicLong();
+        // Each thread keeps a ring of its newest arrays, a churning retained set as request handling has: 64 MiB
+        // a thread, and at most 1/16 of the heap's cap in all.
+        int slots = (int) Math.min(1024, Runtime.getRuntime().maxMemory() / 16 / BUSY_THREADS / BUSY_ARRAY);
+        // The load's threads and the sampler: each ends at stop, and finally stops and joins them all.
+        List<Thread> threads = new ArrayList<>();
+        try (BuildTableTest.Logs logs = new BuildTableTest.Logs()) {
+            for (int t = 0; t < BUSY_THREADS; t++) {
+                Thread th = new Thread(() -> allocate(stop, appBytes, slots), "busy-app-" + t);
+                th.setDaemon(true);
+                th.start();
+                threads.add(th);
+            }
+            Thread.sleep(BUSY_SETTLE_MS);
+            long committed0 = heapCommitted();
+            AtomicLong committedMax = new AtomicLong(committed0);
+            AtomicBoolean sending = new AtomicBoolean(true);
+            Thread sampler = new Thread(() -> {
+                while (sending.get() && !stop.get()) {
+                    committedMax.accumulateAndGet(heapCommitted(), Math::max);
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }, "busy-committed");
+            sampler.setDaemon(true);
+            sampler.start();
+            threads.add(sampler);
+            long gc0 = gcMillis();
+            long app0 = appBytes.get();
+            long t0 = System.nanoTime();
+            long[] frames = {t0, 0}; // the last frame's time, the longest gap
+            BuildTable.send(() -> app, new BuildTable.FrameSender() {
+                @Override
+                public void send(byte[] frame) {
+                    send(frame, 0, frame.length);
+                }
+
+                @Override
+                public void send(byte[] frame, int off, int len) {
+                    long now = System.nanoTime();
+                    frames[1] = Math.max(frames[1], now - frames[0]);
+                    frames[0] = now;
+                }
+            });
+            long wall = System.nanoTime() - t0;
+            long gc = gcMillis() - gc0;
+            sending.set(false);
+            sampler.join();
+            String sent = null;
+            for (LogRecord r : logs.mine()) {
+                if (r.getMessage() != null && r.getMessage().contains(" sent (")) {
+                    sent = r.getMessage();
+                }
+            }
+            assertTrue("the send's INFO line", sent != null);
+            Matcher m = SENT.matcher(sent);
+            assertTrue(sent, m.find());
+            long sendMs = Long.parseLong(m.group(3));
+            long pacedMs = Long.parseLong(m.group(4));
+            long workMs = sendMs - pacedMs;
+            System.out.printf(Locale.ROOT, "BUSY app-%d java=%s gc=%s heap_max_mb=%d app_mbps=%d wall_ms=%d"
+                            + " send_ms=%d paced_ms=%d work_ms=%d gc_ms=%d gc_pct=%.2f max_frame_gap_ms=%d"
+                            + " committed_start_mb=%d committed_max_mb=%d committed_growth_mb=%d app_mb=%d%n",
+                    n, System.getProperty("java.version"), gcNames(), Runtime.getRuntime().maxMemory() >> 20,
+                    BUSY_MBPS, wall / 1_000_000, sendMs, pacedMs, workMs, gc,
+                    100.0 * gc / Math.max(1, wall / 1_000_000), frames[1] / 1_000_000, committed0 >> 20,
+                    committedMax.get() >> 20, (committedMax.get() - committed0) >> 20,
+                    (appBytes.get() - app0) >> 20);
+            assertEquals(sent, n, Integer.parseInt(m.group(1)));
+            assertEquals(sent, 0, Integer.parseInt(m.group(2)));
+            assertTrue("paced " + pacedMs + " ms, past the send's own " + workMs + " ms of work",
+                    pacedMs <= workMs + BUSY_OVERRUN_MS);
+            assertTrue("took " + wall / 1_000_000 + " ms", wall < maxWallNanos(n));
+            assertTrue("a frame came " + frames[1] / 1_000_000 + " ms after the one before",
+                    frames[1] < MAX_FRAME_GAP_NANOS);
+        } finally {
+            stop.set(true);
+            for (Thread th : threads) {
+                th.join();
+            }
+        }
+    }
+
+    /** allocate is a busy app's thread: BUSY_MBPS / BUSY_THREADS of BUSY_ARRAY arrays, a ring of slots kept. */
+    private static void allocate(AtomicBoolean stop, AtomicLong appBytes, int slots) {
+        long perMs = (long) BUSY_MBPS * 1_000_000 / 1000 / BUSY_THREADS;
+        byte[][] ring = new byte[Math.max(1, slots)][];
+        long t0 = System.nanoTime();
+        long made = 0;
+        int k = 0;
+        while (!stop.get()) {
+            for (int j = 0; j < 16; j++) {
+                byte[] b = new byte[BUSY_ARRAY];
+                b[0] = (byte) k;
+                ring[k] = b;
+                k = k + 1 == ring.length ? 0 : k + 1;
+            }
+            made += 16L * BUSY_ARRAY;
+            appBytes.addAndGet(16L * BUSY_ARRAY);
+            long ahead = made / perMs - (System.nanoTime() - t0) / 1_000_000;
+            if (ahead > 0) {
+                try {
+                    Thread.sleep(ahead);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }
+    }
 
     @Test(timeout = 600_000)
     public void aClassWithOneLongMethodIsMeasured() throws Exception {
