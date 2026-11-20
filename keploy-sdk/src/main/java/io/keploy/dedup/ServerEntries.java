@@ -57,6 +57,15 @@ import org.objectweb.asm.Type;
  * own code, renamed {@code keploy$job$run}, then {@link JobGate#exit(Object)},
  * so that a test whose window a job ran in says so. Those count whether or
  * not END waits for requests.
+ *
+ * <p>It makes the work a request hands to a Spring TaskExecutor count as
+ * the request's (see {@link RequestGate#hand(Runnable)}): the methods of
+ * SimpleAsyncTaskExecutor (an async event multicaster's), ThreadPoolTaskExecutor
+ * and {@code @Async}'s interceptor that take a task become methods that
+ * hand the task to RequestGate, then call their own code, renamed
+ * {@code keploy$async$<name>}, with what RequestGate gave back, and when that
+ * throws, tell RequestGate the task was dropped. Those count only when END
+ * waits for requests.
  */
 final class ServerEntries implements ClassFileTransformer {
 
@@ -65,6 +74,9 @@ final class ServerEntries implements ClassFileTransformer {
     private static final String JOB_GATE = Type.getInternalName(JobGate.class);
     static final String RENAMED = "keploy$request$";
     static final String JOB_RENAMED = "keploy$job$";
+    static final String ASYNC_RENAMED = "keploy$async$";
+    private static final String RUNNABLE = "Ljava/lang/Runnable;";
+    private static final String CALLABLE = "Ljava/util/concurrent/Callable;";
 
     // The servers' request entries: the class, and the methods a request
     // runs in, the response finished when they return.
@@ -93,6 +105,18 @@ final class ServerEntries implements ClassFileTransformer {
         // ScheduledMethodRunnable, on the scheduler's threads.
         addJob("Quartz", "org/quartz/core/JobRunShell", "quartz", "run");
         addJob("Spring", "org/springframework/scheduling/support/ScheduledMethodRunnable", "scheduled", "run");
+        // Spring's executors a request hands work to: SimpleAsyncTaskExecutor
+        // (an async event multicaster's, and Spring's default for @Async)
+        // starts each task in doExecute, whatever method it was handed in;
+        // ThreadPoolTaskExecutor (Spring Boot's) passes each to its pool in
+        // the method it was handed in (its submitCompletable, from Spring 6,
+        // is AsyncTaskExecutor's default, which hands the task to execute);
+        // @Async's interceptor hands each call to its executor, whatever
+        // that is, in doSubmit.
+        addAsync("org/springframework/core/task/SimpleAsyncTaskExecutor", "doExecute");
+        addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor", "execute", "submit",
+                "submitListenable");
+        addAsync("org/springframework/aop/interceptor/AsyncExecutionAspectSupport", "doSubmit");
     }
 
     // Classes of servers that are not counted, so that the log can name them.
@@ -122,11 +146,15 @@ final class ServerEntries implements ClassFileTransformer {
     }
 
     private static void add(String server, String className, String... methods) {
-        ENTRIES.put(className, new Entry(server, null, new HashSet<>(Arrays.asList(methods))));
+        ENTRIES.put(className, new Entry(server, null, false, new HashSet<>(Arrays.asList(methods))));
     }
 
     private static void addJob(String scheduler, String className, String kind, String... methods) {
-        ENTRIES.put(className, new Entry(scheduler, kind, new HashSet<>(Arrays.asList(methods))));
+        ENTRIES.put(className, new Entry(scheduler, kind, false, new HashSet<>(Arrays.asList(methods))));
+    }
+
+    private static void addAsync(String className, String... methods) {
+        ENTRIES.put(className, new Entry("Spring", null, true, new HashSet<>(Arrays.asList(methods))));
     }
 
     // counted names the servers whose requests count, in the order their
@@ -185,7 +213,7 @@ final class ServerEntries implements ClassFileTransformer {
                         + " has no method " + entry.methods + " to count them in");
                 return null;
             }
-            if (entry.job == null) {
+            if (entry.job == null && !entry.async) {
                 COUNTED.add(entry.server);
             }
             synchronized (changed) {
@@ -270,7 +298,7 @@ final class ServerEntries implements ClassFileTransformer {
             @Override
             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                     String[] exceptions) {
-                if (name.startsWith(RENAMED) || name.startsWith(JOB_RENAMED)) {
+                if (name.startsWith(RENAMED) || name.startsWith(JOB_RENAMED) || name.startsWith(ASYNC_RENAMED)) {
                     carries[0] = true;
                 }
                 return null;
@@ -283,19 +311,21 @@ final class ServerEntries implements ClassFileTransformer {
     // server's request, or null when it has none to count (abstract and
     // native methods only). transform passes over an interface before it.
     static byte[] wrap(byte[] classfile, Set<String> methods) {
-        return wrap(classfile, methods, null);
+        return wrap(classfile, methods, null, false);
     }
 
     private static byte[] wrap(byte[] classfile, Entry entry) {
-        return wrap(classfile, entry.methods, entry.job);
+        return wrap(classfile, entry.methods, entry.job, entry.async);
     }
 
     // wrap with a job kind counts each method's run as a job's run of that
-    // kind (JobGate) instead.
-    static byte[] wrap(byte[] classfile, Set<String> methods, String job) {
+    // kind (JobGate) instead; with async, it hands each method's task (its
+    // first Runnable or Callable argument; a method with none is left as
+    // it is) to RequestGate instead.
+    static byte[] wrap(byte[] classfile, Set<String> methods, String job, boolean async) {
         ClassReader reader = new ClassReader(classfile);
         ClassWriter writer = new ClassWriter(reader, 0);
-        Wrapper wrapper = new Wrapper(writer, methods, job);
+        Wrapper wrapper = new Wrapper(writer, methods, job, async);
         reader.accept(wrapper, 0);
         return wrapper.wrapped.isEmpty() ? null : writer.toByteArray();
     }
@@ -304,38 +334,44 @@ final class ServerEntries implements ClassFileTransformer {
 
         // The server or scheduler whose code it is, as the log names it.
         private final String server;
-        // The JobGate kind of a job's entry; null for a server's.
+        // The JobGate kind of a job's entry; null for a server's or an executor's.
         private final String job;
+        // Whether it is an executor's: the tasks a request hands it count.
+        private final boolean async;
         private final Set<String> methods;
 
-        private Entry(String server, String job, Set<String> methods) {
+        private Entry(String server, String job, boolean async, Set<String> methods) {
             this.server = server;
             this.job = job;
+            this.async = async;
             this.methods = Collections.unmodifiableSet(methods);
         }
 
         // what is what this entry counts, as the log says it.
         private String what() {
-            return server + (job == null ? "'s requests" : "'s job runs");
+            return server + (async ? "'s async tasks" : job == null ? "'s requests" : "'s job runs");
         }
 
         // effect is what counting them does.
         private String effect() {
-            return job == null ? "a test's END waits for them to finish"
+            return async ? "a test's END waits for the tasks its requests hand off to finish, as for the requests"
+                    : job == null ? "a test's END waits for them to finish"
                     : "a test whose window a run overlaps is marked contaminated in its record, and Keploy does"
                     + " not judge it";
         }
 
         // lost is what is lost when they cannot be counted.
         private String lost() {
-            return job == null ? "a test's END reads its hits without waiting for its requests to finish"
+            return async ? "a test's END reads its hits without waiting for the tasks its requests hand off"
+                    : job == null ? "a test's END reads its hits without waiting for its requests to finish"
                     : "a test a job runs in is not marked contaminated";
         }
     }
 
     // Wrapper renames each method to count and, at the class's end, adds
     // the method that counts it under its old name and access: in
-    // RequestGate, or with a job kind in JobGate.
+    // RequestGate, with a job kind in JobGate, or with async the task it
+    // is handed in RequestGate.
     private static final class Wrapper extends ClassVisitor {
 
         private static final int NOT_COUNTED = Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_BRIDGE
@@ -343,16 +379,18 @@ final class ServerEntries implements ClassFileTransformer {
 
         private final Set<String> methods;
         private final String job;
+        private final boolean async;
         private final String renamedPrefix;
         private final List<Method> wrapped = new ArrayList<>();
         private String owner;
         private int version;
 
-        private Wrapper(ClassVisitor next, Set<String> methods, String job) {
+        private Wrapper(ClassVisitor next, Set<String> methods, String job, boolean async) {
             super(Opcodes.ASM9, next);
             this.methods = methods;
             this.job = job;
-            this.renamedPrefix = job == null ? RENAMED : JOB_RENAMED;
+            this.async = async;
+            this.renamedPrefix = async ? ASYNC_RENAMED : job == null ? RENAMED : JOB_RENAMED;
         }
 
         @Override
@@ -366,7 +404,7 @@ final class ServerEntries implements ClassFileTransformer {
         @Override
         public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                 String[] exceptions) {
-            if (!methods.contains(name) || (access & NOT_COUNTED) != 0) {
+            if (!methods.contains(name) || (access & NOT_COUNTED) != 0 || (async && task(descriptor) < 0)) {
                 return super.visitMethod(access, name, descriptor, signature, exceptions);
             }
             wrapped.add(new Method(access, name, descriptor, signature, exceptions));
@@ -383,9 +421,27 @@ final class ServerEntries implements ClassFileTransformer {
             super.visitEnd();
         }
 
+        // task is the index of a method's first Runnable or Callable
+        // argument: the task an executor's method is handed; -1 when it
+        // has none.
+        private static int task(String descriptor) {
+            Type[] args = Type.getArgumentTypes(descriptor);
+            for (int i = 0; i < args.length; i++) {
+                String arg = args[i].getDescriptor();
+                if (arg.equals(RUNNABLE) || arg.equals(CALLABLE)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         // counting adds, under the method's name and access, a method that
         // counts the request in RequestGate around a call of the renamed one.
         private void counting(Method method) {
+            if (async) {
+                handing(method);
+                return;
+            }
             int access = method.access & ~Opcodes.ACC_SYNCHRONIZED;
             boolean isStatic = (access & Opcodes.ACC_STATIC) != 0;
             Type[] args = Type.getArgumentTypes(method.descriptor);
@@ -451,6 +507,74 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, gate(), "exit", "(Ljava/lang/Object;)V", false);
             mv.visitInsn(Opcodes.ATHROW);
             mv.visitMaxs(Math.max(Math.max(slot, returns.getSize() + 1), 2), token + 1);
+            mv.visitEnd();
+        }
+
+        // handing adds, under an executor's method's name and access, a
+        // method that hands its task to RequestGate and calls the renamed
+        // one with what RequestGate gave back in its place; when that
+        // throws, RequestGate hears the task was dropped.
+        private void handing(Method method) {
+            int access = method.access & ~Opcodes.ACC_SYNCHRONIZED;
+            boolean isStatic = (access & Opcodes.ACC_STATIC) != 0;
+            Type[] args = Type.getArgumentTypes(method.descriptor);
+            Type returns = Type.getReturnType(method.descriptor);
+            int task = task(method.descriptor);
+            String taskType = args[task].getDescriptor();
+            MethodVisitor mv = super.visitMethod(access, method.name, method.descriptor, method.signature,
+                    method.exceptions);
+            mv.visitCode();
+            Label start = new Label();
+            Label end = new Label();
+            Label thrown = new Label();
+            mv.visitTryCatchBlock(start, end, thrown, null);
+
+            List<Object> locals = new ArrayList<>();
+            int slot = 0;
+            if (!isStatic) {
+                locals.add(owner);
+                slot++;
+            }
+            int taskSlot = -1;
+            for (int i = 0; i < args.length; i++) {
+                if (i == task) {
+                    taskSlot = slot;
+                }
+                locals.add(frameType(args[i]));
+                slot += args[i].getSize();
+            }
+            int handed = slot;
+            locals.add(args[task].getInternalName());
+
+            mv.visitVarInsn(Opcodes.ALOAD, taskSlot);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "hand", "(" + taskType + ")" + taskType, false);
+            mv.visitVarInsn(Opcodes.ASTORE, handed);
+            mv.visitLabel(start);
+            slot = 0;
+            if (!isStatic) {
+                mv.visitVarInsn(Opcodes.ALOAD, 0);
+                slot++;
+            }
+            for (int i = 0; i < args.length; i++) {
+                mv.visitVarInsn(args[i].getOpcode(Opcodes.ILOAD), i == task ? handed : slot);
+                slot += args[i].getSize();
+            }
+            mv.visitMethodInsn(isStatic ? Opcodes.INVOKESTATIC : Opcodes.INVOKESPECIAL, owner,
+                    renamedPrefix + method.name, method.descriptor, false);
+            mv.visitLabel(end);
+            mv.visitInsn(returns.getOpcode(Opcodes.IRETURN));
+
+            mv.visitLabel(thrown);
+            if (version >= Opcodes.V1_6) {
+                mv.visitFrame(Opcodes.F_FULL, locals.size(), locals.toArray(), 1,
+                        new Object[] {"java/lang/Throwable"});
+            }
+            mv.visitVarInsn(Opcodes.ALOAD, handed);
+            mv.visitVarInsn(Opcodes.ALOAD, taskSlot);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "dropped", "(Ljava/lang/Object;Ljava/lang/Object;)V",
+                    false);
+            mv.visitInsn(Opcodes.ATHROW);
+            mv.visitMaxs(Math.max(Math.max(slot, returns.getSize()), 3), handed + 1);
             mv.visitEnd();
         }
 
