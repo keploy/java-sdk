@@ -37,8 +37,12 @@ import static org.junit.Assert.assertTrue;
  * app (classes of one if/else chain method each, as the large-app profile generates them), on one class with a
  * single long method, and on a real library. -Dkeploy.budget.classes=50000 and -Dkeploy.budget.branches=2000
  * measure the large app and a 2000-branch method; the defaults keep the rows quick. It checks that every class
- * is measured, what a generated class allocates (bounded below), and that a 3000-branch method maps in under a
- * second of CPU; the other numbers, the committed heap's growth among them (BUDGET-COMMITTED), are for reading.
+ * is measured, what a generated class allocates (bounded below), that the generated app's send, paced by the
+ * collections, grows the committed heap by no more than maxCommittedGrowth (BUDGET-COMMITTED committed_growth_mb,
+ * over the heap just after the row's own full collection) within 60 s at 50,000 classes with no frame more than
+ * 10 s after the one before, and that a 3000-branch method maps in under a second of CPU; the other numbers are
+ * for reading. committed_growth_from_pre_gc_mb is over the heap before that collection, which the row's own
+ * class generation sized: it is not asserted.
  *
  * <p>heap_after_gc_max_mb is the most heap any collection during the send left in use: an upper bound of what
  * the analysis keeps live (a young collection also counts old garbage not collected yet). It is -1 when no
@@ -72,6 +76,50 @@ public class BuildTableBudgetTest {
         // since one analysis gives both (and the records' text).
         long perClass = b.allocated / n;
         assertTrue("allocated " + perClass + " bytes a class", perClass < ALLOCATED_PER_CLASS);
+        // Paced by the collections, the send grows the committed heap over what it was just after a full
+        // collection by no more than maxCommittedGrowth, within 60 s at 50,000 classes, and its frames keep
+        // coming. A live run collects at each frame, which the pacing waits out: read its numbers only.
+        if (Boolean.getBoolean("keploy.budget.live")) {
+            return;
+        }
+        long max = maxCommittedGrowth(gcNames().contains("G1"), Runtime.getRuntime().maxMemory(),
+                System.getProperty("java.specification.version"));
+        assertTrue("committed heap growth " + (b.committedGrowth >> 20) + " MiB, over " + (max >> 20),
+                b.committedGrowth <= max);
+        assertTrue("took " + b.wallNanos / 1_000_000 + " ms", b.wallNanos < maxWallNanos(n));
+        assertTrue("a frame came " + b.maxFrameGapNanos / 1_000_000 + " ms after the one before",
+                b.maxFrameGapNanos < MAX_FRAME_GAP_NANOS);
+    }
+
+    /**
+     * maxCommittedGrowth is the most the send may add to an app pod's committed heap over the heap just after a
+     * full collection: 128 MiB, but more on G1 with a heap cap of 512 MiB or more before JDK 21. There the
+     * collection has shrunk G1's heap, its pause raises G1's pause-time ratio, and G1 grows the heap back while
+     * the table is sent, paced or not: at 50,000 classes in a 4 GiB pod, 420-421 MiB on JDK 8 (unpaced 422-707) and
+     * 13-166 MiB on JDK 17. Unpaced, JDK 21's G1 there grew 175-343 MiB (paced, 19-20), past the bound.
+     */
+    static long maxCommittedGrowth(boolean g1, long maxHeap, String javaSpec) {
+        if (g1 && maxHeap >= 512L << 20) {
+            if (javaSpec.startsWith("1.")) {
+                return 448L << 20;
+            }
+            if (Integer.parseInt(javaSpec) < 21) {
+                return 192L << 20;
+            }
+        }
+        return 128L << 20;
+    }
+
+    /** The longest a frame may come after the one before (or the send's start): Keploy waits 30 s for one. */
+    static final long MAX_FRAME_GAP_NANOS = 10_000_000_000L;
+
+    /**
+     * maxWallNanos is the table's time bound: 60 s at 50,000 classes, at least 60 s for fewer, and 1.2 ms a class
+     * past 50,000. At 50,000 that is 10 s past the pacing's own deadline (BuildTable.Pacer.deadlineNanos), which
+     * leaves the probe map's frames that time; past 50,000 it leaves more.
+     */
+    static long maxWallNanos(int classes) {
+        return Math.max(60_000_000_000L, 60_000_000_000L / 50_000 * classes);
     }
 
     /** The most a generated class's table and probe map may allocate on the send's thread: below two analyses'. */
@@ -181,15 +229,54 @@ public class BuildTableBudgetTest {
         return cw.toByteArray();
     }
 
-    /** count is how many times s holds what, ending past its first carried chars (counted with the frame before). */
-    static int count(String s, String what, int carried) {
-        int n = 0;
-        for (int k = s.indexOf(what); k >= 0; k = s.indexOf(what, k + 1)) {
-            if (k + what.length() > carried) {
-                n++;
+    /** Matches counts an ASCII text over a stream of byte chunks, a match split over chunks included. */
+    static final class Matches {
+        private final byte[] what;
+        // The stream's last what.length - 1 bytes (fewer at its start), where a split match begins.
+        private final byte[] tail;
+        private int tailLen;
+        int n;
+
+        Matches(String what) {
+            this.what = what.getBytes(StandardCharsets.US_ASCII);
+            this.tail = new byte[this.what.length - 1];
+        }
+
+        void add(byte[] b, int from, int to) {
+            // Matches that begin in the tail and end in this chunk.
+            for (int i = 0; i < tailLen; i++) {
+                int inTail = tailLen - i;
+                if (inTail + (to - from) >= what.length && same(tail, i, 0, inTail)
+                        && same(b, from, inTail, what.length - inTail)) {
+                    n++;
+                }
+            }
+            for (int i = from; i + what.length <= to; i++) {
+                if (same(b, i, 0, what.length)) {
+                    n++;
+                }
+            }
+            int len = to - from;
+            if (len >= tail.length) {
+                System.arraycopy(b, to - tail.length, tail, 0, tail.length);
+                tailLen = tail.length;
+            } else {
+                int keep = Math.min(tailLen, tail.length - len);
+                System.arraycopy(tail, tailLen - keep, tail, 0, keep);
+                System.arraycopy(b, from, tail, keep, len);
+                tailLen = keep + len;
             }
         }
-        return n;
+
+        // same says whether b[at, at + len) is what[whatAt, whatAt + len).
+        private boolean same(byte[] b, int at, int whatAt, int len) {
+            for (int k = 0; k < len; k++) {
+                if (b[at + k] != what[whatAt + k]) {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     /** returns is a class with a static run(int) of n lines "if (x == k) return k;", then "return -1;". */
@@ -232,6 +319,12 @@ public class BuildTableBudgetTest {
         long allocated;
         /** The send thread's CPU time, in nanoseconds. */
         long cpuNanos;
+        /** The send's wall time, in nanoseconds. */
+        long wallNanos;
+        /** The most the heap's committed size grew over what it was just before the send (after a collection). */
+        long committedGrowth;
+        /** The longest time between two frames, or the send's start and its first frame. */
+        long maxFrameGapNanos;
     }
 
     /** measure sends the table of classes to a sink that counts, as the table's thread does, and reports. */
@@ -331,10 +424,11 @@ public class BuildTableBudgetTest {
         boolean live = Boolean.getBoolean("keploy.budget.live");
         long[] liveMax = {-1};
         // A record may run on into the next frame: not_measured and record_too_large are counted over the
-        // table's stream, keeping the end of each frame that could begin a split match.
-        String notMeasured = "\"state\":\"not_measured\"";
-        String tooLarge = "\"reason\":{\"code\":\"record_too_large\"}";
-        String[] carry = {""};
+        // table's stream, a match split over two frames included. The sink reads each frame where the writer
+        // keeps it, as the socket's does: a copy or a String of a 1 MiB frame is a G1 humongous object, which
+        // grows the heap this row measures.
+        Matches notMeasured = new Matches("\"state\":\"not_measured\"");
+        Matches tooLarge = new Matches("\"reason\":{\"code\":\"record_too_large\"}");
         Budget b = new Budget();
         long gc0 = gcMillis();
         long process0 = processCpuNanos();
@@ -344,40 +438,56 @@ public class BuildTableBudgetTest {
         long allocated0 = allocation.getThreadAllocatedBytes(self);
         long cpu0 = threads.getCurrentThreadCpuTime();
         long t0 = System.nanoTime();
+        long[] lastFrame = {t0, 0};
         sampler.start();
-        BuildTable.send(() -> classes, frame -> {
-            long sink0 = allocation.getThreadAllocatedBytes(self);
-            if (live) {
-                System.gc();
-                long used = 0;
-                for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
-                    if (heapPools.contains(p.getName())) {
-                        used += p.getUsage().getUsed();
+        BuildTable.send(() -> classes, new BuildTable.FrameSender() {
+            @Override
+            public void send(byte[] frame) throws java.io.IOException {
+                send(frame, 0, frame.length);
+            }
+
+            @Override
+            public void send(byte[] frame, int off, int len) {
+                long sink0 = allocation.getThreadAllocatedBytes(self);
+                long at0 = System.nanoTime();
+                lastFrame[1] = Math.max(lastFrame[1], at0 - lastFrame[0]);
+                if (live) {
+                    System.gc();
+                    long used = 0;
+                    for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+                        if (heapPools.contains(p.getName())) {
+                            used += p.getUsage().getUsed();
+                        }
+                    }
+                    liveMax[0] = Math.max(liveMax[0], used);
+                }
+                // The header is the line after the 8 bytes of magic and length.
+                int nl = off + 8;
+                while (frame[nl] != '\n') {
+                    nl++;
+                }
+                String header = new String(frame, off + 8, nl - off - 8, StandardCharsets.UTF_8);
+                boolean probes = header.contains("\"part\":\"probes\"");
+                bytes[probes ? 1 : 0] += len;
+                if (header.contains("\"last\":true")) {
+                    int records = Integer.parseInt(header.replaceAll(".*\"records\":(\\d+).*", "$1"));
+                    if (probes) {
+                        b.probeRecords = records;
+                    } else {
+                        b.tableRecords = records;
                     }
                 }
-                liveMax[0] = Math.max(liveMax[0], used);
-            }
-            String f = new String(frame, StandardCharsets.UTF_8);
-            int at = f.indexOf("{\"v\":1,");
-            String header = f.substring(at, f.indexOf('\n', at));
-            boolean probes = header.contains("\"part\":\"probes\"");
-            bytes[probes ? 1 : 0] += frame.length;
-            if (header.contains("\"last\":true")) {
-                int records = Integer.parseInt(header.replaceAll(".*\"records\":(\\d+).*", "$1"));
-                if (probes) {
-                    b.probeRecords = records;
-                } else {
-                    b.tableRecords = records;
+                if (!probes) {
+                    notMeasured.add(frame, nl + 1, off + len);
+                    tooLarge.add(frame, nl + 1, off + len);
                 }
+                sinkAllocated[0] += allocation.getThreadAllocatedBytes(self) - sink0;
+                // The sink's own time (a live run's collection) is not the send's gap.
+                lastFrame[0] = System.nanoTime();
             }
-            if (!probes) {
-                String body = carry[0] + f.substring(f.indexOf('\n', at) + 1);
-                b.notMeasured += count(body, notMeasured, carry[0].length());
-                b.tooLarge += count(body, tooLarge, carry[0].length());
-                carry[0] = body.substring(Math.max(0, body.length() - (tooLarge.length() - 1)));
-            }
-            sinkAllocated[0] += allocation.getThreadAllocatedBytes(self) - sink0;
         });
+        b.notMeasured = notMeasured.n;
+        b.tooLarge = tooLarge.n;
         long wall = System.nanoTime() - t0;
         long allocated = allocation.getThreadAllocatedBytes(self) - allocated0 - sinkAllocated[0];
         sending.set(false);
@@ -406,13 +516,16 @@ public class BuildTableBudgetTest {
                 bytes[0], bytes[1], b.notMeasured, allocated >> 20, (allocated / Math.max(1, classes.size())) >> 10);
         b.allocated = allocated;
         b.cpuNanos = cpu;
+        b.wallNanos = wall;
+        b.maxFrameGapNanos = lastFrame[1];
         long committedPeak = Math.max(committedSampled.get(), committedGcMax.get());
+        b.committedGrowth = committedPeak - committedBase;
         System.out.printf(Locale.ROOT, "BUDGET-COMMITTED %s java=%s gc=%s heap_max_mb=%d committed_pre_gc_mb=%d"
                         + " committed_before_mb=%d committed_peak_mb=%d committed_end_mb=%d committed_growth_mb=%d"
-                        + " committed_growth_from_pre_gc_mb=%d%n",
+                        + " committed_growth_from_pre_gc_mb=%d max_frame_gap_ms=%d%n",
                 label, System.getProperty("java.version"), gcNames(), Runtime.getRuntime().maxMemory() >> 20,
                 committedPre >> 20, committedBase >> 20, committedPeak >> 20, committedEnd >> 20,
-                (committedPeak - committedBase) >> 20, (committedPeak - committedPre) >> 20);
+                (committedPeak - committedBase) >> 20, (committedPeak - committedPre) >> 20, lastFrame[1] / 1_000_000);
         return b;
     }
 

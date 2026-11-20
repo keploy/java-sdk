@@ -870,6 +870,55 @@ public class BuildTableTest {
     }
 
     @Test(timeout = 30_000)
+    public void anInterruptEndsTheSendAndIsSaidSo() throws Exception {
+        // Before the send, the next unit ends it, so no frame goes. After the table's last frame, the interrupt
+        // closes the probe map's temp file (an interruptible channel) as it is read back. Either way the WARNING
+        // names the interrupt, not the temp file, the interrupt is kept, and no temp file is left.
+        List<BuildTable.ClassFile> app = javaDedup();
+        for (boolean afterTable : new boolean[] {false, true}) {
+            File dir = tmp.newFolder("spill-" + afterTable);
+            List<String> heads = new ArrayList<>();
+            BuildTable.FrameSender sender = frame -> {
+                int nl = 8;
+                while (frame[nl] != '\n') {
+                    nl++;
+                }
+                String h = new String(frame, 8, nl - 8, StandardCharsets.UTF_8);
+                heads.add(h);
+                if (afterTable && h.contains("\"part\":\"table\"") && h.contains("\"last\":true")) {
+                    Thread.currentThread().interrupt();
+                }
+            };
+            try (Logs logs = new Logs()) {
+                if (!afterTable) {
+                    Thread.currentThread().interrupt();
+                }
+                try {
+                    BuildTable.send(() -> app, sender, dir);
+                    assertTrue(afterTable + ": the interrupt is kept", Thread.currentThread().isInterrupted());
+                } finally {
+                    Thread.interrupted();
+                }
+                LogRecord last = logs.records.get(logs.records.size() - 1);
+                assertEquals(Level.WARNING, last.getLevel());
+                assertTrue(last.getMessage(), last.getMessage().endsWith("the build table was not sent: its thread was"
+                        + " interrupted; it goes again when Keploy asks for it again"));
+                assertNull(last.getThrown());
+            }
+            if (afterTable) {
+                assertFalse(heads.isEmpty());
+                assertTrue(heads.toString(), heads.get(heads.size() - 1).contains("\"last\":true"));
+                for (String h : heads) {
+                    assertTrue("no probe map frame: " + h, h.contains("\"part\":\"table\""));
+                }
+            } else {
+                assertEquals(heads.toString(), 0, heads.size());
+            }
+            assertArrayEquals("no temp file left", new String[0], dir.list());
+        }
+    }
+
+    @Test(timeout = 30_000)
     public void aRequestedTableArrivesWithTheBuildId() throws Exception {
         File sock = new File(tmp.getRoot(), "table.sock");
         try (Receiver r = new Receiver(sock, Mode.OK)) {
