@@ -58,6 +58,19 @@ public class DedupWireFormatTest {
     }
 
     @Test
+    public void aCutEndsFlagSitsAfterClassMismatchAndIsLeftOutWhenFalse() {
+        Map<String, List<Integer>> probes = new LinkedHashMap<>();
+        probes.put("com/foo/Bar", Arrays.asList(0, 1));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"classMismatch\":[\"com/foo/Bar\"],\"windowCut\":true}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.singletonList("com/foo/Bar"), true));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},\"windowCut\":true}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), true));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]}}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false));
+    }
+
+    @Test
     public void covPayloadWithNoCoverageSerializesEmptyMap() {
         String json = KeployDedupAgent.toDedupJson(
                 "test-set-0/empty", Collections.<String, List<Integer>>emptyMap());
