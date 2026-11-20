@@ -98,6 +98,15 @@ public class ControlSocketTest {
         KeployDedupAgent.dataSocketPath = new File(dir, "data.sock").getAbsolutePath();
         // The warmup loads every class on the test classpath; nothing here needs it.
         System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        // A TABLE row answers ACK whatever heap this JVM was given (-DargLine=-Xmx...): the heap check is off
+        // unless a row sets its own bound.
+        System.setProperty(BuildTable.MIN_HEAP_PROPERTY, "0");
+    }
+
+    /** A TABLE row needs the heap check's env var unset: it would win over the property setUp sets. */
+    private static void assumeNoMinHeapEnv() {
+        String v = System.getenv(BuildTable.MIN_HEAP_ENV);
+        org.junit.Assume.assumeTrue(BuildTable.MIN_HEAP_ENV + " is set", v == null || v.trim().isEmpty());
     }
 
     @After
@@ -114,6 +123,7 @@ public class ControlSocketTest {
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
         System.clearProperty(CLASS_DIRS_PROPERTY);
+        System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
         if (jacoco != null) {
             jacoco.close();
         }
@@ -183,6 +193,7 @@ public class ControlSocketTest {
 
     @Test(timeout = 60000)
     public void theBuildTableGoesOnlyWhenKeployAsksForIt() throws Exception {
+        assumeNoMinHeapEnv();
         // The index is the java-dedup sample's classes, so the table is the Go encoder's golden for them.
         File classes = new File(dir, "classes");
         for (BuildTable.ClassFile f : BuildTableTest.javaDedup()) {
@@ -230,7 +241,36 @@ public class ControlSocketTest {
     }
 
     @Test(timeout = 60000)
+    public void aTableAskedWhenTheHeapIsShortIsDeclinedWithLowHeapAndSendsNothing() throws Exception {
+        assumeNoMinHeapEnv();
+        File classes = new File(dir, "classes");
+        for (BuildTable.ClassFile f : BuildTableTest.javaDedup()) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        long needed = Long.MAX_VALUE >> 20;
+        System.setProperty(BuildTable.MIN_HEAP_PROPERTY, String.valueOf(needed));
+        try {
+            startWithJacoco();
+            data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+            int asked = BuildTable.requests();
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            String reply = send("TABLE");
+            assertTrue(reply, reply.matches("IGNORED proto=2 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
+                    + needed + "\n"));
+            assertEquals("no send started", asked, BuildTable.requests());
+            assertNull("no table frame", data.payloads.poll(2, TimeUnit.SECONDS));
+            assertEquals("the control server goes on", TAKEN, send("END test-set-0/test-1"));
+        } finally {
+            System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
+        }
+    }
+
+    @Test(timeout = 60000)
     public void theIndexRecordAndTheTableNameOneBuild() throws Exception {
+        assumeNoMinHeapEnv();
         // Keploy finds the table under the build the INDEX record named. The index is the java-dedup sample's
         // classes and one file no class reader reads: both builds take every class the index holds.
         File classes = new File(dir, "classes");
@@ -278,6 +318,7 @@ public class ControlSocketTest {
 
     @Test(timeout = 300000)
     public void startAndEndAreAnsweredWhileTheTableIsAnalyzed() throws Exception {
+        assumeNoMinHeapEnv();
         // Keploy sends TABLE after the first ACK and goes on with its tests: the table's analysis runs on its own
         // thread, so no START or END waits for it. The index is a generated app large enough that its analysis
         // outlasts many START/END pairs.
@@ -352,6 +393,7 @@ public class ControlSocketTest {
 
     @Test(timeout = 60000)
     public void aTableThatFailsToStartIsIgnoredAndTheServerGoesOn() throws Exception {
+        assumeNoMinHeapEnv();
         startWithJacoco();
         String dataPath = KeployDedupAgent.dataSocketPath;
         data = new DataReceiver(dataPath);

@@ -81,12 +81,13 @@ public class ProbeMapTest {
 
     /** probes writes the table and returns the probe map's NDJSON stream. */
     static String probes(List<BuildTable.ClassFile> files, BuildTableTest.Collect table) throws IOException {
-        BuildTable.Summary s = BuildTable.write(files, table);
         ByteArrayOutputStream b = new ByteArrayOutputStream();
-        for (byte[] r : s.probes) {
+        BuildTable.Summary s = BuildTable.write(files, table, (build, r) -> {
             b.write(r, 0, r.length);
             b.write('\n');
-        }
+        });
+        assertEquals("the summary counts the probe records", s.probeRecords,
+                new String(b.toByteArray(), StandardCharsets.UTF_8).split("\n", -1).length - 1);
         return new String(b.toByteArray(), StandardCharsets.UTF_8);
     }
 
@@ -467,14 +468,16 @@ public class ProbeMapTest {
             files.add(new BuildTable.ClassFile("d/C", c[0]));
             files.add(new BuildTable.ClassFile("d/C", c[1]));
             BuildTableTest.Collect table = new BuildTableTest.Collect();
-            BuildTable.Summary s = BuildTable.write(files, table);
+            BuildTableTest.Collect map = new BuildTableTest.Collect();
+            BuildTable.Summary s = BuildTable.write(files, table, map);
             assertEquals(1, table.records.size());
             String rec = table.records.get(0);
             assertTrue(rec, rec.contains("\"id\":\"c:d/C\""));
             assertTrue(rec, rec.contains("\"state\":\"not_measured\",\"reason\":{\"code\":\"analyzer_failed\"}"));
             assertEquals(1, s.notMeasured);
             assertEquals("counted as a probe map failure", 1, s.notMapped);
-            assertTrue("no probe record for a unit that is not measured", s.probes.isEmpty());
+            assertTrue("no probe record for a unit that is not measured", map.records.isEmpty());
+            assertEquals(0, s.probeRecords);
         }
     }
 
