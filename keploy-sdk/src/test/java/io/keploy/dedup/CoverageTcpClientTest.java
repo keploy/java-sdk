@@ -6,13 +6,17 @@ import static org.junit.Assert.assertTrue;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.Base64;
 import org.jacoco.core.data.ExecutionData;
 import org.junit.After;
@@ -35,12 +39,16 @@ public class CoverageTcpClientTest {
     private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
     private static final String BUILD_TAG_PROPERTY = "keploy.build.tag";
     private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
+    private static final int ROUND_TRIPS = 25;
+    // Linux delays an ACK at least 40 ms; an END answered at once takes a few ms.
+    private static final long END_ROUND_TRIP_BOUND_MICROS = 20_000;
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
     private ServerSocket collector;
     private FakeJacoco jacoco;
+    private ClassLoader savedContextLoader;
 
     @Before
     public void setUp() throws IOException {
@@ -54,6 +62,9 @@ public class CoverageTcpClientTest {
     @After
     public void tearDown() throws IOException {
         KeployDedupAgent.stop();
+        if (savedContextLoader != null) {
+            Thread.currentThread().setContextClassLoader(savedContextLoader);
+        }
         System.clearProperty(ENDPOINT_PROPERTY);
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
@@ -249,6 +260,113 @@ public class CoverageTcpClientTest {
             String cov = in.readLine();
             assertTrue(cov, cov.startsWith("COV ") && !cov.contains("windowCut"));
         }
+    }
+
+    // Keploy waits on each reply. Sent in two writes (COV, then ACK), the ACK
+    // waited in the SDK's kernel (Nagle) until Keploy's kernel acknowledged the
+    // COV, which it delays by about 40 ms: once per test.
+    @Test
+    public void anEndIsAnsweredWithoutWaitingForTheCollectorsDelayedAck() throws Exception {
+        inProcessJacoco();
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            InputStream in = sdk.getInputStream();
+            long[] micros = new long[ROUND_TRIPS];
+            for (int i = 0; i < ROUND_TRIPS; i++) {
+                send(out, "START test-set-0/test-" + i);
+                assertEquals("ACK\n", readReply(in));
+                long sent = System.nanoTime();
+                send(out, "END test-set-0/test-" + i);
+                String reply = readReply(in);
+                micros[i] = (System.nanoTime() - sent) / 1000;
+                assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\""));
+            }
+            long[] sorted = micros.clone();
+            Arrays.sort(sorted);
+            assertTrue("median END round trip " + sorted[ROUND_TRIPS / 2] + " us, each: " + Arrays.toString(micros),
+                    sorted[ROUND_TRIPS / 2] < END_ROUND_TRIP_BOUND_MICROS);
+        }
+    }
+
+    // Each reply leaves in one write: the read that wakes on its first byte
+    // returns all of it. A reply sent a line at a time is read in parts.
+    @Test
+    public void eachReplyIsReadInOnePiece() throws Exception {
+        inProcessJacoco();
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            InputStream in = sdk.getInputStream();
+            byte[] buf = new byte[64 * 1024];
+            for (int i = 0; i < ROUND_TRIPS; i++) {
+                send(out, "START test-set-0/test-" + i);
+                assertEquals("ACK\n", readOnce(in, buf));
+                send(out, "END test-set-0/test-" + i);
+                String reply = readOnce(in, buf);
+                assertTrue("round " + i + " read " + reply,
+                        reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\"") && reply.endsWith("}\nACK\n"));
+                // Not taken (an END with no START): the IGNORED line and the ACK.
+                send(out, "END test-set-0/test-" + i);
+                assertEquals("IGNORED test-set-0/test-" + i + "\nACK\n", readOnce(in, buf));
+            }
+        }
+    }
+
+    // The socket to Keploy has Nagle off, so a reply that does not fit in one
+    // write (the first END's CLASSES frame) does not wait between its writes.
+    @Test
+    public void theSocketToKeployHasNagleOff() throws Exception {
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            send(out, "END test-set-0/test-1");
+            assertEquals("IGNORED test-set-0/test-1\nACK\n", readReply(sdk.getInputStream()));
+            Field worker = KeployDedupAgent.class.getDeclaredField("coverageWorker");
+            worker.setAccessible(true);
+            Object client = worker.get(null);
+            Field socket = client.getClass().getDeclaredField("socket");
+            socket.setAccessible(true);
+            assertTrue(((Socket) socket.get(client)).getTcpNoDelay());
+        }
+    }
+
+    // inProcessJacoco has the SDK read coverage from a JaCoCo agent in this
+    // JVM, as it reads its own JaCoCo's, so an END waits on no socket but
+    // Keploy's. (A JaCoCo reached over TCP has sockets of its own.)
+    private void inProcessJacoco() throws ReflectiveOperationException {
+        // A port nothing listens on: no command may reach JaCoCo over TCP.
+        System.setProperty(JACOCO_PORT_PROPERTY, "1");
+        savedContextLoader = Thread.currentThread().getContextClassLoader();
+        Thread.currentThread().setContextClassLoader(
+                new InProcessScanTest.RtLoader(new InProcessScanTest.Agent(), getClass().getClassLoader()));
+    }
+
+    // readReply reads up to the end of a reply: its ACK line.
+    private static String readReply(InputStream in) throws IOException {
+        StringBuilder reply = new StringBuilder();
+        byte[] buf = new byte[64 * 1024];
+        while (reply.length() < 4 || !reply.substring(reply.length() - 4).equals("ACK\n")) {
+            reply.append(readOnce(in, buf));
+        }
+        return reply.toString();
+    }
+
+    // readOnce is one read: what has come of the reply when it wakes.
+    private static String readOnce(InputStream in, byte[] buf) throws IOException {
+        int n;
+        try {
+            n = in.read(buf);
+        } catch (SocketTimeoutException e) {
+            throw new AssertionError("no reply came within the socket's 30 s", e);
+        }
+        if (n < 0) {
+            throw new IOException("the SDK closed the connection");
+        }
+        return new String(buf, 0, n, StandardCharsets.UTF_8);
     }
 
     private static void send(OutputStream out, String command) throws IOException {

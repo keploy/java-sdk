@@ -1224,7 +1224,7 @@ public class InProcessScanTest {
 
     // RtLoader defines JacocoRtStub as org.jacoco.agent.rt.RT, with its agent
     // set, and leaves every other class to its parent, which has no RT.
-    private static final class RtLoader extends ClassLoader {
+    static final class RtLoader extends ClassLoader {
 
         private static final String RT = "org.jacoco.agent.rt.RT";
 
