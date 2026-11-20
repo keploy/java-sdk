@@ -32,6 +32,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -918,5 +920,205 @@ public class BuildTableTest {
         }
         assertTrue("nothing is left running: the next request starts", sends.request(ran::countDown));
         assertTrue(ran.await(10, TimeUnit.SECONDS));
+    }
+
+    // ---------------------------------------------------------------- what a send holds, and the heap it needs
+
+    /** body is a frame's bytes after its header line. */
+    static String body(byte[] frame) {
+        int nl = 8;
+        while (frame[nl] != '\n') {
+            nl++;
+        }
+        return new String(frame, nl + 1, frame.length - nl - 1, StandardCharsets.UTF_8);
+    }
+
+    @Test
+    public void eachClassesProbeRecordsGoOutAsItIsWrittenNotKeptForTheEnd() throws Exception {
+        // Nothing of the probe map waits for the table's end in the heap: a measured unit's probe records reach
+        // their sink just before its own table record, so before the next unit is analyzed.
+        List<String> events = new ArrayList<>();
+        BuildTable.Summary s = BuildTable.write(javaDedup(),
+                (build, json) -> events.add("T" + new String(json, StandardCharsets.UTF_8)),
+                (build, json) -> events.add("P" + new String(json, StandardCharsets.UTF_8)));
+        assertEquals(5, s.records);
+        assertEquals(5, s.probeRecords);
+        List<String> since = new ArrayList<>();
+        int units = 0;
+        for (String e : events) {
+            JsonObject o = JsonParser.parseString(e.substring(1)).getAsJsonObject();
+            if (e.charAt(0) == 'P') {
+                since.add(o.get("unit").getAsString());
+                continue;
+            }
+            units++;
+            boolean measured = "ok".equals(o.get("state").getAsString());
+            assertEquals(e, measured, !since.isEmpty());
+            for (String unit : since) {
+                assertEquals("a probe record goes just before its own unit's table record", o.get("id").getAsString(),
+                        unit);
+            }
+            since.clear();
+        }
+        assertEquals(5, units);
+        assertTrue("no probe record after the last table record", since.isEmpty());
+    }
+
+    @Test
+    public void theProbeMapWaitsInATempFileThatIsGoneOnceTheSendEnds() throws Exception {
+        File dir = tmp.newFolder("spill");
+        List<byte[]> frames = new ArrayList<>();
+        List<String> during = new ArrayList<>();
+        BuildTable.send(BuildTableTest::javaDedupUnchecked, frame -> {
+            frames.add(frame);
+            during.add(Arrays.toString(dir.list()));
+        }, dir);
+        assertEquals(2, frames.size());
+        String build = new String(resource("java-dedup.build"), StandardCharsets.UTF_8).trim();
+        byte[] map = resource("java-dedup.probes.ndjson");
+        assertEquals("{\"v\":1,\"part\":\"probes\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,\"records\":5,"
+                + "\"sha256\":\"" + sha256Hex(map) + "\"}", header(frames.get(1)));
+        assertEquals(new String(map, StandardCharsets.UTF_8), body(frames.get(1)));
+        assertEquals(new String(resource("java-dedup.table.ndjson"), StandardCharsets.UTF_8), body(frames.get(0)));
+        assertArrayEquals("the temp file is removed", new String[0], dir.list());
+        if (File.separatorChar == '/') {
+            // Unlinked as soon as it is open: a JVM that dies mid-send leaves no file behind.
+            assertEquals(Arrays.asList("[]", "[]"), during);
+        }
+    }
+
+    @Test
+    public void aTempDirTheAppCannotWriteSendsNoFrameAndSaysWhich() throws Exception {
+        File notADir = tmp.newFile("not-a-dir");
+        List<byte[]> frames = new ArrayList<>();
+        AtomicInteger read = new AtomicInteger();
+        try (Logs logs = new Logs()) {
+            BuildTable.send(() -> {
+                read.incrementAndGet();
+                return javaDedupUnchecked();
+            }, frames::add, notADir);
+            assertTrue("no frame: Keploy gets no table for the build, and asks again next run", frames.isEmpty());
+            assertEquals("the classes are not read", 0, read.get());
+            LogRecord last = logs.records.get(logs.records.size() - 1);
+            assertEquals(Level.WARNING, last.getLevel());
+            assertTrue(last.getMessage(), last.getMessage().contains(notADir.getPath())
+                    && last.getMessage().contains("java.io.tmpdir"));
+        }
+    }
+
+    @Test
+    public void aShortHeapDeclinesTheTableWithLowHeap() {
+        long mb = 1 << 20;
+        try (Logs logs = new Logs()) {
+            assertEquals("reason=low_heap heap_free_mb=112 heap_needed_mb=256",
+                    BuildTable.lowHeap(new BuildTable.Heap(512 * mb, 400 * mb, true), 256));
+            assertEquals(1, logs.records.size());
+            LogRecord r = logs.records.get(0);
+            assertEquals(Level.WARNING, r.getLevel());
+            assertTrue(r.getMessage(), r.getMessage().contains("112 MiB free of the 512 MiB heap cap the JVM reports"
+                    + " (in use 400 MiB after the last collection), and it needs 256 MiB")
+                    && r.getMessage().contains("low_heap")
+                    && r.getMessage().contains("KEPLOY_COVERAGE_TABLE_MIN_HEAP_MB"));
+        }
+        assertNull("exactly what it needs is enough", BuildTable.lowHeap(new BuildTable.Heap(512 * mb, 256 * mb,
+                true), 256));
+        assertEquals("reason=low_heap heap_free_mb=255 heap_needed_mb=256",
+                BuildTable.lowHeap(new BuildTable.Heap(512 * mb, 256 * mb + 1, true), 256));
+        assertNull("0 turns the check off", BuildTable.lowHeap(new BuildTable.Heap(512 * mb, 512 * mb, false), 0));
+        assertEquals("in use past the cap is no free heap", "reason=low_heap heap_free_mb=0 heap_needed_mb=1",
+                BuildTable.lowHeap(new BuildTable.Heap(512 * mb, 600 * mb, false), 1));
+        assertNull("a JVM with no heap cap", BuildTable.lowHeap(new BuildTable.Heap(Long.MAX_VALUE, 400 * mb,
+                true), 256));
+    }
+
+    @Test
+    public void theFreeHeapATableNeedsIsTheEnvElseThePropertyElse256() {
+        assertEquals(256, BuildTable.minHeapMb(null, null));
+        assertEquals(256, BuildTable.minHeapMb(" ", ""));
+        assertEquals(100, BuildTable.minHeapMb("100", "50"));
+        assertEquals(50, BuildTable.minHeapMb(" ", "50"));
+        assertEquals(7, BuildTable.minHeapMb(" 7 ", null));
+        assertEquals(0, BuildTable.minHeapMb(null, "0"));
+        try (Logs logs = new Logs()) {
+            assertEquals(256, BuildTable.minHeapMb("-1", "50"));
+            assertEquals(256, BuildTable.minHeapMb(null, "1g"));
+            assertEquals(2, logs.records.size());
+            assertEquals(Level.WARNING, logs.records.get(1).getLevel());
+            assertTrue(logs.records.get(1).getMessage(), logs.records.get(1).getMessage().contains("'1g'"));
+        }
+    }
+
+    @Test
+    public void theHeapInUseIsWhatTheNewestCollectionLeftInTheHeapPools() {
+        long mb = 1 << 20;
+        java.util.Set<String> heap = new HashSet<>(Arrays.asList("Eden", "Old"));
+        // The newest is neither the first nor the last; the older ones left more in use; Metaspace and the code
+        // cache are not the heap.
+        BuildTable.GcEnd older = gcEnd(100, "Eden", 0, "Old", 300 * mb, "Metaspace", 40 * mb);
+        BuildTable.GcEnd newest = gcEnd(300, "Eden", 2 * mb, "Old", 100 * mb, "Metaspace", 50 * mb,
+                "CodeHeap", 20 * mb);
+        BuildTable.GcEnd middle = gcEnd(200, "Eden", 0, "Old", 250 * mb);
+        assertEquals(102 * mb, BuildTable.Heap.usedAfterNewest(Arrays.asList(older, newest, middle), heap));
+        assertEquals(102 * mb, BuildTable.Heap.usedAfterNewest(Arrays.asList(middle, older, newest), heap));
+        assertEquals("no collection seen", -1,
+                BuildTable.Heap.usedAfterNewest(Collections.<BuildTable.GcEnd>emptyList(), heap));
+    }
+
+    @Test
+    public void theHeapInUseIsTheSmallerOfNowAndTheNewestCollection() {
+        BuildTable.Heap h = BuildTable.Heap.of(512, 400, 300);
+        assertEquals(512, h.max);
+        assertEquals("garbage made since the collection does not count", 300, h.used);
+        assertTrue(h.afterGc);
+        h = BuildTable.Heap.of(512, 400, 400);
+        assertEquals(400, h.used);
+        assertTrue(h.afterGc);
+        h = BuildTable.Heap.of(512, 400, 500);
+        assertEquals("less in use now than the collection left: now is newer", 400, h.used);
+        assertFalse("the figure is the heap in use now", h.afterGc);
+        h = BuildTable.Heap.of(512, 400, -1);
+        assertEquals("no collection seen", 400, h.used);
+        assertFalse(h.afterGc);
+    }
+
+    @Test
+    public void thisJvmsCollectionsAreRead() {
+        // This JVM reports its collections; the check itself never runs one.
+        System.gc();
+        long after = BuildTable.LastCollection.heapUsedAfter();
+        assertTrue("a collection ran: " + after, after > 0);
+        BuildTable.Heap h = BuildTable.Heap.read();
+        assertEquals(Runtime.getRuntime().maxMemory(), h.max);
+        assertTrue(h.used + " of " + h.max, h.used > 0 && h.used <= h.max);
+    }
+
+    @Test
+    public void theProbeMapsTempFileIsNeverOpenedThroughALink() throws IOException {
+        // Another user who swaps the just-made temp file for a link to a file the app can write gets nothing
+        // written through it.
+        Path target = tmp.newFile("target").toPath();
+        Files.write(target, "keep".getBytes(StandardCharsets.UTF_8));
+        Path link = tmp.getRoot().toPath().resolve("keploy-probe-map-1.ndjson");
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (IOException | UnsupportedOperationException e) {
+            org.junit.Assume.assumeNoException(e);
+        }
+        try {
+            BuildTable.Spill.openOwned(link).close();
+            fail("opened through a link");
+        } catch (IOException expected) {
+            // ELOOP
+        }
+        assertEquals("keep", new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+        assertTrue("the target is not deleted", Files.exists(target));
+    }
+
+    private static BuildTable.GcEnd gcEnd(long endTime, Object... poolUsed) {
+        Map<String, Long> used = new HashMap<>();
+        for (int i = 0; i < poolUsed.length; i += 2) {
+            used.put((String) poolUsed[i], ((Number) poolUsed[i + 1]).longValue());
+        }
+        return new BuildTable.GcEnd(endTime, used);
     }
 }

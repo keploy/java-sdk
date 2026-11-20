@@ -41,7 +41,15 @@ import static org.junit.Assert.assertTrue;
  *
  * <p>heap_after_gc_max_mb is the most heap any collection during the send left in use: an upper bound of what
  * the analysis keeps live (a young collection also counts old garbage not collected yet). It is -1 when no
- * collection ran. heap_max_mb is the heap cap the JVM ran with (-Xmx, or its default from the machine's RAM).
+ * collection ran. heap_delta_mb is that less the heap in use before the send (heap_before_mb, after a
+ * collection: the classes' bytes and the test's own): what the send kept live at most. heap_peak_mb sums each
+ * heap pool's peak during the send (garbage included, so it follows the collector and the cap, not the live
+ * set). heap_max_mb is the heap cap the JVM ran with (-Xmx, or its default from the machine's RAM).
+ *
+ * <p>With -Dkeploy.budget.live=true each frame, as it is sent, first runs a full collection and reads the heap
+ * in use: live_max_mb is the most of those (what the send holds live at a frame boundary, the table's last
+ * frame included), live_delta_mb that less heap_before_mb. Those collections slow the send: read its times
+ * from a run without it. Without it both are -1.
  */
 public class BuildTableBudgetTest {
 
@@ -190,7 +198,14 @@ public class BuildTableBudgetTest {
             classBytes += f.bytes.length;
         }
         ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (heapPools.contains(p.getName())) {
+                p.resetPeakUsage();
+            }
+        }
         long[] bytes = new long[2];
+        boolean live = Boolean.getBoolean("keploy.budget.live");
+        long[] liveMax = {-1};
         // A record may run on into the next frame: not_measured is counted over the table's stream, keeping
         // the end of each frame that could begin a split match.
         String notMeasured = "\"state\":\"not_measured\"";
@@ -201,6 +216,16 @@ public class BuildTableBudgetTest {
         long cpu0 = threads.getCurrentThreadCpuTime();
         long t0 = System.nanoTime();
         BuildTable.send(() -> classes, frame -> {
+            if (live) {
+                System.gc();
+                long used = 0;
+                for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+                    if (heapPools.contains(p.getName())) {
+                        used += p.getUsage().getUsed();
+                    }
+                }
+                liveMax[0] = Math.max(liveMax[0], used);
+            }
             String f = new String(frame, StandardCharsets.UTF_8);
             int at = f.indexOf("{\"v\":1,");
             String header = f.substring(at, f.indexOf('\n', at));
@@ -226,15 +251,24 @@ public class BuildTableBudgetTest {
         long cpu = threads.getCurrentThreadCpuTime() - cpu0;
         long process = processCpuNanos() - process0;
         long gc = gcMillis() - gc0;
+        long peak = 0;
+        for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (heapPools.contains(p.getName())) {
+                peak += p.getPeakUsage().getUsed();
+            }
+        }
         // The JVM sends a collection's notification after it ends, from a thread of its own.
         Thread.sleep(200);
         long afterGc = afterGcMax.get();
         System.out.printf(Locale.ROOT, "BUDGET %s java=%s heap_max_mb=%d classes=%d class_bytes=%d wall_ms=%d"
                         + " thread_cpu_ms=%d process_cpu_ms=%d gc_ms=%d collections=%d heap_before_mb=%d"
-                        + " heap_after_gc_max_mb=%d table_bytes=%d probes_bytes=%d not_measured=%d%n",
+                        + " heap_after_gc_max_mb=%d heap_delta_mb=%d heap_peak_mb=%d live_max_mb=%d live_delta_mb=%d"
+                        + " table_bytes=%d probes_bytes=%d not_measured=%d%n",
                 label, System.getProperty("java.version"), Runtime.getRuntime().maxMemory() >> 20, classes.size(),
                 classBytes, wall / 1_000_000, cpu / 1_000_000, process / 1_000_000, gc, collections.get(),
-                base >> 20, afterGc < 0 ? -1 : afterGc >> 20, bytes[0], bytes[1], b.notMeasured);
+                base >> 20, afterGc < 0 ? -1 : afterGc >> 20, afterGc < 0 ? -1 : (afterGc - base) >> 20, peak >> 20,
+                liveMax[0] < 0 ? -1 : liveMax[0] >> 20, liveMax[0] < 0 ? -1 : (liveMax[0] - base) >> 20,
+                bytes[0], bytes[1], b.notMeasured);
         return b;
     }
 

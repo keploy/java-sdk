@@ -15,13 +15,26 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
+import java.lang.management.MemoryUsage;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -67,6 +80,12 @@ import java.util.logging.Logger;
  * covers. Keploy turns each test's probe hits, which name a class by its name, into its leaves with it; it is
  * never uploaded. Two class files of one name whose bytes differ share the record when they map their probes
  * alike, and fail their class closed (not measured) when not.
+ *
+ * <p>The send holds no whole table in the heap: each class's table record goes into the frame being filled
+ * as it is made, and its probe-map records into a temp file (owner-only, unlinked once open where the OS
+ * allows), which is streamed back as the probe map's frames once the table's last frame is sent. So what a
+ * send keeps is the class list (names and ids, no bytes of its own), one frame and one class's analysis.
+ * A TABLE asked when the heap is short is not taken: see {@link #answer}.
  */
 final class BuildTable {
 
@@ -129,9 +148,187 @@ final class BuildTable {
         return out;
     }
 
+    /** The env var, then the system property, that set the free heap a table needs, in MiB; 0 turns it off. */
+    static final String MIN_HEAP_ENV = "KEPLOY_COVERAGE_TABLE_MIN_HEAP_MB";
+    static final String MIN_HEAP_PROPERTY = "keploy.coverage.table.min.heap.mb";
+    /** The free heap a table needs when neither is set, in MiB. */
+    static final long DEFAULT_MIN_HEAP_MB = 256;
+    /** The reason a TABLE ask is declined when the heap is short: Keploy marks the run not_measured with it. */
+    static final String LOW_HEAP = "low_heap";
+
     /**
-     * request answers Keploy's TABLE command: true (ACK) once the table's send is started on its own thread,
-     * or, when a send runs already, once this request is set to run after it. It never blocks.
+     * answer is the control socket's reply to Keploy's TABLE command. When the heap has less free than the
+     * table needs ({@link #lowHeap}) the analysis is skipped and the reply is {@code IGNORED proto=2
+     * reason=low_heap heap_free_mb=F heap_needed_mb=N}, with a WARNING in the app's log; else it is
+     * {@link #request}'s ACK or IGNORED. The heap is read once, here, when Keploy asks: a send that runs after
+     * another one was checked when it was asked. It never blocks.
+     */
+    static String answer(Supplier<List<ClassFile>> classes, File dataSocket) {
+        String low = lowHeap(Heap.read(), minHeapMb(System.getenv(MIN_HEAP_ENV),
+                System.getProperty(MIN_HEAP_PROPERTY)));
+        if (low != null) {
+            return KeployDedupAgent.UNIX_REPLY_IGNORED + " " + low;
+        }
+        return request(classes, dataSocket) ? KeployDedupAgent.UNIX_REPLY_TAKEN
+                : KeployDedupAgent.UNIX_REPLY_IGNORED;
+    }
+
+    /**
+     * lowHeap is null when heap has at least minMb MiB free, else what the reply names after IGNORED proto=2
+     * ({@code reason=low_heap heap_free_mb=F heap_needed_mb=N}), logged at WARNING.
+     */
+    static String lowHeap(Heap heap, long minMb) {
+        long free = heap.freeMb();
+        if (free >= minMb) {
+            return null;
+        }
+        log(Level.WARNING, "Keploy coverage: the build table is not built, as the heap is short: " + free
+                + " MiB free of the " + (heap.max >> 20) + " MiB heap cap the JVM reports (in use " + (heap.used >> 20)
+                + " MiB" + (heap.afterGc ? " after the last collection" : " now") + "), and it needs "
+                + minMb + " MiB. Keploy marks this run's coverage not measured (" + LOW_HEAP + "). Give the JVM"
+                + " more heap (-Xmx), or set " + MIN_HEAP_ENV + " (0 turns the check off)", null);
+        return "reason=" + LOW_HEAP + " heap_free_mb=" + free + " heap_needed_mb=" + minMb;
+    }
+
+    /**
+     * minHeapMb is the free heap a table needs, in MiB: env, else property (as the agent reads its settings),
+     * else {@link #DEFAULT_MIN_HEAP_MB}. A value that is not a whole number of 0 or more is logged and the
+     * default holds.
+     */
+    static long minHeapMb(String env, String property) {
+        String v = env == null || env.trim().isEmpty() ? property : env;
+        if (v == null || v.trim().isEmpty()) {
+            return DEFAULT_MIN_HEAP_MB;
+        }
+        try {
+            long mb = Long.parseLong(v.trim());
+            if (mb >= 0) {
+                return mb;
+            }
+        } catch (NumberFormatException ignored) {
+            // logged below
+        }
+        log(Level.WARNING, "Keploy coverage: " + MIN_HEAP_ENV + " (or -D" + MIN_HEAP_PROPERTY + ") is '" + v.trim()
+                + "', not a whole number of MiB (0 or more); the build table needs " + DEFAULT_MIN_HEAP_MB
+                + " MiB of free heap", null);
+        return DEFAULT_MIN_HEAP_MB;
+    }
+
+    /**
+     * Heap is what the low-heap check reads: the heap cap and the heap in use. In use is what the JVM's newest
+     * collection left (the live set and any garbage it did not reach); with no collection seen, or a JVM that
+     * does not report one, it is the heap in use now, garbage included. The check never runs a collection: a
+     * System.gc() would pause the app.
+     */
+    static final class Heap {
+        /**
+         * The heap cap in bytes, as Runtime.maxMemory() reports it (a little under -Xmx with the Serial and
+         * Parallel collectors, which leave out a survivor space); Long.MAX_VALUE when the JVM has none.
+         */
+        final long max;
+        final long used;
+        /** afterGc is true when used is what the newest collection left, false when it is the heap in use now. */
+        final boolean afterGc;
+
+        Heap(long max, long used, boolean afterGc) {
+            this.max = max;
+            this.used = used;
+            this.afterGc = afterGc;
+        }
+
+        long freeMb() {
+            return max == Long.MAX_VALUE ? Long.MAX_VALUE : Math.max(0, max - used) >> 20;
+        }
+
+        static Heap read() {
+            Runtime rt = Runtime.getRuntime();
+            long now = rt.totalMemory() - rt.freeMemory();
+            long after;
+            try {
+                after = LastCollection.heapUsedAfter();
+            } catch (Throwable t) {
+                // No com.sun.management (a trimmed runtime) or a JMX error: the heap as it is now.
+                after = -1;
+            }
+            return of(rt.maxMemory(), now, after);
+        }
+
+        /**
+         * of is the heap with cap max, now bytes in use now and after bytes in use when the newest collection
+         * ended (-1 with none seen): the smaller of the two. More in use now is garbage and objects made since
+         * that collection; less means a collection the JVM did not report ran since, so now is the newer figure.
+         */
+        static Heap of(long max, long now, long after) {
+            return after < 0 || after > now ? new Heap(max, now, false) : new Heap(max, after, true);
+        }
+
+        /**
+         * usedAfterNewest is the heap in use when the newest of ends ended: its use after it, summed over
+         * heapPools only (the JVM also reports Metaspace and its code cache, which are not the heap); -1 when
+         * ends is empty.
+         */
+        static long usedAfterNewest(List<GcEnd> ends, Set<String> heapPools) {
+            GcEnd newest = null;
+            for (GcEnd e : ends) {
+                if (newest == null || e.endTime > newest.endTime) {
+                    newest = e;
+                }
+            }
+            if (newest == null) {
+                return -1;
+            }
+            long used = 0;
+            for (Map.Entry<String, Long> p : newest.usedAfter.entrySet()) {
+                if (heapPools.contains(p.getKey())) {
+                    used += p.getValue();
+                }
+            }
+            return used;
+        }
+    }
+
+    /** GcEnd is one collector's last collection: when it ended (ms since JVM start) and each pool's use after it. */
+    static final class GcEnd {
+        final long endTime;
+        final Map<String, Long> usedAfter;
+
+        GcEnd(long endTime, Map<String, Long> usedAfter) {
+            this.endTime = endTime;
+            this.usedAfter = usedAfter;
+        }
+    }
+
+    /** LastCollection reads com.sun.management, in a class of its own so a runtime without it fails only here. */
+    static final class LastCollection {
+        /** heapUsedAfter is the heap in use when the JVM's newest collection ended, or -1 with none seen. */
+        static long heapUsedAfter() {
+            Set<String> heapPools = new HashSet<>();
+            for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+                if (p.getType() == MemoryType.HEAP) {
+                    heapPools.add(p.getName());
+                }
+            }
+            List<GcEnd> ends = new ArrayList<>();
+            for (GarbageCollectorMXBean g : ManagementFactory.getGarbageCollectorMXBeans()) {
+                if (g instanceof com.sun.management.GarbageCollectorMXBean) {
+                    com.sun.management.GcInfo info =
+                            ((com.sun.management.GarbageCollectorMXBean) g).getLastGcInfo();
+                    if (info != null) {
+                        Map<String, Long> usedAfter = new HashMap<>();
+                        for (Map.Entry<String, MemoryUsage> e : info.getMemoryUsageAfterGc().entrySet()) {
+                            usedAfter.put(e.getKey(), e.getValue().getUsed());
+                        }
+                        ends.add(new GcEnd(info.getEndTime(), usedAfter));
+                    }
+                }
+            }
+            return Heap.usedAfterNewest(ends, heapPools);
+        }
+    }
+
+    /**
+     * request starts the table's send: true (ACK) once it is started on its own thread, or, when a send runs
+     * already, once this request is set to run after it. It never blocks.
      * When no thread can start it answers false (IGNORED) and does not throw; the agent's command hook catches
      * anything else. The classes are read on that thread.
      */
@@ -139,7 +336,10 @@ final class BuildTable {
         return JVM.request(() -> send(classes, new SocketSender(dataSocket)));
     }
 
-    /** requests is how many times the JVM's table was asked for, answered or not: only TABLE asks. */
+    /**
+     * requests is how many times the JVM's table send was asked for, started or not: only TABLE asks the heap
+     * check let through.
+     */
     static int requests() {
         return JVM.requests();
     }
@@ -222,21 +422,28 @@ final class BuildTable {
     }
 
     /**
-     * send analyzes the classes and streams the table through sender. It logs what it sent, or why it stopped,
-     * and never throws.
+     * send analyzes the classes and streams the table through sender, then the probe map, which waits in a
+     * temp file in java.io.tmpdir while the table streams ({@link Spill}). It logs what it sent, or why it
+     * stopped, and never throws.
      */
     static void send(Supplier<List<ClassFile>> classes, FrameSender sender) {
+        send(classes, sender, new File(System.getProperty("java.io.tmpdir", "/tmp")));
+    }
+
+    /** send with the probe map's temp file made in spillDir. */
+    static void send(Supplier<List<ClassFile>> classes, FrameSender sender, File spillDir) {
         try {
             long cpu0 = threadCpuNanos();
             long t0 = System.nanoTime();
             FrameWriter frames = new FrameWriter(sender, PART_TABLE, MAX_FRAME_BYTES);
-            Summary s = write(classes.get(), frames);
-            frames.finish(s.build, s.records);
             FrameWriter maps = new FrameWriter(sender, PART_PROBES, MAX_FRAME_BYTES);
-            for (byte[] p : s.probes) {
-                maps.record(s.build, p);
+            Summary s;
+            try (Spill spill = Spill.open(spillDir)) {
+                s = write(classes.get(), frames, spill);
+                frames.finish(s.build, s.records);
+                spill.sendTo(maps, s.build);
             }
-            maps.finish(s.build, s.probes.size());
+            maps.finish(s.build, s.probeRecords);
             StringBuilder m = new StringBuilder("Keploy coverage: build table ");
             m.append(s.build.isEmpty() ? "(no app classes)" : s.build).append(" sent (").append(s.records)
                     .append(" classes, ").append(s.notMeasured).append(" not measured");
@@ -252,7 +459,7 @@ final class BuildTable {
             if (s.unnamed > 0) {
                 m.append(", ").append(s.unnamed).append(" index entries without a class name left out");
             }
-            m.append("; probe map of ").append(s.probes.size()).append(" class files; ").append(frames.seq + maps.seq)
+            m.append("; probe map of ").append(s.probeRecords).append(" class files; ").append(frames.seq + maps.seq)
                     .append(" frames, ").append((System.nanoTime() - t0) / 1_000_000)
                     .append(" ms, cpu ").append((threadCpuNanos() - cpu0) / 1_000_000).append(" ms)");
             log(Level.INFO, m.toString(), null);
@@ -287,18 +494,18 @@ final class BuildTable {
         final int unnamed;
         /** How many of the not measured records JaCoCo analyzed but whose probes could not be mapped. */
         final int notMapped;
-        /** The probe map's records, in the table's order: one per class name of each measured unit. */
-        final List<byte[]> probes;
+        /** How many probe-map records went to the probes sink: one per class name of each measured unit. */
+        final int probeRecords;
 
         Summary(String build, int records, int notMeasured, int noLines, int unnamed, int notMapped,
-                List<byte[]> probes) {
+                int probeRecords) {
             this.build = build;
             this.records = records;
             this.notMeasured = notMeasured;
             this.noLines = noLines;
             this.unnamed = unnamed;
             this.notMapped = notMapped;
-            this.probes = probes;
+            this.probeRecords = probeRecords;
         }
     }
 
@@ -307,15 +514,79 @@ final class BuildTable {
         void record(String build, byte[] json) throws IOException;
     }
 
+    /** A sink that drops what it is given: write's probe map when only the table is wanted. */
+    static final RecordSink DROP = (build, json) -> { };
+
     /**
-     * write analyzes the classes and hands each table record to sink, in the contract's order. With no class
-     * bytes the build id is "" and there is no record.
+     * write analyzes the classes and hands each table record to sink, in the contract's order, and each
+     * measured class's probe-map records to probes as they are made, in the same order: it keeps neither. With
+     * no class bytes the build id is "" and there is no record.
      */
+    static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes) throws IOException {
+        return write(classes, sink, probes, MAX_RECORD_BYTES);
+    }
+
+    /** write with the probe map dropped. */
     static Summary write(List<ClassFile> classes, RecordSink sink) throws IOException {
-        return write(classes, sink, MAX_RECORD_BYTES);
+        return write(classes, sink, DROP, MAX_RECORD_BYTES);
     }
 
     static Summary write(List<ClassFile> classes, RecordSink sink, int maxRecord) throws IOException {
+        return write(classes, sink, DROP, maxRecord);
+    }
+
+    static Summary write(List<ClassFile> classes, RecordSink sink, RecordSink probes, int maxRecord)
+            throws IOException {
+        Grouped g = group(classes);
+        if (g.build.isEmpty()) {
+            return new Summary("", 0, 0, 0, g.unnamed, 0, 0);
+        }
+        String build = g.build;
+        List<Unit> units = g.units;
+        int notMeasured = 0;
+        int noLines = 0;
+        int notMapped = 0;
+        int probeRecords = 0;
+        for (int i = 0; i < units.size(); i++) {
+            // A unit written is dropped: what stays is the class list (names, ids), not the table.
+            Unit u = units.set(i, null);
+            byte[] rec = u.record();
+            if (rec.length + 1 > maxRecord) {
+                rec = u.notMeasured("record_too_large");
+                u.failed = true;
+            }
+            if (u.failed) {
+                notMeasured++;
+                if (u.notMapped) {
+                    notMapped++;
+                }
+            } else {
+                noLines += u.noLines;
+                for (byte[] p : u.probes) {
+                    probes.record(build, p);
+                    probeRecords++;
+                }
+            }
+            sink.record(build, rec);
+        }
+        return new Summary(build, units.size(), notMeasured, noLines, g.unnamed, notMapped, probeRecords);
+    }
+
+    /** What group makes of the index's classes: the build id ("" with none), the units in table order. */
+    private static final class Grouped {
+        final String build;
+        final List<Unit> units;
+        final int unnamed;
+
+        Grouped(String build, List<Unit> units, int unnamed) {
+            this.build = build;
+            this.units = units;
+            this.unnamed = unnamed;
+        }
+    }
+
+    /** group folds the classes into units by name, in table order; its lookups end with it. */
+    private static Grouped group(List<ClassFile> classes) {
         Map<String, Unit> byId = new HashMap<>();
         Set<String> seen = new HashSet<>();
         long[] ids = new long[classes.size()];
@@ -348,33 +619,11 @@ final class BuildTable {
             had.files.add(new UnitFile(f, id));
         }
         if (n == 0) {
-            return new Summary("", 0, 0, 0, unnamed, 0, Collections.<byte[]>emptyList());
+            return new Grouped("", Collections.<Unit>emptyList(), unnamed);
         }
-        String build = IndexReport.buildId(Arrays.copyOf(ids, n));
         List<Unit> units = new ArrayList<>(byId.values());
         Collections.sort(units, UNIT_ORDER);
-        int notMeasured = 0;
-        int noLines = 0;
-        int notMapped = 0;
-        List<byte[]> probes = new ArrayList<>();
-        for (Unit u : units) {
-            byte[] rec = u.record();
-            if (rec.length + 1 > maxRecord) {
-                rec = u.notMeasured("record_too_large");
-                u.failed = true;
-            }
-            if (u.failed) {
-                notMeasured++;
-                if (u.notMapped) {
-                    notMapped++;
-                }
-            } else {
-                noLines += u.noLines;
-                probes.addAll(u.probes);
-            }
-            sink.record(build, rec);
-        }
-        return new Summary(build, units.size(), notMeasured, noLines, unnamed, notMapped, probes);
+        return new Grouped(IndexReport.buildId(Arrays.copyOf(ids, n)), units, unnamed);
     }
 
     /**
@@ -1185,6 +1434,13 @@ final class BuildTable {
             }
         }
 
+        /** bytes adds whole records, each ended by its newline, to the stream as they are. */
+        void bytes(String build, byte[] b, int off, int len) throws IOException {
+            this.build = build;
+            digest.update(b, off, len);
+            write(b, off, len);
+        }
+
         /** finish sends the last frame, with the record count and the stream's sha256. */
         void finish(String build, int records) throws IOException {
             this.build = build;
@@ -1220,6 +1476,94 @@ final class BuildTable {
             }
             body.reset();
             seq++;
+        }
+    }
+
+    /**
+     * Spill keeps the probe map's records while the table streams, as the wire sends the map after the table's
+     * last frame: in a temp file made owner-only, which is unlinked as soon as it is open where the OS allows
+     * (so a JVM that dies mid-send leaves no file; one that dies between the file's making and its opening
+     * leaves it empty), and is removed on close otherwise. It is opened without following a link, so a link
+     * put in its place is never written through. A dir where no such file
+     * can be made, or a write that fails (a full disk), ends the send before the table's last frame: Keploy
+     * gets no table for that build and names it (table_incomplete), and the WARNING names the dir.
+     */
+    static final class Spill implements RecordSink, AutoCloseable {
+        private final File dir;
+        private final Path path;
+        private final FileChannel channel;
+        private final OutputStream out;
+
+        private Spill(File dir, Path path, FileChannel channel) {
+            this.dir = dir;
+            this.path = path;
+            this.channel = channel;
+            this.out = new BufferedOutputStream(Channels.newOutputStream(channel), 1 << 16);
+        }
+
+        static Spill open(File dir) throws IOException {
+            Path path;
+            try {
+                path = Files.createTempFile(dir.toPath(), "keploy-probe-map-", ".ndjson");
+            } catch (IOException | RuntimeException e) {
+                throw new IOException("no temp file for the probe map in " + dir + " (" + e
+                        + "); set java.io.tmpdir to a dir the app can write", e);
+            }
+            try {
+                return new Spill(dir, path, openOwned(path));
+            } catch (IOException | RuntimeException e) {
+                deleteQuietly(path);
+                throw new IOException("could not open the probe map's temp file " + path + " (" + e + ")", e);
+            }
+        }
+
+        /**
+         * openOwned opens the file just made at path to write and read back, never through a link (a link put
+         * in its place fails the open), and deleted on close.
+         */
+        static FileChannel openOwned(Path path) throws IOException {
+            return FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE,
+                    StandardOpenOption.DELETE_ON_CLOSE, LinkOption.NOFOLLOW_LINKS);
+        }
+
+        @Override
+        public void record(String build, byte[] json) throws IOException {
+            try {
+                out.write(json);
+                out.write('\n');
+            } catch (IOException e) {
+                throw new IOException("could not keep the probe map in a temp file in " + dir + ": "
+                        + e.getMessage(), e);
+            }
+        }
+
+        /** sendTo streams what was kept into w, from its first byte. */
+        void sendTo(FrameWriter w, String build) throws IOException {
+            out.flush();
+            channel.position(0);
+            InputStream in = Channels.newInputStream(channel);
+            byte[] buf = new byte[1 << 16];
+            for (int n = in.read(buf); n >= 0; n = in.read(buf)) {
+                w.bytes(build, buf, 0, n);
+            }
+        }
+
+        @Override
+        public void close() {
+            try {
+                channel.close();
+            } catch (IOException ignored) {
+                // the file is removed below either way
+            }
+            deleteQuietly(path);
+        }
+
+        private static void deleteQuietly(Path path) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException | RuntimeException ignored) {
+                // best effort: the file is owner-only, and gone already where it was unlinked once open
+            }
         }
     }
 
