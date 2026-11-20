@@ -60,15 +60,23 @@ import static org.junit.Assert.fail;
 /**
  * Rows for the build table: the java-dedup sample's classes (compiled once with javac --release 8 -g from
  * keploy/samples-java java-dedup, kept as .class.bin) encode to the golden table byte for byte. The golden
- * (java-dedup.table.ndjson, java-dedup.build) is the Go encoder's output (enterprise pkg/service/codecoverage
- * NewTable + EncodeTable) over these records, with the hashes and the build id computed in Go from the class
- * bytes, so the order, the JSON form, the fold and the ids are Go's, not this class's. So is edge.table.ndjson,
- * over a set of classes generated here ({@link #edge}) for the names, packages and escapes the sample lacks.
+ * table (java-dedup.table.ndjson) is the Go encoder's output (enterprise pkg/service/codecoverage NewTable +
+ * EncodeTable) over these records, with the unit hashes computed in Go from the class bytes, so the order, the
+ * JSON form, the fold and the unit hashes are Go's, not this class's. So is edge.table.ndjson, over a set of
+ * classes generated here ({@link #edge}) for the names, packages and escapes the sample lacks.
  *
- * <p>To regenerate a golden: run these rows with -Dbuildtable.dump=DIR (each golden row writes DIR/NAME.ndjson
- * and the class files as DIR/NAME/VM-NAME.class.bin), then in an enterprise checkout read each record with
- * codecoverage's Unit JSON, recompute its hash and the build id from the class files with JaCoCo's CRC64,
- * NewTable(LanguageJava, build, units) and EncodeTable, and write the result back over the golden here.
+ * <p>The .build goldens (java-dedup.build, edge.build) are the build id of IndexReport.buildId's bytes: the
+ * table format F ({@link BuildTable#TABLE_FORMAT}), the JaCoCo release V of the analyzer keploy-sdk.jar
+ * carries, then the class ids (JaCoCo's CRC64 of each class file), computed by an independent CRC64 and
+ * sha256 oracle until codecoverage.JavaBuildID takes F and V. A JaCoCo upgrade or a raised TABLE_FORMAT
+ * changes both .build files on purpose.
+ *
+ * <p>To regenerate a golden table: run these rows with -Dbuildtable.dump=DIR (each golden row writes
+ * DIR/NAME.ndjson and the class files as DIR/NAME/VM-NAME.class.bin), then in an enterprise checkout read
+ * each record with codecoverage's Unit JSON, recompute its hash from the class files with JaCoCo's CRC64,
+ * NewTable(LanguageJava, build, units) and EncodeTable, and write the result back over the golden here. Then
+ * update {@link #aTableThatChangesForTheSameClassesNamesAnotherBuild}. To regenerate a .build golden, take
+ * the sha256 of IndexReport.buildId's bytes over the dumped class files' ids.
  */
 public class BuildTableTest {
 
@@ -154,12 +162,67 @@ public class BuildTableTest {
         }
     }
 
+    private static final String BUILD_GOLDEN = "the build id of IndexReport.buildId's bytes (F, the analyzer's JaCoCo"
+            + " release, the class ids): a JaCoCo upgrade or a raised BuildTable.TABLE_FORMAT changes it on purpose";
+
+    /**
+     * A tripwire for the build id's F: TABLE_FORMAT 1 is these bounds, Hits' step count, the record each cap
+     * writes (with its reason) and the records these golden tables hold. A change to any of them changes the
+     * table for the same class bytes, and an SDK that kept F would name the build an older SDK saved its table
+     * under, so Keploy would refuse each later save of it. In a release, raise BuildTable.TABLE_FORMAT, then
+     * update this row; before the first release that writes a table, update the pinned values alone.
+     */
+    @Test
+    public void aTableThatChangesForTheSameClassesNamesAnotherBuild() throws Exception {
+        String why = "the table for the same class bytes changed: in a release, raise BuildTable.TABLE_FORMAT,"
+                + " then update this row";
+        assertEquals(why, 1, BuildTable.TABLE_FORMAT);
+        assertEquals(why, 8 << 20, BuildTable.MAX_RECORD_BYTES);
+        assertEquals(why, 8 << 20, BuildTable.MAX_MAP_BYTES);
+        assertEquals(why, 64L << 20, BuildTable.MAX_MAP_STEPS);
+        // The record each cap writes, not the constants: a unit past the probe map's steps (a chain of 200
+        // early returns, whose walks Hits counts) and a record past a 1600-byte chunk (java-dedup's two).
+        String name = "gen/big/Returns";
+        byte[] bytes = BuildTableBudgetTest.returns(name, 200);
+        List<BuildTable.ClassFile> one = Collections.singletonList(new BuildTable.ClassFile(name, bytes));
+        long[] steps = {0};
+        KeployBranchCoverage.analyze(bytes, new HashMap<>(), (m, r, h) -> steps[0] += h.steps);
+        assertEquals(why, 61302L, steps[0]);
+        Collect probes = new Collect();
+        BuildTable.write(one, new Collect(), probes, BuildTable.MAX_RECORD_BYTES);
+        assertEquals(why, 1, probes.records.size());
+        assertEquals(why, "c4271098e6e5103773be528dee9ca19edd1fded1409e2cba5a4aad84232e61c9",
+                sha256Hex(probes.ndjson.toByteArray()));
+        int mapBytes = probes.records.get(0).length() + 1;
+        assertEquals(why, 149124, mapBytes);
+        Collect mapped = new Collect();
+        Collect map = new Collect();
+        BuildTable.write(one, mapped, map, BuildTable.MAX_RECORD_BYTES, mapBytes, steps[0]);
+        assertEquals(why, probes.records, map.records);
+        assertTrue(why, mapped.records.get(0).contains("\"state\":\"ok\""));
+        Collect capped = new Collect();
+        BuildTable.write(one, capped, new Collect(), BuildTable.MAX_RECORD_BYTES, mapBytes, steps[0] - 1);
+        assertTrue(why, capped.records.get(0).contains("\"state\":\"not_measured\""));
+        assertEquals(why, "3ee7977c74cf5939ab7af3957bfc1bbd4e495614d4dcb7bd066c707618f7ec1c",
+                sha256Hex(capped.ndjson.toByteArray()));
+        Collect chunked = new Collect();
+        BuildTable.write(javaDedup(), chunked, 1600);
+        assertEquals(why, "4c5ebe7cc05a4f0e4c34faa45c7521216df376409cac5cc4f8e6447b4359d584",
+                sha256Hex(chunked.ndjson.toByteArray()));
+        assertEquals(why, "d9d2f53a4e36fb2a63b63a307187373a1ee87ec4e44bcbcdec1a2c4fb47caf1c",
+                sha256Hex(resource("java-dedup.table.ndjson")));
+        assertEquals(why, "ddb2d5ac7990ed620e370825fc84aec6782ea89ccda029716cdfb1b27519a7dc",
+                sha256Hex(resource("java-dedup.probes.ndjson")));
+        assertEquals(why, "e0e30865ebc060b2a576f961df79bd002191791daa6336f47f210e666feadd20",
+                sha256Hex(resource("edge.table.ndjson")));
+    }
+
     @Test
     public void javaDedupTableIsTheGoEncodersByteForByte() throws Exception {
         List<BuildTable.ClassFile> files = javaDedup();
         Collect c = table(files);
         dump("java-dedup", files, c);
-        assertEquals(new String(resource("java-dedup.build"), StandardCharsets.UTF_8).trim(), c.build);
+        assertEquals(BUILD_GOLDEN, new String(resource("java-dedup.build"), StandardCharsets.UTF_8).trim(), c.build);
         assertEquals(new String(resource("java-dedup.table.ndjson"), StandardCharsets.UTF_8),
                 new String(c.ndjson.toByteArray(), StandardCharsets.UTF_8));
         // The same classes in another order give the same bytes.
@@ -589,7 +652,7 @@ public class BuildTableTest {
         List<BuildTable.ClassFile> files = edge();
         Collect c = table(files);
         dump("edge", files, c);
-        assertEquals(new String(resource("edge.build"), StandardCharsets.UTF_8).trim(), c.build);
+        assertEquals(BUILD_GOLDEN, new String(resource("edge.build"), StandardCharsets.UTF_8).trim(), c.build);
         assertEquals(new String(resource("edge.table.ndjson"), StandardCharsets.UTF_8),
                 new String(c.ndjson.toByteArray(), StandardCharsets.UTF_8));
         BuildTable.Summary s = BuildTable.write(files, new Collect());
