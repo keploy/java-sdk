@@ -316,4 +316,49 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <!-- Spring 6.2 (Spring Boot 3.4's) for ServerTailTest's row that runs the
+                 app on it: the test class path keeps Spring 5.3, which runs on Java 8,
+                 and the row puts these jars on its app's class path in its place.
+                 Spring 6 needs Java 17, so the profile is on only there. Test-only:
+                 nothing here goes in a jar, and a build with -DskipTests skips it. -->
+            <id>spring6-rows</id>
+            <activation>
+                <jdk>[17,)</jdk>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-spring6</id>
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>copy</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>${skipTests}</skip>
+                                    <outputDirectory>${project.build.directory}/spring6</outputDirectory>
+                                    <artifactItems>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-aop</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-beans</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-core</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-expression</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>org.springframework</groupId><artifactId>spring-jcl</artifactId><version>6.2.12</version></artifactItem>
+                                        <artifactItem><groupId>io.micrometer</groupId><artifactId>micrometer-observation</artifactId><version>1.14.12</version></artifactItem>
+                                        <artifactItem><groupId>io.micrometer</groupId><artifactId>micrometer-commons</artifactId><version>1.14.12</version></artifactItem>
+                                    </artifactItems>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
