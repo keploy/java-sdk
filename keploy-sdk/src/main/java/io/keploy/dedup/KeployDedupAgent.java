@@ -810,8 +810,13 @@ public final class KeployDedupAgent {
                 if (BuildTable.COMMAND.equals(line.trim())) { // the build table: ACK, then sent on its own thread
                     String reply; // or IGNORED, with reason=low_heap when the heap is short
                     try {
-                        reply = BuildTable.answer(() -> BuildTable.files(collector.coverageIndex.entries(),
-                                e -> e.className, e -> e.bytes), new File(dataSocketPath));
+                        CoverageIndex index = collector.coverageIndex; // its count only if read: no load here
+                        reply = BuildTable.answer(() -> {
+                                    List<ClassEntry> read = index.entries;
+                                    return read == null ? -1 : read.size();
+                                },
+                                () -> BuildTable.files(index.entries(), e -> e.className, e -> e.bytes),
+                                new File(dataSocketPath));
                     } catch (Throwable t) { // thrown past here, it would end the accept loop: IGNORED instead
                         log(Level.WARNING, "Keploy coverage: the build table was not started", t);
                         reply = UNIX_REPLY_IGNORED;
