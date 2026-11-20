@@ -393,9 +393,15 @@ final class BuildTable {
      * Sends runs one send at a time. Requests made while one runs are run once after it, as the newest of them:
      * each request names its own index and data socket, and only the newest is the agent's now (a stop() and
      * start() during a send makes a new index and socket). A send that throws is logged, and the request made
-     * while it ran still runs. It assumes one caller at a time (the control server handles one command at a
-     * time): a thread that fails to start clears {@code pending}, which would drop a request that raced in from
-     * a second caller.
+     * while it ran still runs. A send that leaves its thread interrupted (an interrupt ends a send: see
+     * {@link Pacer}) ends that thread: the request made while it ran goes to a new thread, so it never reads the
+     * index's class files on an interrupted thread (on JDK 8 a read of a class file there fails, and the index
+     * would keep the classes it got). Sends stays running while that thread starts, so a request made meanwhile
+     * waits to run after it. A thread that fails to start clears {@code pending}: a request made while the
+     * handover's thread was starting is dropped with the one it was starting for (ACKed, never sent; Keploy's
+     * wait for the table ends it, and Keploy asks again on its next run). On the control path the failure
+     * answers IGNORED and drops no other request, as Sends assumes one caller at a time there (the control
+     * server handles one command at a time).
      */
     static final class Sends {
         private final ThreadFactory threads;
@@ -421,12 +427,17 @@ final class BuildTable {
                 }
                 running = true;
             }
+            // Called on the control path: a thread that cannot start (a pids limit, a security manager) must not
+            // end the control server. Keploy reads IGNORED as no table from this SDK.
+            return start(send);
+        }
+
+        /** start runs send and the requests after it on a new thread; false, with a WARNING, if none starts. */
+        private boolean start(Runnable send) {
             try {
                 threads.newThread(() -> loop(send)).start();
                 return true;
             } catch (Throwable t) {
-                // Called on the control path: a thread that cannot start (a pids limit, a security manager)
-                // must not end the control server. Keploy reads IGNORED as no table from this SDK.
                 synchronized (this) {
                     running = false;
                     pending = null;
@@ -454,6 +465,13 @@ final class BuildTable {
                     send = pending;
                     pending = null;
                 }
+                if (Thread.currentThread().isInterrupted()) {
+                    // The interrupt ended this thread's send and is kept for it: the next one runs on a new
+                    // thread, uninterrupted. Sends stays running meanwhile, so a request made now waits for it.
+                    // start's factory and log calls run on this interrupted thread: keep them non-interruptible.
+                    start(send);
+                    return;
+                }
             }
         }
     }
@@ -470,6 +488,10 @@ final class BuildTable {
     /** send with the probe map's temp file made in spillDir. */
     static void send(Supplier<List<ClassFile>> classes, FrameSender sender, File spillDir) {
         try {
+            if (Thread.currentThread().isInterrupted()) {
+                // An interrupt ends a send: read no class file on this thread (on JDK 8 that read fails).
+                throw Pacer.interrupted();
+            }
             long cpu0 = threadCpuNanos();
             long t0 = System.nanoTime();
             FrameWriter frames = new FrameWriter(sender, PART_TABLE, MAX_FRAME_BYTES);
@@ -544,11 +566,11 @@ final class BuildTable {
      * the waits over any k class files add up to at most a second plus 0.8 k ms, so frames keep coming (Keploy's
      * wait for the table is a bound on the time since its last frame), and all of them to at most 0.8 ms a
      * class file (40 s at 50,000). And no wait is taken that would end the table past {@link #deadlineNanos}
-     * (50 s at 50,000 class files), reckoned as the time so far plus the rest of its class files at the rate
-     * the work went so far: on a slow or busy CPU the pacing gives way to the table's 60 s bound, with 10 s
-     * left for the probe map's frames and the estimate's error. A clock or collector bean that fails ends the
-     * pacing, and the rest is sent unpaced. An interrupt ends the send: unitDone throws, and the interrupt is
-     * kept for the thread.
+     * (50 s at 50,000 class files), reckoned as the time since the send began (the index's read included) plus
+     * the rest of its class files at the rate the analysis went so far (from {@link #begin}, its waits left
+     * out): on a slow or busy CPU the pacing gives way to the table's 60 s bound, with 10 s left for the probe
+     * map's frames and the estimate's error. A clock or collector bean that fails ends the pacing, and the rest
+     * is sent unpaced. An interrupt ends the send: unitDone throws, and the interrupt is kept for the thread.
      */
     static final class Pacer {
         /** Each millisecond of collection asks for this many of the send's: at most 0.5% of it collecting. */
@@ -578,6 +600,11 @@ final class BuildTable {
         private final Clock clock;
         private boolean off;
         private long start;
+        /**
+         * When the analysis began, for the rate: set by begin, or at construction if begin is never reached (then
+         * total is 0 and the rate is never read). start is the send's, for the deadline.
+         */
+        private long begun;
         private long total;
         private long done;
         private long last;
@@ -591,6 +618,7 @@ final class BuildTable {
             try {
                 last = clock.nanoTime();
                 start = last;
+                begun = last;
                 gc = clock.gcMillis();
             } catch (RuntimeException e) {
                 stop("its clock failed", e);
@@ -624,9 +652,18 @@ final class BuildTable {
             return Math.max(DEADLINE_NANOS, DEADLINE_NANOS / DEADLINE_CLASS_FILES * classFiles);
         }
 
-        /** begin says how many class files the send analyzes, for its deadline; not called, the deadline is 50 s. */
+        /**
+         * begin is called as the analysis begins, after the index's read: it says how many class files the send
+         * analyzes, for its deadline (not called, the deadline is 50 s), and reads the clock the rate is taken
+         * from, so the index's read does not count as the analysis's work.
+         */
         void begin(long classFiles) {
             total = Math.max(0, classFiles);
+            try {
+                begun = clock.nanoTime();
+            } catch (RuntimeException e) {
+                stop("its clock failed", e);
+            }
         }
 
         /** waitedNanos is how long the thread waited, in all. */
@@ -687,7 +724,7 @@ final class BuildTable {
             long elapsed = Math.max(0, now - start);
             double rest = 0;
             if (done > 0 && total > done) {
-                rest = (double) Math.max(0, elapsed - waited) / done * (total - done);
+                rest = (double) Math.max(0, now - begun - waited) / done * (total - done);
             }
             return (long) Math.max(-1.0, deadlineNanos(total) - elapsed - rest);
         }
