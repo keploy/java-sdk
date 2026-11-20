@@ -49,12 +49,22 @@ import org.objectweb.asm.Type;
  * (Tomcat's jar on the module path) is counted: the JVM makes a module whose
  * class an agent changed read the class path's classes. Netty, and so
  * WebFlux, is not counted: END then reads a test's hits as soon as it comes.
+ *
+ * <p>It makes each run of a scheduled job count in {@link JobGate} the same
+ * way: Quartz's {@code JobRunShell.run()} and Spring's
+ * {@code ScheduledMethodRunnable.run()} (each {@code @Scheduled} method)
+ * become methods that call {@link JobGate#enter(Object, String)}, then their
+ * own code, renamed {@code keploy$job$run}, then {@link JobGate#exit(Object)},
+ * so that a test whose window a job ran in says so. Those count whether or
+ * not END waits for requests.
  */
 final class ServerEntries implements ClassFileTransformer {
 
     private static final Logger LOGGER = Logger.getLogger(KeployDedupAgent.class.getName());
     private static final String GATE = Type.getInternalName(RequestGate.class);
+    private static final String JOB_GATE = Type.getInternalName(JobGate.class);
     static final String RENAMED = "keploy$request$";
+    static final String JOB_RENAMED = "keploy$job$";
 
     // The servers' request entries: the class, and the methods a request
     // runs in, the response finished when they return.
@@ -77,6 +87,12 @@ final class ServerEntries implements ClassFileTransformer {
         // Undertow: each dispatch of a request, on the IO thread and on the
         // worker that runs its servlet chain.
         add("Undertow", "io/undertow/server/Connectors", "executeRootHandler");
+        // Scheduled jobs, whose runs a test's window is checked for: each
+        // Quartz job (1.x and 2.x, and Spring's Quartz support) runs in a
+        // JobRunShell, and each Spring @Scheduled method in a
+        // ScheduledMethodRunnable, on the scheduler's threads.
+        addJob("Quartz", "org/quartz/core/JobRunShell", "quartz", "run");
+        addJob("Spring", "org/springframework/scheduling/support/ScheduledMethodRunnable", "scheduled", "run");
     }
 
     // Classes of servers that are not counted, so that the log can name them.
@@ -93,9 +109,24 @@ final class ServerEntries implements ClassFileTransformer {
     // The classes this changed as they loaded, by their loader: the ones it
     // changes again when another agent retransforms them.
     private final Map<ClassLoader, Set<String>> changed = new WeakHashMap<>();
+    // Whether servers' requests count (END waits for them); jobs' runs
+    // count either way.
+    private final boolean requests;
+
+    ServerEntries() {
+        this(true);
+    }
+
+    ServerEntries(boolean requests) {
+        this.requests = requests;
+    }
 
     private static void add(String server, String className, String... methods) {
-        ENTRIES.put(className, new Entry(server, new HashSet<>(Arrays.asList(methods))));
+        ENTRIES.put(className, new Entry(server, null, new HashSet<>(Arrays.asList(methods))));
+    }
+
+    private static void addJob(String scheduler, String className, String kind, String... methods) {
+        ENTRIES.put(className, new Entry(scheduler, kind, new HashSet<>(Arrays.asList(methods))));
     }
 
     // counted names the servers whose requests count, in the order their
@@ -129,6 +160,9 @@ final class ServerEntries implements ClassFileTransformer {
             }
             return null;
         }
+        if (entry.job == null && !requests) {
+            return null;
+        }
         String name = className.replace('/', '.');
         try {
             if (isInterface(classfileBuffer)) {
@@ -138,21 +172,22 @@ final class ServerEntries implements ClassFileTransformer {
                 return null;
             }
             if (!seesGate(loader)) {
-                LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.server + "'s requests: the"
-                        + " class loader of " + name + " does not see keploy-sdk.jar's classes, so a test's END"
-                        + " reads its hits without waiting for its requests to finish");
+                LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.what() + ": the class loader of "
+                        + name + " does not see keploy-sdk.jar's classes, so " + entry.lost());
                 return null;
             }
             // Bytes that already carry the change (another agent's copy of
             // the class as this changed it) count as they are.
             boolean carries = carriesChange(classfileBuffer);
-            byte[] wrapped = carries ? null : wrap(classfileBuffer, entry.methods);
+            byte[] wrapped = carries ? null : wrap(classfileBuffer, entry);
             if (!carries && wrapped == null) {
-                LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.server + "'s requests: "
-                        + name + " has no method " + entry.methods + " to count them in");
+                LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.what() + ": " + name
+                        + " has no method " + entry.methods + " to count them in");
                 return null;
             }
-            COUNTED.add(entry.server);
+            if (entry.job == null) {
+                COUNTED.add(entry.server);
+            }
             synchronized (changed) {
                 Set<String> names = changed.get(loader);
                 if (names == null) {
@@ -161,12 +196,11 @@ final class ServerEntries implements ClassFileTransformer {
                 }
                 names.add(className);
             }
-            LOGGER.log(Level.INFO, "Keploy dedup counts " + entry.server + "'s requests (" + name + "): a"
-                    + " test's END waits for them to finish");
+            LOGGER.log(Level.INFO, "Keploy dedup counts " + entry.what() + " (" + name + "): " + entry.effect());
             return wrapped;
         } catch (Throwable t) {
             // Never fail the server's class: it loads unchanged.
-            LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.server + "'s requests: " + name
+            LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.what() + ": " + name
                     + " could not be changed", t);
             return null;
         }
@@ -197,23 +231,24 @@ final class ServerEntries implements ClassFileTransformer {
             if (carriesChange(classfile)) {
                 return null;
             }
-            byte[] wrapped = wrap(classfile, entry.methods);
+            byte[] wrapped = wrap(classfile, entry);
             if (wrapped == null) {
-                LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.server + "'s requests in " + name
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.what() + " in " + name
                         + " as another agent changes it: it has no method " + entry.methods + " any more, so"
                         + " the JVM refuses that agent's change");
             }
             return wrapped;
         } catch (Throwable t) {
-            LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.server + "'s requests in " + name
+            LOGGER.log(Level.WARNING, "Keploy dedup cannot count " + entry.what() + " in " + name
                     + " as another agent changes it, so the JVM refuses that agent's change", t);
             return null;
         }
     }
 
     // seesGate says whether code of a class loader defines calls the
-    // RequestGate END reads: one it cannot see would fail each request, and
-    // a copy of its own would count where END never looks.
+    // RequestGate END reads (and so JobGate, of the same jar): one it cannot
+    // see would fail each request or job, and a copy of its own would count
+    // where END never looks.
     private static boolean seesGate(ClassLoader loader) {
         // The bootstrap loader (null) does not see it either.
         try {
@@ -235,7 +270,7 @@ final class ServerEntries implements ClassFileTransformer {
             @Override
             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                     String[] exceptions) {
-                if (name.startsWith(RENAMED)) {
+                if (name.startsWith(RENAMED) || name.startsWith(JOB_RENAMED)) {
                     carries[0] = true;
                 }
                 return null;
@@ -244,43 +279,80 @@ final class ServerEntries implements ClassFileTransformer {
         return carries[0];
     }
 
-    // wrap returns the class with each method of these names counted, or
-    // null when it has none to count (abstract and native methods only).
-    // transform passes over an interface before it.
+    // wrap returns the class with each method of these names counted as a
+    // server's request, or null when it has none to count (abstract and
+    // native methods only). transform passes over an interface before it.
     static byte[] wrap(byte[] classfile, Set<String> methods) {
+        return wrap(classfile, methods, null);
+    }
+
+    private static byte[] wrap(byte[] classfile, Entry entry) {
+        return wrap(classfile, entry.methods, entry.job);
+    }
+
+    // wrap with a job kind counts each method's run as a job's run of that
+    // kind (JobGate) instead.
+    static byte[] wrap(byte[] classfile, Set<String> methods, String job) {
         ClassReader reader = new ClassReader(classfile);
         ClassWriter writer = new ClassWriter(reader, 0);
-        Wrapper wrapper = new Wrapper(writer, methods);
+        Wrapper wrapper = new Wrapper(writer, methods, job);
         reader.accept(wrapper, 0);
         return wrapper.wrapped.isEmpty() ? null : writer.toByteArray();
     }
 
     private static final class Entry {
 
+        // The server or scheduler whose code it is, as the log names it.
         private final String server;
+        // The JobGate kind of a job's entry; null for a server's.
+        private final String job;
         private final Set<String> methods;
 
-        private Entry(String server, Set<String> methods) {
+        private Entry(String server, String job, Set<String> methods) {
             this.server = server;
+            this.job = job;
             this.methods = Collections.unmodifiableSet(methods);
+        }
+
+        // what is what this entry counts, as the log says it.
+        private String what() {
+            return server + (job == null ? "'s requests" : "'s job runs");
+        }
+
+        // effect is what counting them does.
+        private String effect() {
+            return job == null ? "a test's END waits for them to finish"
+                    : "a test whose window a run overlaps is marked contaminated in its record, and Keploy does"
+                    + " not judge it";
+        }
+
+        // lost is what is lost when they cannot be counted.
+        private String lost() {
+            return job == null ? "a test's END reads its hits without waiting for its requests to finish"
+                    : "a test a job runs in is not marked contaminated";
         }
     }
 
     // Wrapper renames each method to count and, at the class's end, adds
-    // the method that counts it under its old name and access.
+    // the method that counts it under its old name and access: in
+    // RequestGate, or with a job kind in JobGate.
     private static final class Wrapper extends ClassVisitor {
 
         private static final int NOT_COUNTED = Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_BRIDGE
                 | Opcodes.ACC_SYNTHETIC;
 
         private final Set<String> methods;
+        private final String job;
+        private final String renamedPrefix;
         private final List<Method> wrapped = new ArrayList<>();
         private String owner;
         private int version;
 
-        private Wrapper(ClassVisitor next, Set<String> methods) {
+        private Wrapper(ClassVisitor next, Set<String> methods, String job) {
             super(Opcodes.ASM9, next);
             this.methods = methods;
+            this.job = job;
+            this.renamedPrefix = job == null ? RENAMED : JOB_RENAMED;
         }
 
         @Override
@@ -300,7 +372,7 @@ final class ServerEntries implements ClassFileTransformer {
             wrapped.add(new Method(access, name, descriptor, signature, exceptions));
             int renamed = (access & ~(Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED)) | Opcodes.ACC_PRIVATE
                     | Opcodes.ACC_SYNTHETIC;
-            return super.visitMethod(renamed, RENAMED + name, descriptor, signature, exceptions);
+            return super.visitMethod(renamed, renamedPrefix + name, descriptor, signature, exceptions);
         }
 
         @Override
@@ -339,7 +411,19 @@ final class ServerEntries implements ClassFileTransformer {
             int token = slot;
             locals.add("java/lang/Object");
 
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "enter", "()Ljava/lang/Object;", false);
+            if (job == null) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "enter", "()Ljava/lang/Object;", false);
+            } else {
+                // The job's object (null for a static method) and its kind.
+                if (isStatic) {
+                    mv.visitInsn(Opcodes.ACONST_NULL);
+                } else {
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                }
+                mv.visitLdcInsn(job);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, JOB_GATE, "enter",
+                        "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;", false);
+            }
             mv.visitVarInsn(Opcodes.ASTORE, token);
             mv.visitLabel(start);
             slot = 0;
@@ -352,10 +436,10 @@ final class ServerEntries implements ClassFileTransformer {
                 slot += arg.getSize();
             }
             mv.visitMethodInsn(isStatic ? Opcodes.INVOKESTATIC : Opcodes.INVOKESPECIAL, owner,
-                    RENAMED + method.name, method.descriptor, false);
+                    renamedPrefix + method.name, method.descriptor, false);
             mv.visitLabel(end);
             mv.visitVarInsn(Opcodes.ALOAD, token);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exit", "(Ljava/lang/Object;)V", false);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, gate(), "exit", "(Ljava/lang/Object;)V", false);
             mv.visitInsn(returns.getOpcode(Opcodes.IRETURN));
 
             mv.visitLabel(thrown);
@@ -364,10 +448,15 @@ final class ServerEntries implements ClassFileTransformer {
                         new Object[] {"java/lang/Throwable"});
             }
             mv.visitVarInsn(Opcodes.ALOAD, token);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exit", "(Ljava/lang/Object;)V", false);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, gate(), "exit", "(Ljava/lang/Object;)V", false);
             mv.visitInsn(Opcodes.ATHROW);
             mv.visitMaxs(Math.max(Math.max(slot, returns.getSize() + 1), 2), token + 1);
             mv.visitEnd();
+        }
+
+        // gate is the class whose exit the counting method calls.
+        private String gate() {
+            return job == null ? GATE : JOB_GATE;
         }
 
         // frameType is how a stack map frame names a local of this type.

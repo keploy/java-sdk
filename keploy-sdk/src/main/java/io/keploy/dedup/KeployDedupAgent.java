@@ -84,7 +84,13 @@ public final class KeployDedupAgent {
 
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
             boolean windowCut) {
-        return GSON.toJson(new DedupPayload(id, new TestCoverage(probesByClass, classMismatch, windowCut)));
+        return toDedupJson(id, probesByClass, classMismatch, windowCut, Collections.<String>emptyList());
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
+            boolean windowCut, List<String> contaminated) {
+        return GSON.toJson(new DedupPayload(id,
+                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated)));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -291,6 +297,12 @@ public final class KeployDedupAgent {
             // and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
             countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco));
+        } else {
+            // Attached to a running JVM, or started from the app's code:
+            // ServerEntries cannot change a class, so no job run is seen.
+            log(Level.INFO, "Keploy dedup does not see the app's scheduled jobs' runs: keploy-sdk.jar was not"
+                    + " started as a -javaagent, so a test a Quartz job or a Spring @Scheduled method ran in is"
+                    + " not marked contaminated in its record", null);
         }
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
@@ -302,7 +314,9 @@ public final class KeployDedupAgent {
 
     // countRequests makes the requests of the app's server count in
     // RequestGate (ServerEntries), so that a test's END waits for them to
-    // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0. From premain, before the
+    // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0, and the runs of its
+    // scheduled jobs count in JobGate, so that a test a job ran in is marked
+    // contaminated, whatever the wait. From premain, before the
     // app's main loads its server, and after startJacoco. ServerEntries can
     // retransform when keploy-sdk.jar's manifest lets it (Can-Retransform-
     // Classes), so the JVM runs it after JaCoCo's transformer even when a
@@ -312,22 +326,21 @@ public final class KeployDedupAgent {
     // the index holds it, and the log says so when the JVM has a JaCoCo
     // agent of its own (jacocoAttached).
     private static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
-        if (endWaitMillis() == 0) {
-            return;
-        }
+        boolean requests = endWaitMillis() != 0;
         try {
             boolean retransformable = instrumentation.isRetransformClassesSupported();
             if (!retransformable && jacocoAttached) {
                 log(Level.WARNING, "Keploy dedup: the jar keploy-sdk.jar runs from has no Can-Retransform-Classes:"
                         + " true in its manifest, or this JVM cannot retransform, so a JaCoCo agent attached after"
-                        + " it instruments the server classes it changes, and each test's classMismatch names them"
-                        + " when Keploy measures them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
+                        + " it instruments the " + (requests ? "server and scheduler" : "scheduler")
+                        + " classes it changes, and each test's classMismatch names them when Keploy measures"
+                        + " them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
                         null);
             }
-            instrumentation.addTransformer(new ServerEntries(), retransformable);
+            instrumentation.addTransformer(new ServerEntries(requests), retransformable);
         } catch (RuntimeException e) {
-            log(Level.WARNING, "Keploy dedup does not count the app's requests: their server could not be"
-                    + " changed to count them", e);
+            log(Level.WARNING, "Keploy dedup does not count the app's requests or see its scheduled jobs' runs:"
+                    + " their classes could not be changed to count them", e);
         }
     }
 
@@ -909,10 +922,9 @@ public final class KeployDedupAgent {
 
             try {
                 boolean cut = !collector.awaitRequests(command.testId, phases);
-                TestCoverage coverage = collector.capture(phases);
-                if (cut) {
-                    coverage = coverage.cut();
-                }
+                // The job window closes once the hits are read: a job that
+                // started while they were read may be in them.
+                TestCoverage coverage = collector.capture(phases).ended(cut, JobGate.close());
                 if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
@@ -1137,10 +1149,7 @@ public final class KeployDedupAgent {
                     TestCoverage coverage;
                     try {
                         boolean cut = !collector.awaitRequests(command.testId, phases);
-                        coverage = collector.capture(phases);
-                        if (cut) {
-                            coverage = coverage.cut();
-                        }
+                        coverage = collector.capture(phases).ended(cut, JobGate.close());
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
@@ -1342,6 +1351,10 @@ public final class KeployDedupAgent {
         // hits. Without it, or when the pass fails (in any way: a START only
         // has to clear), JaCoCo resets every class, and cleared stays empty.
         private boolean begin(Phases phases, List<ProbeScan.Hit> cleared) {
+            // A job running now, or that starts before END reads the hits,
+            // runs in this test's window: opened before the clear, as what
+            // a job ran before is cleared only once it has ended.
+            JobGate.open();
             // This test's requests come in from now on; END waits for them
             // alone.
             RequestGate.open();
@@ -2542,6 +2555,12 @@ public final class KeployDedupAgent {
     // probes are not those of the indexed class. Left out when there is
     // none, so that the record is the same as before for every other test.
     // Receivers that do not know the key ignore it.
+    //
+    // contaminated names the scheduled jobs whose runs overlapped the
+    // test's window (JobGate): "quartz:<group>.<name>" or
+    // "scheduled:<class>.<method>", at most 8, then "+N" for N more. Their
+    // hits are in executedLinesByFile with the test's own. Left out when
+    // none ran in it, as classMismatch.
     private static final class DedupPayload {
 
         private final String id;
@@ -2549,19 +2568,21 @@ public final class KeployDedupAgent {
         private final Map<String, List<Integer>> executedLinesByFile;
         private final List<String> classMismatch;
         private final Boolean windowCut;
+        private final List<String> contaminated;
 
         private DedupPayload(String id, TestCoverage coverage) {
             this.id = id;
             this.executedLinesByFile = coverage.probesByClass;
             this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
             this.windowCut = coverage.windowCut ? Boolean.TRUE : null;
+            this.contaminated = coverage.contaminated.isEmpty() ? null : coverage.contaminated;
         }
     }
 
     // TestCoverage is a test's coverage as its END read it: the probes hit
     // by class, the classes among them that are not the class the index
-    // read, and whether the END was cut (its requests still ran at the end
-    // of its wait).
+    // read, whether the END was cut (its requests still ran at the end of
+    // its wait), and the scheduled jobs that ran in its window.
     private static final class TestCoverage {
 
         static final TestCoverage NONE = new TestCoverage(Collections.<String, List<Integer>>emptyMap(),
@@ -2570,20 +2591,25 @@ public final class KeployDedupAgent {
         final Map<String, List<Integer>> probesByClass;
         final List<String> classMismatch;
         final boolean windowCut;
+        final List<String> contaminated;
 
         TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
-            this(probesByClass, classMismatch, false);
+            this(probesByClass, classMismatch, false, Collections.<String>emptyList());
         }
 
-        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut) {
+        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut,
+                List<String> contaminated) {
             this.probesByClass = probesByClass;
             this.classMismatch = classMismatch;
             this.windowCut = windowCut;
+            this.contaminated = contaminated;
         }
 
-        // cut is this coverage, read at the end of a wait its requests outran.
-        TestCoverage cut() {
-            return new TestCoverage(probesByClass, classMismatch, true);
+        // ended is this coverage as its END sends it: cut when it was read
+        // at the end of a wait its requests outran, and with the jobs that
+        // ran in its window.
+        TestCoverage ended(boolean cut, List<String> jobs) {
+            return new TestCoverage(probesByClass, classMismatch, cut, jobs);
         }
     }
 

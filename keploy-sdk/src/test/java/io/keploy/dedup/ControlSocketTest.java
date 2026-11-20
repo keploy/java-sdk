@@ -69,11 +69,16 @@ public class ControlSocketTest {
     // What the agent logged at SEVERE during the test: the first 20 of them,
     // so that a server looping on a closed socket fails a row, not the JVM.
     private final List<String> severe = new CopyOnWriteArrayList<>();
+    // And the first 200 messages it logged at INFO or above.
+    private final List<String> logged = new CopyOnWriteArrayList<>();
     private final Handler severeLog = new Handler() {
         @Override
         public void publish(LogRecord record) {
             if (record.getLevel().intValue() >= Level.SEVERE.intValue() && severe.size() < 20) {
                 severe.add(record.getMessage());
+            }
+            if (record.getLevel().intValue() >= Level.INFO.intValue() && logged.size() < 200) {
+                logged.add(record.getMessage());
             }
         }
 
@@ -189,6 +194,41 @@ public class ControlSocketTest {
         String payload = data.next();
         assertNotNull("the END's coverage reached the data socket", payload);
         assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+    }
+
+    @Test
+    public void aJobRunningInATestsWindowIsNamedInItsRecordAndOneBetweenTestsIsNot() throws Exception {
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        // Running when the START opens the window, done before its END.
+        Object running = JobGate.enter(new Object(), "quartz");
+        try {
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+        } finally {
+            JobGate.exit(running);
+        }
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"quartz:java.lang.Object\"]}"));
+
+        // A run between two tests is in neither.
+        JobGate.exit(JobGate.enter(new Object(), "scheduled"));
+        assertEquals(TAKEN, send("START test-set-0/test-2"));
+        assertEquals(TAKEN, send("END test-set-0/test-2"));
+        payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-2\""));
+        assertFalse(payload, payload.contains("contaminated"));
+    }
+
+    @Test(timeout = 60000)
+    public void startedWithNoInstrumentationItSaysNoJobRunIsSeen() throws Exception {
+        startWithJacoco();
+        assertTrue(logged.toString(), logged.contains("Keploy dedup does not see the app's scheduled jobs' runs:"
+                + " keploy-sdk.jar was not started as a -javaagent, so a test a Quartz job or a Spring @Scheduled"
+                + " method ran in is not marked contaminated in its record"));
     }
 
     @Test(timeout = 60000)
