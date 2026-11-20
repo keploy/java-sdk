@@ -108,7 +108,7 @@ final class BuildTable {
      * The table's format, F of the build id (IndexReport.buildId): the contract's section 3.3 records as this
      * class writes them and the probe map of leaf ranges, with every bound that decides what a class's records
      * are ({@link #MAX_RECORD_BYTES}, {@link #MAX_MAP_BYTES}, {@link #MAX_MAP_STEPS}, how
-     * KeployBranchCoverage.Hits counts its steps, and the reason a unit past one is not measured). Raise it in
+     * KeployBranchCoverage.Hits counts its steps, and the reason a unit past each is not measured). Raise it in
      * any release where the table or probe-map records written for the same class bytes can change, so they
      * name another build. The KTB1 frames that carry the records are not in it: their header's "v" names them.
      */
@@ -117,12 +117,18 @@ final class BuildTable {
     static final int MAX_FRAME_BYTES = 1 << 20;
     /** A record (with its newline) larger than a whole inflated chunk can never be sent: record_too_large. */
     static final int MAX_RECORD_BYTES = 8 << 20;
-    /** The reason a unit's record is sent without its methods when it, or its probe map, is past a bound. */
+    /** The reason a unit's record is sent without its methods when the record is past MAX_RECORD_BYTES. */
     static final String RECORD_TOO_LARGE = "record_too_large";
+    /**
+     * The reason a unit's record is sent without its methods when its probe map is past MAX_MAP_BYTES or
+     * MAX_MAP_STEPS (the contract's section 2.4): no test's leaves can be named in it, so Keploy shows it as
+     * too complex to map, not as missed.
+     */
+    static final String UNIT_TOO_COMPLEX = "unit_too_complex";
     /**
      * The most a unit's probe map may take: its records' bytes, newlines included (a table record's bound),
      * and the steps its probes' walks take (KeployBranchCoverage.Hits#steps, about a second of CPU). A unit
-     * past either is sent not_measured record_too_large with no probe record, and its map is given up as
+     * past either is sent not_measured unit_too_complex with no probe record, and its map is given up as
      * soon as it is past one, so neither the heap nor the time it takes grows with it: a method of n early
      * returns maps to about n * n ranges (its probe k covers the k checks before it), 4.4 MB at 1,000 and
      * 43 MB at 3,000. The bound is on the text; what a unit's map holds live until its records are made is
@@ -537,8 +543,13 @@ final class BuildTable {
             }
             if (s.tooLarge > 0) {
                 m.append(", ").append(s.tooLarge).append(" not measured as too large (").append(RECORD_TOO_LARGE)
-                        .append(": a record over ").append(MAX_RECORD_BYTES >> 20).append(" MiB, or a probe map over ")
-                        .append(MAX_MAP_BYTES >> 20).append(" MiB or ").append(MAX_MAP_STEPS >> 20)
+                        .append(": a record over ").append(MAX_RECORD_BYTES >> 20)
+                        .append(" MiB; the FINE log names each)");
+            }
+            if (s.tooComplex > 0) {
+                m.append(", ").append(s.tooComplex).append(" not measured as too complex to map (")
+                        .append(UNIT_TOO_COMPLEX).append(": a probe map over ").append(MAX_MAP_BYTES >> 20)
+                        .append(" MiB or ").append(MAX_MAP_STEPS >> 20)
                         .append(" Mi steps; the FINE log names each)");
             }
             if (s.noLines > 0) {
@@ -940,13 +951,15 @@ final class BuildTable {
         final int unnamed;
         /** How many of the not measured records JaCoCo analyzed but whose probes could not be mapped. */
         final int notMapped;
-        /** How many of the not measured records are record_too_large: the record or its probe map too large. */
+        /** How many of the not measured records are record_too_large: the table record too large. */
         final int tooLarge;
+        /** How many of the not measured records are unit_too_complex: the probe map past its bound. */
+        final int tooComplex;
         /** How many probe-map records went to the probes sink: one per class name of each measured unit. */
         final int probeRecords;
 
         Summary(String build, int records, int notMeasured, int noLines, int unnamed, int notMapped, int tooLarge,
-                int probeRecords) {
+                int tooComplex, int probeRecords) {
             this.build = build;
             this.records = records;
             this.notMeasured = notMeasured;
@@ -954,6 +967,7 @@ final class BuildTable {
             this.unnamed = unnamed;
             this.notMapped = notMapped;
             this.tooLarge = tooLarge;
+            this.tooComplex = tooComplex;
             this.probeRecords = probeRecords;
         }
     }
@@ -1000,7 +1014,7 @@ final class BuildTable {
             long maxSteps, Pacer pacer) throws IOException {
         Grouped g = group(classes);
         if (g.build.isEmpty()) {
-            return new Summary("", 0, 0, 0, g.unnamed, 0, 0, 0);
+            return new Summary("", 0, 0, 0, g.unnamed, 0, 0, 0, 0);
         }
         String build = g.build;
         List<Unit> units = g.units;
@@ -1008,6 +1022,7 @@ final class BuildTable {
         int noLines = 0;
         int notMapped = 0;
         int tooLarge = 0;
+        int tooComplex = 0;
         int probeRecords = 0;
         long classFiles = 0;
         for (Unit u : units) {
@@ -1031,6 +1046,9 @@ final class BuildTable {
                 if (u.tooLarge) {
                     tooLarge++;
                 }
+                if (u.tooComplex) {
+                    tooComplex++;
+                }
             } else {
                 noLines += u.noLines;
                 for (byte[] p : u.probes) {
@@ -1042,7 +1060,7 @@ final class BuildTable {
             pacer.unitDone(u.files.size());
         }
         return new Summary(build, units.size(), notMeasured, noLines, g.unnamed, notMapped, tooLarge,
-                probeRecords);
+                tooComplex, probeRecords);
     }
 
     /** What group makes of the index's classes: the build id ("" with none), the units in table order. */
@@ -1175,8 +1193,10 @@ final class BuildTable {
         boolean failed;
         // Set when JaCoCo analyzed the unit but its probes could not be mapped (so failed is set too).
         boolean notMapped;
-        // Set when the unit's record or its probe map is past its bound: record_too_large (failed is set too).
+        // Set when the unit's record is past its bound: record_too_large (failed is set too).
         boolean tooLarge;
+        // Set when the unit's probe map is past its bound: unit_too_complex (failed is set too).
+        boolean tooComplex;
         // Class files with code but no line numbers: their methods have no leaf, so they are left out.
         int noLines;
         // The probe map's records for the unit's class files, in file order; set when record() succeeds.
@@ -1258,9 +1278,9 @@ final class BuildTable {
         /**
          * record analyzes each of the unit's class files once, all of them first, in name order, then makes
          * the unit's records. The first analysis that fails decides: analyzer_failed when JaCoCo refuses the
-         * class file or its probes cannot be mapped, record_too_large when its probe map is past the budget.
+         * class file or its probes cannot be mapped, unit_too_complex when its probe map is past the budget.
          * Only then are the probe-map records made and each charged in place of its text: a record past the
-         * budget makes the unit record_too_large, and a second class file of one name that maps its probes
+         * budget makes the unit unit_too_complex, and a second class file of one name that maps its probes
          * otherwise makes it analyzer_failed. A unit with two failures of different kinds gets the first one's
          * reason in that order; either way it is not measured and has no probe record.
          */
@@ -1286,12 +1306,12 @@ final class BuildTable {
                     ranges.add(r);
                     lastName = f.file.name;
                 }
-            } catch (TooLarge e) {
+            } catch (TooComplex e) {
                 log(Level.FINE, "Keploy coverage: the probe map of " + path() + " is past its bound: " + e.getMessage(),
                         null);
                 failed = true;
-                tooLarge = true;
-                return notMeasured(RECORD_TOO_LARGE);
+                tooComplex = true;
+                return notMeasured(UNIT_TOO_COMPLEX);
             } catch (KeployBranchCoverage.NotMapped e) {
                 // A class whose probes cannot be mapped exactly is not measured: its hits could not be read.
                 log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
@@ -1339,12 +1359,12 @@ final class BuildTable {
                     lastName = f.file.name;
                     last = p;
                 }
-            } catch (TooLarge e) {
+            } catch (TooComplex e) {
                 log(Level.FINE, "Keploy coverage: the probe map of " + path() + " is past its bound: " + e.getMessage(),
                         null);
                 failed = true;
-                tooLarge = true;
-                return notMeasured(RECORD_TOO_LARGE);
+                tooComplex = true;
+                return notMeasured(UNIT_TOO_COMPLEX);
             } catch (Exception | LinkageError e) {
                 log(Level.FINE, "Keploy coverage: the probes of " + path() + " could not be mapped", e);
                 failed = true;
@@ -1616,7 +1636,7 @@ final class BuildTable {
      * off that analysis (KeployBranchCoverage walks back from the probe over the edges JaCoCo's builder wired),
      * so the map costs the class's probes' walks and their ranges, with no object per probe. The
      * walks and the text are quadratic in a chain of early returns, so a unit's map has a budget
-     * ({@link MapBudget}): past it the unit is record_too_large.
+     * ({@link MapBudget}): past it the unit is unit_too_complex.
      */
     static final class ProbeMap {
         private ProbeMap() {
@@ -1685,7 +1705,7 @@ final class BuildTable {
          * of its method's leaf indices, ascending, no two ranges touching; its record adds the method's base
          * once the unit's methods are ordered ({@link Ranges#json}). It throws NotMapped when the class's lines
          * or branches differ from the unit's methods (the same name under two roots), when a method with lines
-         * is in one and not in the other, or when a method's flow is not one KeployBranchCoverage maps; TooLarge
+         * is in one and not in the other, or when a method's flow is not one KeployBranchCoverage maps; TooComplex
          * as soon as the unit's map is past its budget's bytes or steps; and what JaCoCo throws for a class it
          * does not read.
          */
@@ -1774,11 +1794,11 @@ final class BuildTable {
         }
 
         /**
-         * notMapped is e as a map that failed: TooLarge and NotMapped as they are, a check that failed as
+         * notMapped is e as a map that failed: TooComplex and NotMapped as they are, a check that failed as
          * NotMapped.
          */
         private static RuntimeException notMapped(RuntimeException e) {
-            if (e instanceof TooLarge || e instanceof KeployBranchCoverage.NotMapped) {
+            if (e instanceof TooComplex || e instanceof KeployBranchCoverage.NotMapped) {
                 return e;
             }
             return new KeployBranchCoverage.NotMapped(String.valueOf(e.getMessage()), e);
@@ -1786,13 +1806,13 @@ final class BuildTable {
     }
 
     /**
-     * TooLarge ends a unit's probe map that is past its budget (MapBudget): the unit is sent not_measured
-     * record_too_large. It carries no stack trace: it is an answer, not a bug.
+     * TooComplex ends a unit's probe map that is past its budget (MapBudget): the unit is sent not_measured
+     * unit_too_complex. It carries no stack trace: it is an answer, not a bug.
      */
-    static final class TooLarge extends RuntimeException {
+    static final class TooComplex extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
-        TooLarge(String message) {
+        TooComplex(String message) {
             super(message, null, false, false);
         }
     }
@@ -1800,7 +1820,7 @@ final class BuildTable {
     /**
      * MapBudget is what one unit's probe map may still take: bytes (its records', newlines included; its
      * ranges' text counts as it is written, since a record holds it) and walk steps. Past either it throws
-     * TooLarge, so a map is given up as soon as it is past, not once it is made.
+     * TooComplex, so a map is given up as soon as it is past, not once it is made.
      */
     static final class MapBudget {
         private final long maxBytes;
@@ -1818,7 +1838,7 @@ final class BuildTable {
         void step(int n) {
             steps += n;
             if (steps > maxSteps) {
-                throw new TooLarge("its probes' walks take more than " + maxSteps + " steps");
+                throw new TooComplex("its probes' walks take more than " + maxSteps + " steps");
             }
         }
 
@@ -1829,7 +1849,7 @@ final class BuildTable {
         void grew(int n) {
             text += n;
             if (bytes + text > maxBytes) {
-                throw new TooLarge("its probe map is more than " + maxBytes + " bytes");
+                throw new TooComplex("its probe map is more than " + maxBytes + " bytes");
             }
         }
 
@@ -1843,7 +1863,7 @@ final class BuildTable {
             text -= counted;
             bytes += n;
             if (bytes + text > maxBytes) {
-                throw new TooLarge("its probe records are more than " + maxBytes + " bytes");
+                throw new TooComplex("its probe records are more than " + maxBytes + " bytes");
             }
         }
     }

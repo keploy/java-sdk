@@ -95,9 +95,9 @@ public final class KeployBranchCoverage {
 
     /**
      * NotMapped is a class file whose probes cannot be mapped exactly from this pass: a method's flow has a
-     * shape the walk does not map, its per-instruction coverage differs from JaCoCo's per-line sums, or a
-     * check of the caller's fails. The caller marks the class not measured; it is not JaCoCo failing to read
-     * the class.
+     * shape the walk does not map, its per-instruction coverage differs from JaCoCo's per-line sums, a check
+     * of the caller's fails, or Keploy's own steps of the pass fail (a bug of Keploy's, here as NotMapped with
+     * its cause). The caller marks the class not measured; it is not JaCoCo failing to read the class.
      */
     public static final class NotMapped extends IllegalStateException {
         private static final long serialVersionUID = 1L;
@@ -108,6 +108,17 @@ public final class KeployBranchCoverage {
 
         public NotMapped(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    /** Callers carries what a callback of EachProbe threw out of Keploy's steps, so it passes as it is. */
+    private static final class Callers extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        final RuntimeException thrown;
+
+        Callers(RuntimeException thrown) {
+            super(null, null, false, false);
+            this.thrown = thrown;
         }
     }
 
@@ -180,7 +191,9 @@ public final class KeployBranchCoverage {
      * probe on each of those edges), and quadratic in a chain of early returns, where each probe walks back
      * over every check before it. A method whose
      * flow does not have that shape (an instruction two edges without a probe reach, a replacement that reads
-     * another replaced instruction) throws.
+     * another replaced instruction) throws. What setting a method's counted instructions and the probe walk
+     * throw is NotMapped; JaCoCo's steps (its instruction graph, filters and coverage calculator, with the hooks
+     * Keploy's builder and filter output run inside them) and each's callbacks throw as they do.
      */
     public static int analyze(byte[] bytes, Map<String, Method> out, EachProbe each) {
         return analyze(bytes, null, out, each);
@@ -233,15 +246,46 @@ public final class KeployBranchCoverage {
         }
 
         private void collect(Method m, Builder builder, MethodNode node, String signature) {
+            // JaCoCo's steps, as ClassAnalyzer takes them: the filters, then the coverage calculator.
             Output output = new Output();
             filter.filter(node, this, output);
-            if (!fill(m, builder, node, signature, output)) {
+            MethodCoverageCalculator calculator = new MethodCoverageCalculator(builder.getInstructions());
+            output.applyTo(calculator);
+            MethodCoverageImpl coverage = new MethodCoverageImpl(m.name, m.desc, signature);
+            calculator.calculate(coverage);
+            if (!coverage.containsCode()) {
                 return;
             }
-            out.put(m.name + m.desc, m);
-            if (each != null && each.wants(m)) {
-                map(m, builder, node, output);
+            // Keploy's steps, under one wrap: what fails in them is NotMapped, so a bug of Keploy's is not
+            // blamed on JaCoCo. What each's callbacks throw is carried out in a Callers and passes as it is.
+            try {
+                fill(m, builder, node, output, coverage);
+                out.put(m.name + m.desc, m);
+                if (each != null && wants(m)) {
+                    map(m, builder, node, output);
+                }
+            } catch (Callers e) {
+                throw e.thrown;
+            } catch (RuntimeException e) {
+                throw keploys(m, e);
             }
+        }
+
+        /** wants is each.wants(m), with what it throws carried out in a Callers. */
+        private boolean wants(Method m) {
+            try {
+                return each.wants(m);
+            } catch (RuntimeException e) {
+                throw new Callers(e);
+            }
+        }
+
+        /** keploys is e, thrown by Keploy's own steps for m, as NotMapped naming the class and method. */
+        private NotMapped keploys(Method m, RuntimeException e) {
+            if (e instanceof NotMapped) {
+                return (NotMapped) e;
+            }
+            return new NotMapped(getClassName() + "#" + m.name + m.desc + ": " + e, e);
         }
 
         /**
@@ -389,7 +433,11 @@ public final class KeployBranchCoverage {
                     }
                 }
                 hits.steps = w + fed;
-                each.probe(m, r, hits);
+                try {
+                    each.probe(m, r, hits);
+                } catch (RuntimeException e) {
+                    throw new Callers(e);
+                }
                 hits.clear();
             }
         }
@@ -451,17 +499,11 @@ public final class KeployBranchCoverage {
 
         /**
          * fill sets m's counted instructions from builder's graph and the filters' output, as ClassAnalyzer
-         * computes a method's coverage. It returns false for a method without code.
+         * computes a method's coverage, and checks them against coverage, the method's coverage JaCoCo
+         * computed from them (it has code).
          */
-        private boolean fill(Method m, Builder builder, MethodNode node, String signature, Output output) {
+        private void fill(Method m, Builder builder, MethodNode node, Output output, MethodCoverageImpl coverage) {
             Map<AbstractInsnNode, Instruction> instructions = builder.getInstructions();
-            MethodCoverageCalculator calculator = new MethodCoverageCalculator(instructions);
-            output.applyTo(calculator);
-            MethodCoverageImpl coverage = new MethodCoverageImpl(m.name, m.desc, signature);
-            calculator.calculate(coverage);
-            if (!coverage.containsCode()) {
-                return false;
-            }
             int[] p = new int[m.probeCount];
             System.arraycopy(m.probes, 0, p, 0, m.probeCount);
             m.probes = p;
@@ -532,7 +574,6 @@ public final class KeployBranchCoverage {
             m.covered = Arrays.copyOf(covered, c);
             m.branches = Arrays.copyOf(branches, c);
             m.coverage = coverage;
-            return true;
         }
 
         private static boolean same(ICounter c, int total, int covered) {
