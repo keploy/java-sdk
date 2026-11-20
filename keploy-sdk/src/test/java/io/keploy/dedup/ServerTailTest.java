@@ -26,9 +26,11 @@ import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import org.example.servers.HelloServlet;
+import org.example.servers.Retransformer;
 import org.example.servers.ServerApp;
 import org.example.servers.Tail;
 import org.example.servers.TailFilter;
+import org.jacoco.agent.AgentJar;
 import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
@@ -45,13 +47,14 @@ import org.junit.rules.TemporaryFolder;
 public class ServerTailTest {
 
     private static final String TAIL = Tail.class.getName().replace('.', '/');
+    private static final String ADAPTER = "org.apache.catalina.connector.CoyoteAdapter";
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
     @Test
     public void tomcatsEndWaitsForTheFiltersCodeAfterTheResponse() throws Exception {
-        Result result = run("tomcat", "10000", 1500);
+        Result result = run("tomcat", "2000", 500);
         assertTrue(result.log, endLine(result.log).contains(" requests="));
         assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
         assertFalse(result.cov, result.cov.contains("windowCut"));
@@ -62,7 +65,7 @@ public class ServerTailTest {
 
     @Test
     public void jettysEndWaitsForTheFiltersCodeAfterTheResponse() throws Exception {
-        Result result = run("jetty", "10000", 1500);
+        Result result = run("jetty", "2000", 500);
         assertTrue(result.log, endLine(result.log).contains(" requests="));
         assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
         assertFalse(result.cov, result.cov.contains("windowCut"));
@@ -72,7 +75,7 @@ public class ServerTailTest {
 
     @Test
     public void undertowsEndWaitsForTheFiltersCodeAfterTheResponse() throws Exception {
-        Result result = run("undertow", "10000", 1500);
+        Result result = run("undertow", "2000", 500);
         assertTrue(result.log, endLine(result.log).contains(" requests="));
         assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
         assertFalse(result.cov, result.cov.contains("windowCut"));
@@ -88,7 +91,7 @@ public class ServerTailTest {
         // that read when an agent changes a class of a named module.
         Assume.assumeFalse("modules are Java 9's", System.getProperty("java.specification.version")
                 .startsWith("1."));
-        Fork fork = new Fork("tomcat", "10000", 1500);
+        Fork fork = new Fork("tomcat", "2000", 500);
         fork.modules = true;
         Result result = run(fork);
         assertTrue(result.log, result.log.contains("MODULE module org.apache.tomcat.embed.core"));
@@ -106,7 +109,7 @@ public class ServerTailTest {
         // embedded JaCoCo instruments CoyoteAdapter too: it must see the
         // class's own bytes, the ones the index ids, not the counted ones,
         // or every test's record names it in classMismatch.
-        Fork fork = new Fork("tomcat", "10000", 1500);
+        Fork fork = new Fork("tomcat", "2000", 500);
         fork.indexTomcat = true;
         Result result = run(fork);
         assertTrue(result.cov, result.cov.contains("\"org/apache/catalina/connector/CoyoteAdapter\":["));
@@ -136,6 +139,110 @@ public class ServerTailTest {
     }
 
     @Test
+    public void jacocoAttachedBeforeTheSdkMeasuresTheServersOwnClass() throws Exception {
+        assertJacocoMeasuresTheServersOwnClass(jacocoAttached("first", true));
+    }
+
+    @Test
+    public void jacocoAttachedAfterTheSdkMeasuresTheServersOwnClass() throws Exception {
+        // The SDK's transformer can retransform, so the JVM runs it after
+        // JaCoCo's, which cannot, whatever the -javaagent order: JaCoCo ids
+        // the server's own class, as the index does.
+        assertJacocoMeasuresTheServersOwnClass(jacocoAttached("last", true));
+    }
+
+    @Test
+    public void theSdkInJavaToolOptionsWithJacocoOnTheCommandLine() throws Exception {
+        // JAVA_TOOL_OPTIONS' agents start before the command line's.
+        assertJacocoMeasuresTheServersOwnClass(jacocoAttached("tool", true));
+    }
+
+    @Test
+    public void aJarThatCannotRetransformStillCountsTheRequests() throws Exception {
+        // A jar that carries the SDK without Can-Retransform-Classes: the
+        // requests count, the SDK's transformer runs in the order it was
+        // added, and the WARNING says what that costs.
+        Result result = jacocoAttached("last", false);
+        assertTrue(result.log, endLine(result.log).contains(" requests="));
+        assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
+        assertTrue(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
+        assertTrue(result.log, result.log.contains("WARNING: Keploy dedup: the jar keploy-sdk.jar runs from has no"
+                + " Can-Retransform-Classes: true in its manifest, or this JVM cannot retransform, so a JaCoCo agent"
+                + " attached after it instruments the server classes it changes"));
+    }
+
+    @Test
+    public void aJarThatCannotRetransformWithTheSdksOwnJacocoSaysNothing() throws Exception {
+        // The SDK's own JaCoCo is added before its transformer, so it ids
+        // the server's own class in any case: nothing to warn of.
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.indexTomcat = true;
+        fork.retransformable = false;
+        Result result = run(fork);
+        assertTrue(result.log, endLine(result.log).contains(" requests="));
+        assertTrue(result.cov, result.cov.contains("\"org/apache/catalina/connector/CoyoteAdapter\":["));
+        assertFalse(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
+        assertFalse(result.log, result.log.contains("Can-Retransform-Classes"));
+    }
+
+    @Test
+    public void anotherAgentsRetransformKeepsTheServerCounted() throws Exception {
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.retransformer = "";
+        Result result = run(fork);
+        assertTrue(result.log, result.log.contains("RETRANSFORMED " + ADAPTER + " seen=1"));
+        assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
+        assertTrue(result.log, endLine(result.log).contains(" requests="));
+    }
+
+    @Test
+    public void aRedefineWithTheClassAsTheSdkChangedItKeepsTheServerCounted() throws Exception {
+        // A hot-swap tool redefines CoyoteAdapter with its dump of the class
+        // as the SDK changed it: changed again, it would declare the renamed
+        // method twice, and the JVM would refuse it.
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.retransformer = "redefine";
+        Result result = run(fork);
+        assertTrue(result.log, result.log.contains("REDEFINED " + ADAPTER));
+        assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
+        assertTrue(result.log, endLine(result.log).contains(" requests="));
+    }
+
+    @Test
+    public void aServerLoadedBeforeTheSdkIsLeftAsItIsWhenRetransformed() throws Exception {
+        // The JVM refuses a method added to a loaded class: had the SDK
+        // changed it on another agent's retransform, that would fail.
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.retransformer = "load";
+        Result result = run(fork);
+        assertTrue(result.log, result.log.contains("RETRANSFORMED " + ADAPTER + " seen=1"));
+        assertFalse(result.log, endLine(result.log).contains(" requests="));
+        assertTrue(result.log, result.log.contains("no Tomcat, Jetty or Undertow request entry loaded after"
+                + " keploy-sdk.jar started"));
+    }
+
+    // jacocoAttached runs a test on Tomcat with JaCoCo's own agent attached
+    // in that order (first or last on the command line, or last with the SDK
+    // in JAVA_TOOL_OPTIONS), measuring the app and CoyoteAdapter, which the
+    // index holds too.
+    private Result jacocoAttached(String order, boolean retransformable) throws Exception {
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.indexTomcat = true;
+        fork.jacoco = order;
+        fork.retransformable = retransformable;
+        return run(fork);
+    }
+
+    private static void assertJacocoMeasuresTheServersOwnClass(Result result) {
+        assertTrue(result.log, result.log.contains("this JVM has a JaCoCo agent attached"));
+        assertTrue(result.cov, result.cov.contains("\"org/apache/catalina/connector/CoyoteAdapter\":["));
+        assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
+        assertFalse(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
+        assertTrue(result.log, endLine(result.log).contains(" requests="));
+        assertFalse(result.log, result.log.contains("Can-Retransform-Classes"));
+    }
+
+    @Test
     public void aTailPastTheWaitCutsTheEnd() throws Exception {
         Result result = run("tomcat", "100", 5000);
         assertFalse(result.cov, result.cov.contains("\"" + TAIL + "\""));
@@ -153,7 +260,12 @@ public class ServerTailTest {
     // wait at endWait, tests tests whose request's filter runs tailMillis
     // after the response; with modules, Tomcat's jars are on the module
     // path instead of the class path; with indexTomcat, the index (and so
-    // the embedded JaCoCo) holds Tomcat's classes as well as the app's.
+    // the embedded JaCoCo) holds Tomcat's classes as well as the app's;
+    // jacoco attaches JaCoCo's own agent (first, last, or last with the SDK
+    // in JAVA_TOOL_OPTIONS); retransformer, when not null, attaches
+    // Retransformer with it as its args ("load": before the SDK; "" and
+    // "redefine": after it); without retransformable, the SDK's jar has no
+    // Can-Retransform-Classes.
     private static final class Fork {
         final String server;
         final String endWait;
@@ -161,6 +273,9 @@ public class ServerTailTest {
         int tests = 1;
         boolean modules;
         boolean indexTomcat;
+        String jacoco;
+        String retransformer;
+        boolean retransformable = true;
 
         Fork(String server, String endWait, long tailMillis) {
             this.server = server;
@@ -195,7 +310,27 @@ public class ServerTailTest {
             List<String> command = new ArrayList<>();
             command.add(new File(System.getProperty("java.home"), "bin/java").getPath());
             command.add("-Djava.io.tmpdir=" + tmp.newFolder().getPath());
-            command.add("-javaagent:" + sdkJar().getPath());
+            String sdkAgent = "-javaagent:" + sdkJar(fork.retransformable).getPath();
+            String jacoco = fork.jacoco == null ? null : "-javaagent:" + jacocoJar().getPath()
+                    + "=includes=org.example.*:" + ADAPTER + ",output=none";
+            if ("load".equals(fork.retransformer)) {
+                command.add("-javaagent:" + retransformerJar().getPath() + "=load");
+            }
+            if ("first".equals(fork.jacoco)) {
+                command.add(jacoco);
+            }
+            if (!"tool".equals(fork.jacoco)) {
+                command.add(sdkAgent);
+            }
+            if ("last".equals(fork.jacoco) || "tool".equals(fork.jacoco)) {
+                command.add(jacoco);
+            }
+            if ("".equals(fork.retransformer)) {
+                command.add("-javaagent:" + retransformerJar().getPath());
+            }
+            if ("redefine".equals(fork.retransformer)) {
+                command.add("-javaagent:" + retransformerJar().getPath() + "=redefine");
+            }
             List<String> classPath = new ArrayList<>();
             List<String> modulePath = new ArrayList<>();
             // Absolute: the app runs in a dir of its own.
@@ -235,6 +370,9 @@ public class ServerTailTest {
             env.put("KEPLOY_COVERAGE_ENDPOINT", "127.0.0.1:" + collector.getLocalPort());
             env.put("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED", "true");
             env.put("KEPLOY_JAVA_END_WAIT_MS", fork.endWait);
+            if ("tool".equals(fork.jacoco)) {
+                env.put("JAVA_TOOL_OPTIONS", sdkAgent);
+            }
             Process app = builder.start();
             try {
                 int port = port(log, app);
@@ -345,16 +483,45 @@ public class ServerTailTest {
     }
 
     // sdkJar is a jar whose Premain-Class is the SDK's, which is on the
-    // classpath it is run with.
-    private File sdkJar() throws IOException {
-        File sdk = tmp.newFile("keploy-sdk-" + System.nanoTime() + ".jar");
+    // classpath it is run with, and that may retransform, as keploy-sdk.jar
+    // may, when retransformable.
+    private File sdkJar(boolean retransformable) throws IOException {
+        return agentJar("keploy-sdk", KeployDedupAgent.class, retransformable);
+    }
+
+    // retransformerJar is a jar whose Premain-Class is Retransformer, which
+    // may retransform and redefine classes.
+    private File retransformerJar() throws IOException {
+        return agentJar("retransformer", Retransformer.class, true, true);
+    }
+
+    // jacocoJar is JaCoCo's own agent, jacocoagent.jar.
+    private File jacocoJar() throws IOException {
+        File jacoco = tmp.newFile("jacocoagent-" + System.nanoTime() + ".jar");
+        AgentJar.extractTo(jacoco);
+        return jacoco;
+    }
+
+    private File agentJar(String name, Class<?> premain, boolean retransformable) throws IOException {
+        return agentJar(name, premain, retransformable, false);
+    }
+
+    private File agentJar(String name, Class<?> premain, boolean retransformable, boolean redefinable)
+            throws IOException {
+        File jar = tmp.newFile(name + "-" + System.nanoTime() + ".jar");
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
-        manifest.getMainAttributes().putValue("Premain-Class", KeployDedupAgent.class.getName());
-        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(sdk), manifest)) {
+        manifest.getMainAttributes().putValue("Premain-Class", premain.getName());
+        if (retransformable) {
+            manifest.getMainAttributes().putValue("Can-Retransform-Classes", "true");
+        }
+        if (redefinable) {
+            manifest.getMainAttributes().putValue("Can-Redefine-Classes", "true");
+        }
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar), manifest)) {
             out.putNextEntry(new ZipEntry("META-INF/keploy-test"));
             out.closeEntry();
         }
-        return sdk;
+        return jar;
     }
 }

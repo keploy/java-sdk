@@ -158,7 +158,7 @@
                                         <Premain-Class>io.keploy.dedup.KeployDedupAgent</Premain-Class>
                                         <Agent-Class>io.keploy.dedup.KeployDedupAgent</Agent-Class>
                                         <Can-Redefine-Classes>false</Can-Redefine-Classes>
-                                        <Can-Retransform-Classes>false</Can-Retransform-Classes>
+                                        <Can-Retransform-Classes>true</Can-Retransform-Classes>
                                         <Implementation-Title>${project.name}</Implementation-Title>
                                         <Implementation-Version>${project.version}</Implementation-Version>
                                         <Automatic-Module-Name>io.keploy.sdk</Automatic-Module-Name>

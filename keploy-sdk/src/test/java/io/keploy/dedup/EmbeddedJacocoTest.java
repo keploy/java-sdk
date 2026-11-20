@@ -267,12 +267,14 @@ public class EmbeddedJacocoTest {
     }
 
     // sdkJar is a jar whose Premain-Class is the SDK's, which is on the
-    // classpath it is run with.
+    // classpath it is run with, and that may retransform, as keploy-sdk.jar
+    // may.
     private File sdkJar() throws IOException {
         File sdk = tmp.newFile("keploy-sdk-" + System.nanoTime() + ".jar");
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
         manifest.getMainAttributes().putValue("Premain-Class", KeployDedupAgent.class.getName());
+        manifest.getMainAttributes().putValue("Can-Retransform-Classes", "true");
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(sdk), manifest)) {
             out.putNextEntry(new ZipEntry("META-INF/keploy-test"));
             out.closeEntry();
