@@ -6,8 +6,11 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jacoco.core.analysis.Analyzer;
 import org.jacoco.core.analysis.IClassCoverage;
+import org.jacoco.core.analysis.ICounter;
+import org.jacoco.core.analysis.ICoverageNode;
 import org.jacoco.core.analysis.ILine;
 import org.jacoco.core.analysis.IMethodCoverage;
+import org.jacoco.core.analysis.ISourceNode;
 import org.jacoco.core.data.ExecutionData;
 import org.jacoco.core.data.ExecutionDataStore;
 import org.jacoco.core.instr.Instrumenter;
@@ -34,9 +37,11 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -230,6 +235,108 @@ public class ProbeMapTest {
         }
         assertTrue("classes: " + classes, classes > 300);
         assertTrue("probes: " + probes, probes > 5000);
+    }
+
+    @Test(timeout = 300000)
+    public void eachTableMethodIsWhatJacocosAnalyzerCounts() throws Exception {
+        // The table's methods come from the probe map's pass (KeployBranchCoverage.Method#coverage), not from
+        // JaCoCo's public Analyzer. Against the Analyzer, on real libraries' classes (JaCoCo core's and Gson's)
+        // and every fixture, with no probe executed and with every probe: the same methods in the same order,
+        // and each one's counters, whole and line by line.
+        List<BuildTable.ClassFile> all = new ArrayList<>();
+        for (Class<?> c : new Class<?>[] {Analyzer.class, JsonParser.class}) {
+            all.addAll(jarClasses(new File(c.getProtectionDomain().getCodeSource().getLocation().toURI())));
+        }
+        all.addAll(BuildTableTest.javaDedup());
+        all.addAll(load("shapes"));
+        all.addAll(load("modern"));
+        int classes = 0;
+        int methods = 0;
+        for (BuildTable.ClassFile f : all) {
+            int total = KeployBranchCoverage.analyze(f.bytes, null, new HashMap<>());
+            for (boolean hit : new boolean[] {false, true}) {
+                boolean[] probes = null;
+                ExecutionDataStore store = new ExecutionDataStore();
+                if (hit && total > 0) {
+                    probes = new boolean[total];
+                    Arrays.fill(probes, true);
+                    store.put(new ExecutionData(CRC64.classId(f.bytes), f.name, probes));
+                }
+                Map<String, KeployBranchCoverage.Method> ours = new LinkedHashMap<>();
+                assertEquals(f.name, total, KeployBranchCoverage.analyze(f.bytes, probes, ours));
+                List<String> got = new ArrayList<>();
+                for (KeployBranchCoverage.Method m : ours.values()) {
+                    got.add(counts(m.coverage));
+                }
+                List<IClassCoverage> classCoverage = new ArrayList<>();
+                new Analyzer(store, classCoverage::add).analyzeClass(f.bytes, f.name);
+                List<String> want = new ArrayList<>();
+                for (IClassCoverage cc : classCoverage) {
+                    for (IMethodCoverage mc : cc.getMethods()) {
+                        want.add(counts(mc));
+                    }
+                }
+                assertEquals(f.name + (hit ? ", every probe executed" : ", none executed"), want, got);
+                if (!hit && total >= 0) {
+                    classes++;
+                    methods += got.size();
+                }
+            }
+        }
+        assertTrue("classes: " + classes, classes > 300);
+        assertTrue("methods: " + methods, methods > 1500);
+    }
+
+    /** counts is a method's coverage as JaCoCo's API gives it: its counters, then each line's, with its lines. */
+    static String counts(IMethodCoverage m) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(m.getName()).append(m.getDesc()).append(' ').append(m.getSignature()).append(" lines ")
+                .append(m.getFirstLine()).append('-').append(m.getLastLine());
+        for (ICoverageNode.CounterEntity e : ICoverageNode.CounterEntity.values()) {
+            ICounter c = m.getCounter(e);
+            sb.append(' ').append(e).append(' ').append(c.getMissedCount()).append('/').append(c.getCoveredCount());
+        }
+        if (m.getFirstLine() != ISourceNode.UNKNOWN_LINE) {
+            for (int l = m.getFirstLine(); l <= m.getLastLine(); l++) {
+                ILine line = m.getLine(l);
+                sb.append(" @").append(l).append(' ').append(line.getStatus())
+                        .append(" i ").append(line.getInstructionCounter().getMissedCount()).append('/')
+                        .append(line.getInstructionCounter().getCoveredCount())
+                        .append(" b ").append(line.getBranchCounter().getMissedCount()).append('/')
+                        .append(line.getBranchCounter().getCoveredCount());
+            }
+        }
+        return sb.toString();
+    }
+
+    @Test
+    public void theTableNeedsNoSecondAnalysisOfAClass() throws Exception {
+        // One JaCoCo analysis of each class file gives both its table methods and its probe map. JaCoCo's public
+        // Analyzer would be a second one: no class of BuildTable's names it (the per-test CoverageReporter
+        // still does, for the coverage of a test's hits).
+        File dir = new File(BuildTable.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        assertTrue(dir + " is the SDK's classes directory", dir.isDirectory());
+        File[] own = new File(dir, "io/keploy/dedup").listFiles(
+                (d, n) -> n.equals("BuildTable.class") || n.startsWith("BuildTable$"));
+        assertNotNull(own);
+        assertTrue(Arrays.toString(own), own.length > 10);
+        Pattern analyzer = Pattern.compile("org/jacoco/core/analysis/Analyzer(?![\\w$])");
+        for (File f : own) {
+            String text = new String(Files.readAllBytes(f.toPath()), StandardCharsets.ISO_8859_1);
+            assertFalse(f.getName() + " names JaCoCo's Analyzer", analyzer.matcher(text).find());
+        }
+    }
+
+    /** instrumented is the class file as JaCoCo's offline instrumenter writes it, its probes read from null. */
+    static byte[] instrumented(String name, byte[] bytes) throws IOException {
+        return new Instrumenter(new IExecutionDataAccessorGenerator() {
+            @Override
+            public int generateDataAccessor(long classid, String classname, int probecount, MethodVisitor mv) {
+                mv.visitInsn(Opcodes.ACONST_NULL);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, "[Z");
+                return 1;
+            }
+        }).instrument(bytes, name);
     }
 
     static List<BuildTable.ClassFile> jarClasses(File jar) throws IOException {

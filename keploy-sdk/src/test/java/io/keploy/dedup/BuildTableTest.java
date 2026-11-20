@@ -321,8 +321,15 @@ public class BuildTableTest {
         // A nested class of Item no ASM in this SDK reads (class file version 99), and a class that is
         // not a class file at all.
         files.add(new BuildTable.ClassFile(item.name + "$Later", patchedMajor(item.bytes, 99)));
-        files.add(new BuildTable.ClassFile("io/keploy/samples/javadedup/Junk", "not a class".getBytes(StandardCharsets.UTF_8)));
-        Map<String, JsonObject> ours = byId(table(files).records);
+        files.add(new BuildTable.ClassFile("io/keploy/samples/javadedup/Junk",
+                "not a class".getBytes(StandardCharsets.UTF_8)));
+        // A class JaCoCo's offline instrumenter wrote: JaCoCo refuses to analyze it.
+        String instrumented = "io/keploy/samples/javadedup/Instrumented";
+        files.add(new BuildTable.ClassFile(instrumented, ProbeMapTest.instrumented(instrumented,
+                edgeClass(instrumented, "Instrumented.java", true, 10))));
+        Collect c = new Collect();
+        BuildTable.Summary s = BuildTable.write(files, c);
+        Map<String, JsonObject> ours = byId(c.records);
         Map<String, JsonObject> golden = byId(Arrays.asList(
                 new String(resource("java-dedup.table.ndjson"), StandardCharsets.UTF_8).split("\n")));
 
@@ -339,6 +346,16 @@ public class BuildTableTest {
         assertEquals("not_measured", junk.get("state").getAsString());
         assertEquals("", junk.get("path").getAsString());
         assertEquals("[]", junk.get("methods").toString());
+
+        JsonObject in = ours.get("c:" + instrumented);
+        assertEquals("not_measured", in.get("state").getAsString());
+        assertEquals("{\"code\":\"analyzer_failed\"}", in.get("reason").toString());
+        assertEquals("[]", in.get("methods").toString());
+
+        // Each of the three is JaCoCo refusing a class file, none a probe map that failed.
+        assertEquals(3, s.notMeasured);
+        assertEquals("JaCoCo's refusals are not counted as maps that failed", 0, s.notMapped);
+        assertEquals(0, s.tooLarge);
 
         // The other classes are as they were.
         for (String id : golden.keySet()) {

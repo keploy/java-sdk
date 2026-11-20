@@ -13,6 +13,7 @@ import java.util.function.Consumer;
 
 import org.jacoco.core.analysis.ICounter;
 import org.jacoco.core.analysis.ILine;
+import org.jacoco.core.analysis.IMethodCoverage;
 import org.jacoco.core.internal.analysis.filter.Filters;
 import org.jacoco.core.internal.analysis.filter.IFilter;
 import org.jacoco.core.internal.analysis.filter.IFilterOutput;
@@ -32,7 +33,9 @@ import org.objectweb.asm.tree.MethodNode;
  * KeployBranchCoverage runs JaCoCo's own analysis of one class (ClassAnalyzer's steps for each method: the
  * instruction graph, the filters, the merges and the branch replacements) and keeps what JaCoCo's public
  * coverage API sums away: which counted instructions are covered and which branch of each one is. Keploy's
- * build table uses it to map each probe to the lines and branch edges that a hit of that probe covers.
+ * build table makes each class's methods from the coverage this pass computes ({@link Method#coverage}) and maps
+ * each probe to the lines and branch edges that a hit of that probe covers, from the same pass: a class is
+ * analyzed once.
  *
  * <p>It lives in JaCoCo's package so that it runs JaCoCo's package-private analysis classes as they are. Each
  * method's per-line sums are checked against the coverage JaCoCo computes for it in the same pass, so a
@@ -57,6 +60,12 @@ public final class KeployBranchCoverage {
         public boolean[] covered;
         /** Per counted instruction: whether each of its branches is covered (empty below two branches). */
         public boolean[][] branches;
+        /**
+         * JaCoCo's coverage of the method from this pass, computed as ClassAnalyzer computes the coverage it
+         * adds to its class (a MethodCoverageCalculator over the same instructions and filter output), with
+         * the probes analyze was given: with none executed, what JaCoCo's Analyzer gives with no execution data.
+         */
+        public IMethodCoverage coverage;
 
         Method(String name, String desc) {
             this.name = name;
@@ -82,6 +91,24 @@ public final class KeployBranchCoverage {
      */
     public static int analyze(byte[] bytes, boolean[] probes, Map<String, Method> out) {
         return analyze(bytes, probes, out, null);
+    }
+
+    /**
+     * NotMapped is a class file whose probes cannot be mapped exactly from this pass: a method's flow has a
+     * shape the walk does not map, its per-instruction coverage differs from JaCoCo's per-line sums, or a
+     * check of the caller's fails. The caller marks the class not measured; it is not JaCoCo failing to read
+     * the class.
+     */
+    public static final class NotMapped extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        public NotMapped(String message) {
+            super(message);
+        }
+
+        public NotMapped(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     /**
@@ -129,8 +156,10 @@ public final class KeployBranchCoverage {
         void probe(Method method, int r, Hits hits);
 
         /**
-         * wants says whether method's probes are walked at all: a method it declines costs no walk, and probe
-         * gets none of its probes. Every method with code is wanted unless this is overridden.
+         * wants gets each method with code once, in the class's order, as soon as its coverage
+         * ({@link Method#coverage}) is computed and before any of its probes, and says whether its probes are
+         * walked at all: a method it declines costs no walk, and probe gets none of its probes. Every method
+         * with code is wanted unless this is overridden.
          */
         default boolean wants(Method method) {
             return true;
@@ -416,8 +445,8 @@ public final class KeployBranchCoverage {
             }
         }
 
-        private IllegalStateException shape(Method m, String what) {
-            return new IllegalStateException(getClassName() + "#" + m.name + m.desc + ": " + what);
+        private NotMapped shape(Method m, String what) {
+            return new NotMapped(getClassName() + "#" + m.name + m.desc + ": " + what);
         }
 
         /**
@@ -458,7 +487,7 @@ public final class KeployBranchCoverage {
                 int at = insns.indexOf(i);
                 int count = replaced != null ? replaced : builder.numbers(at);
                 if (n > 0 && count != n) {
-                    throw new IllegalStateException("JaCoCo counts " + n + " branches at " + getClassName() + "#"
+                    throw new NotMapped("JaCoCo counts " + n + " branches at " + getClassName() + "#"
                             + m.name + m.desc + " line " + insn.getLine() + ", its builder gave " + count);
                 }
                 boolean[] b = new boolean[n];
@@ -494,7 +523,7 @@ public final class KeployBranchCoverage {
                 ILine line = coverage.getLine(l);
                 int[] s = e.getValue();
                 if (!same(line.getInstructionCounter(), s[0], s[1]) || !same(line.getBranchCounter(), s[2], s[3])) {
-                    throw new IllegalStateException("JaCoCo's coverage of " + getClassName() + "#" + m.name + m.desc
+                    throw new NotMapped("JaCoCo's coverage of " + getClassName() + "#" + m.name + m.desc
                             + " line " + l + " differs from its instructions: " + Arrays.toString(s) + " against "
                             + line.getInstructionCounter() + " " + line.getBranchCounter());
                 }
@@ -502,6 +531,7 @@ public final class KeployBranchCoverage {
             m.lines = Arrays.copyOf(lines, c);
             m.covered = Arrays.copyOf(covered, c);
             m.branches = Arrays.copyOf(branches, c);
+            m.coverage = coverage;
             return true;
         }
 

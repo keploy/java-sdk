@@ -67,14 +67,15 @@ public class BuildTableBudgetTest {
         assertEquals(n, b.tableRecords);
         assertEquals(n, b.probeRecords);
         assertEquals("every class is measured", 0, b.notMeasured);
-        // What the send allocates per class: about 1.9 MiB when each probe re-analyzed its method, 125-141 KiB
-        // (JaCoCo's analysis of the class, twice, and the records' text) since each probe is read off one pass.
+        // What the send allocates per class: about 1.9 MiB when each probe re-analyzed its method, 123-141 KiB
+        // when JaCoCo analyzed each class twice (once for its table, once for its probe map), and 84-96 KiB
+        // since one analysis gives both (and the records' text).
         long perClass = b.allocated / n;
         assertTrue("allocated " + perClass + " bytes a class", perClass < ALLOCATED_PER_CLASS);
     }
 
-    /** The most a generated class's table and probe map may allocate on the send's thread. */
-    static final long ALLOCATED_PER_CLASS = 256 << 10;
+    /** The most a generated class's table and probe map may allocate on the send's thread: below two analyses'. */
+    static final long ALLOCATED_PER_CLASS = 112 << 10;
 
     @Test(timeout = 600_000)
     public void aClassWithOneLongMethodIsMeasured() throws Exception {
