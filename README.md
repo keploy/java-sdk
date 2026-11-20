@@ -260,3 +260,12 @@ For a working reference, see the Java dedup sample in `keploy/samples-java`:
 
 That sample is used in CI to validate Java dynamic dedup for JDK 8, 17, and 21 across native, classpath, Docker, distroless, and restricted Docker runs.
 The CI matrix is narrower than the supported range: it pins the runtimes the sample is exercised on, not the ceiling — see [Supported Java versions](#supported-java-versions).
+
+## License
+
+keploy-sdk is under the Apache License 2.0 (`LICENSE`). `keploy-sdk.jar` also
+carries JaCoCo (Eclipse Public License 2.0), the ASM it depends on (BSD
+3-Clause), Gson and junixsocket (Apache License 2.0). The jar holds
+`META-INF/THIRD-PARTY-NOTICES.txt`, which names each in the version the jar
+carries and says where JaCoCo's source is, next to `META-INF/LICENSE` and
+JaCoCo's `META-INF/LICENSE-EPL-2.0.txt`.
