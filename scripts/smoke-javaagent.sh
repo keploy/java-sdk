@@ -523,6 +523,256 @@ if [[ "${dump_rc}" -ne 0 ]] \
 fi
 echo "jacoco-dump: with KEPLOY_JAVA_SCAN=off each END took JaCoCo's dump"
 
+# keploy-sdk.jar as built, on a real Tomcat, with JaCoCo's own agent attached
+# after it and the index holding Tomcat's classes (as an uber jar's does).
+# The jar's manifest lets the SDK's transformer retransform, so the JVM runs
+# JaCoCo's before it, whatever the -javaagent order: JaCoCo ids Tomcat's own
+# CoyoteAdapter, as the index read it, so the record measures it and names
+# no class in classMismatch, and the SDK still counts Tomcat's requests: the
+# servlet's code after the response (Tail) runs while the END waits for the
+# request, and is in the record. The unit rows attach agent jars they write
+# themselves; this case reads the manifest the release ships.
+# The Tomcat keploy-sdk/pom.xml tests with (ServerTailTest's).
+tomcat_version="$(sed -n '/<artifactId>tomcat-embed-core<\/artifactId>/{n;s/.*<version>\([^<]*\)<\/version>.*/\1/p;}' \
+  "${repo_root}/keploy-sdk/pom.xml")"
+if [[ ! "${tomcat_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "tomcat-jacoco-after: keploy-sdk/pom.xml names no tomcat-embed-core version on the line after its artifactId (read '${tomcat_version}')" >&2
+  exit 1
+fi
+for artifact in "org.apache.tomcat.embed:tomcat-embed-core:${tomcat_version}" \
+  "org.apache.tomcat:tomcat-annotations-api:${tomcat_version}"; do
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/tomcat-libs"
+done
+tomcat_core="${work_dir}/tomcat-libs/tomcat-embed-core-${tomcat_version}.jar"
+tomcat_libs="$(find "${work_dir}/tomcat-libs" -name '*.jar' | sort | paste -sd: -)"
+
+mkdir -p "${work_dir}/tomcat-src/smoke" "${work_dir}/tomcat-classes"
+cat > "${work_dir}/tomcat-src/smoke/TomcatHarness.java" <<'JAVA'
+package smoke;
+
+import org.apache.catalina.Context;
+import org.apache.catalina.startup.Tomcat;
+import org.newsclub.net.unix.AFUNIXServerSocket;
+import org.newsclub.net.unix.AFUNIXSocket;
+import org.newsclub.net.unix.AFUNIXSocketAddress;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+public final class TomcatHarness {
+    private static final File CONTROL_SOCKET = new File("/tmp/coverage_control.sock");
+    private static final File DATA_SOCKET = new File("/tmp/coverage_data.sock");
+    private static final String ADAPTER = "org/apache/catalina/connector/CoyoteAdapter";
+
+    // Hello answers, then runs Tail once the END waits for the request
+    // (a thread is in RequestGate.await), or after 1500 ms when none does:
+    // then the END did not wait, and Tail is not in the record.
+    public static final class Hello extends HttpServlet {
+        @Override
+        protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            response.setContentLength(5);
+            response.getWriter().write("hello");
+            response.flushBuffer();
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1500L);
+            try {
+                while (!endWaits() && System.nanoTime() < deadline) {
+                    Thread.sleep(10L);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            Tail.run();
+        }
+
+        private static boolean endWaits() {
+            for (StackTraceElement[] stack : Thread.getAllStackTraces().values()) {
+                for (StackTraceElement frame : stack) {
+                    if ("io.keploy.dedup.RequestGate".equals(frame.getClassName())
+                            && "await".equals(frame.getMethodName())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
+    static final class Tail {
+        static volatile int runs;
+
+        static void run() {
+            runs++;
+        }
+    }
+
+    // main ends the JVM with 1 when a check fails: Tomcat's utility threads
+    // are not daemons, so a check that threw with Tomcat still running would
+    // leave the JVM up, and the case would hang instead of failing.
+    public static void main(String[] args) {
+        try {
+            run(args[0], new File(args[1]));
+        } catch (Throwable t) {
+            t.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void run(String mode, File base) throws Exception {
+        if (!base.mkdirs()) {
+            throw new IllegalStateException("failed to create " + base);
+        }
+        Tomcat tomcat = new Tomcat();
+        tomcat.setBaseDir(base.getPath());
+        tomcat.setPort(0);
+        tomcat.getConnector().setProperty("address", "127.0.0.1");
+        Context context = tomcat.addContext("", base.getPath());
+        Tomcat.addServlet(context, "hello", new Hello());
+        context.addServletMappingDecoded("/hello", "hello");
+        tomcat.start();
+        int port = tomcat.getConnector().getLocalPort();
+
+        if (DATA_SOCKET.exists() && !DATA_SOCKET.delete()) {
+            throw new IllegalStateException("failed to delete " + DATA_SOCKET);
+        }
+        final BlockingQueue<String> records = new LinkedBlockingQueue<String>();
+        Thread receiver = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
+                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
+                    for (;;) {
+                        try (AFUNIXSocket socket = server.accept()) {
+                            records.add(readAll(socket.getInputStream()));
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "coverage-data-receiver");
+        receiver.setDaemon(true);
+        receiver.start();
+        long deadline = System.currentTimeMillis() + 10000L;
+        while (!DATA_SOCKET.exists() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
+
+        String id = "test-set-0/" + mode;
+        command("START " + id);
+        String body = get(port);
+        command("END " + id);
+        String report = next(records, mode);
+        // The JaCoCo measuring is the one attached after keploy-sdk.jar (the
+        // SDK started none of its own), and the index read Tomcat's jar.
+        if (!report.startsWith("{\"kind\":\"index\",")
+                || !report.contains("\"source\":\"override\"")
+                || !report.contains("\"jacoco\":\"attached\"")
+                || !report.matches(".*\"roots\":\\[[^\\]]*tomcat-embed-core-[^\\]]*\\].*")) {
+            throw new IllegalStateException("the first record on the data socket was no INDEX report with source"
+                    + " override, jacoco attached and Tomcat's jar among its roots in " + mode + ": " + report);
+        }
+        String json = next(records, mode);
+        if (!"hello".equals(body)
+                || !json.contains("\"id\":\"" + id + "\"")
+                || !json.contains("\"" + ADAPTER + "\":[")
+                || !json.contains("\"smoke/TomcatHarness$Tail\":[")
+                || json.contains("\"classMismatch\"")) {
+            throw new IllegalStateException("the record of a request to Tomcat, with JaCoCo attached after"
+                    + " keploy-sdk.jar, does not measure " + ADAPTER + " and the servlet's code after the"
+                    + " response with no class in classMismatch in " + mode + " (body " + body + "): " + json);
+        }
+        System.out.println(mode + ": " + json);
+        tomcat.stop();
+        tomcat.destroy();
+    }
+
+    private static String get(int port) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) URI.create("http://127.0.0.1:" + port + "/hello")
+                .toURL().openConnection();
+        connection.setConnectTimeout(10000);
+        connection.setReadTimeout(15000);
+        try (InputStream input = connection.getInputStream()) {
+            return readAll(input);
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private static void command(String command) throws Exception {
+        try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
+            socket.connect(AFUNIXSocketAddress.of(CONTROL_SOCKET), 3000);
+            // The END waits at most KEPLOY_JAVA_END_WAIT_MS (2000) before it ACKs.
+            socket.setSoTimeout(15000);
+            OutputStream output = socket.getOutputStream();
+            output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            String ack = readAll(socket.getInputStream());
+            if (!"ACK proto=2\n".equals(ack)) {
+                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            }
+        }
+    }
+
+    private static String next(BlockingQueue<String> records, String mode) throws InterruptedException {
+        String record = records.poll(10, TimeUnit.SECONDS);
+        if (record == null) {
+            throw new IllegalStateException("timed out waiting for a record on the data socket in " + mode);
+        }
+        return record;
+    }
+
+    private static String readAll(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return new String(output.toByteArray(), StandardCharsets.UTF_8);
+    }
+}
+JAVA
+javac -cp "${tomcat_libs}:${agent_jar}" -d "${work_dir}/tomcat-classes" \
+  "${work_dir}/tomcat-src/smoke/TomcatHarness.java"
+
+tomcat_log="${work_dir}/tomcat-jacoco-after.log"
+tomcat_rc=0
+KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 KEPLOY_JAVA_END_WAIT_MS=2000 \
+KEPLOY_JAVA_CLASS_DIRS="${work_dir}/tomcat-classes:${tomcat_core}" \
+run_smoke "tomcat-jacoco-after" \
+  timeout -k 10 180 java \
+    -javaagent:"${agent_jar}" \
+    -javaagent:"${jacoco_jar}=includes=smoke.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
+    -cp "${work_dir}/tomcat-classes:${tomcat_libs}:${agent_jar}" \
+    smoke.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" 2>"${tomcat_log}" || tomcat_rc=$?
+if [[ "${tomcat_rc}" -eq 124 || "${tomcat_rc}" -eq 137 ]]; then
+  cat "${tomcat_log}" >&2
+  echo "tomcat-jacoco-after: the Tomcat harness was killed or did not end within 180 s (exit ${tomcat_rc}; 137 can also be the OOM killer)" >&2
+  exit 1
+fi
+if [[ "${tomcat_rc}" -ne 0 ]] \
+  || ! grep -q "Keploy dedup counts Tomcat's requests (org.apache.catalina.connector.CoyoteAdapter)" "${tomcat_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/tomcat-jacoco-after took .* requests=' "${tomcat_log}" \
+  || grep -q 'Can-Retransform-Classes' "${tomcat_log}"; then
+  cat "${tomcat_log}" >&2
+  echo "tomcat-jacoco-after: JaCoCo attached after keploy-sdk.jar did not measure Tomcat's own CoyoteAdapter, or the requests were not counted (exit ${tomcat_rc})" >&2
+  exit 1
+fi
+echo "tomcat-jacoco-after: JaCoCo attached after keploy-sdk.jar measured Tomcat's own CoyoteAdapter, and the requests were counted"
+
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
 cat > "${work_dir}/jar/MANIFEST.MF" <<EOF

@@ -3,6 +3,7 @@ package io.keploy.dedup;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -20,6 +21,13 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import org.jacoco.core.data.ExecutionData;
+import org.jacoco.core.data.ExecutionDataStore;
+import org.jacoco.core.data.SessionInfoStore;
+import org.jacoco.core.instr.Instrumenter;
+import org.jacoco.core.internal.data.CRC64;
+import org.jacoco.core.runtime.LoggerRuntime;
+import org.jacoco.core.runtime.RuntimeData;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -184,6 +192,56 @@ public class ServerEntriesTest {
         method.invoke(type.getDeclaredConstructor().newInstance(), args(0));
         assertEquals(1, runningInBody);
         assertEquals(0, RequestGate.running());
+    }
+
+    @Test
+    public void jacocosCopyOfTheServersClassIsCountedAndKeepsItsIdAtEachClassVersion() throws Exception {
+        // The JVM runs this transformer after JaCoCo's, so it wraps the copy
+        // JaCoCo instrumented: at Java 8's class version and at 11's, 17's
+        // and 21's, as far as this JVM can define them. The copy must pass the
+        // verifier (HotSpot verifies by default every class a loader other
+        // than the boot loader defines), count its requests, and report its
+        // probes under JaCoCo's id of the server's own bytes, the CRC64 of
+        // them: the id the index holds, not the id of the wrapped bytes,
+        // which JaCoCo would write had it run after this transformer.
+        String name = ENTRIES[0][0];
+        int feature = Integer.parseInt(System.getProperty("java.specification.version").replaceFirst("^1\\.", ""));
+        int ran = 0;
+        for (int version : new int[] {Opcodes.V1_8, Opcodes.V11, Opcodes.V17, Opcodes.V21}) {
+            if (version > 44 + feature) {
+                continue;
+            }
+            byte[] original = standIn(name, "service", false, version, 0);
+            LoggerRuntime runtime = new LoggerRuntime();
+            RuntimeData data = new RuntimeData();
+            runtime.startup(data);
+            try {
+                byte[] instrumented = new Instrumenter(runtime).instrument(original, name);
+                // Up to Java 10's class version JaCoCo keeps its probes in a
+                // field; from 11's on it reads them through a dynamic constant.
+                assertEquals("class version " + version, version < Opcodes.V11, hasField(instrumented, "$jacocoData"));
+                Class<?> type = load(name, transformed(instrumented));
+                Method method = type.getMethod("service", BODY_TYPES);
+                runningInBody = -1;
+                assertEquals("class version " + version, 2L + 3L + 4L + 2L + 1L + 1L + 1L + 1L + 1L + 1L,
+                        method.invoke(type.getDeclaredConstructor().newInstance(), args(4)));
+                assertEquals("class version " + version, 1, runningInBody);
+                assertEquals("class version " + version, 0, RequestGate.running());
+                ExecutionDataStore store = new ExecutionDataStore();
+                data.collect(store, new SessionInfoStore(), false);
+                assertEquals("class version " + version, 1, store.getContents().size());
+                ExecutionData probes = store.getContents().iterator().next();
+                assertEquals("class version " + version, name, probes.getName());
+                assertEquals("class version " + version, CRC64.classId(original), probes.getId());
+                assertNotEquals("class version " + version, CRC64.classId(transformed(original)), probes.getId());
+                assertTrue("class version " + version, probes.hasHits());
+            } finally {
+                runtime.shutdown();
+            }
+            ran++;
+        }
+        assertEquals("the class versions this JVM can define", feature >= 21 ? 4 : feature >= 17 ? 3
+                : feature >= 11 ? 2 : 1, ran);
     }
 
     @Test
@@ -464,6 +522,19 @@ public class ServerEntriesTest {
         mv.visitInsn(Opcodes.LRETURN);
         mv.visitMaxs(0, 0);
         mv.visitEnd();
+    }
+
+    private static boolean hasField(byte[] classfile, final String name) {
+        final boolean[] found = new boolean[1];
+        new org.objectweb.asm.ClassReader(classfile).accept(new org.objectweb.asm.ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public org.objectweb.asm.FieldVisitor visitField(int access, String field, String descriptor,
+                    String signature, Object value) {
+                found[0] |= field.equals(name);
+                return null;
+            }
+        }, 0);
+        return found[0];
     }
 
     private static Class<?> load(String internalName, byte[] classfile) {
