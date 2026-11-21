@@ -48,7 +48,43 @@
         <maven.compiler.target>1.8</maven.compiler.target>
     </properties>
 
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!-- The java8-api profile below works through the compiler plugin's
+                     release parameter, which the plugin has since 3.6. Unpinned, the
+                     version is whatever the running Maven binds by default: Maven 3.8
+                     and older bind 3.1, which has no release parameter and ignores
+                     maven.compiler.release without a warning, so a jar built there on
+                     JDK 9 or later could carry calls that Java 8 lacks. 3.15.0 is the
+                     version the Maven on CI's runners, which also build the release,
+                     binds today. keploy-junit5's pom pins its own (3.13.0), and each
+                     module's Java8ApiTest checks that its pin is 3.6 or later. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.15.0</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
     <profiles>
+        <!-- keploy-sdk runs on Java 8. Built on JDK 9 or later (the release is built
+             on JDK 17), javac checks the code against Java 8's API too (release 8),
+             not only Java 8's class file version: with source and target 1.8 alone
+             it compiles a call to an API Java 8 lacks, which fails only on Java 8,
+             at run time (NoSuchMethodError, NoClassDefFoundError). JDK 8's javac
+             has no release option, and needs none. -->
+        <profile>
+            <id>java8-api</id>
+            <activation>
+                <jdk>[9,)</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.release>8</maven.compiler.release>
+            </properties>
+        </profile>
         <profile>
             <id>release</id>
             <build>

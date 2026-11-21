@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -11,9 +12,14 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.Base64;
+import org.jacoco.core.data.ExecutionData;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 /**
  * The TCP transport, with the test as the collector the SDK dials (k8s). A
@@ -26,6 +32,12 @@ public class CoverageTcpClientTest {
     private static final String ENDPOINT_PROPERTY = "keploy.coverage.endpoint";
     private static final String JACOCO_PORT_PROPERTY = "keploy.jacoco.port";
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
+    private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
+    private static final String BUILD_TAG_PROPERTY = "keploy.build.tag";
+    private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
+
+    @Rule
+    public TemporaryFolder tmp = new TemporaryFolder();
 
     private ServerSocket collector;
     private FakeJacoco jacoco;
@@ -45,6 +57,9 @@ public class CoverageTcpClientTest {
         System.clearProperty(ENDPOINT_PROPERTY);
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
+        System.clearProperty(CLASS_DIRS_PROPERTY);
+        System.clearProperty(BUILD_TAG_PROPERTY);
+        System.clearProperty(END_WAIT_PROPERTY);
         collector.close();
         if (jacoco != null) {
             jacoco.close();
@@ -161,6 +176,78 @@ public class CoverageTcpClientTest {
             send(out, "END test-set-0/test-1");
             assertEquals("the connection still answers", "IGNORED test-set-0/test-1", in.readLine());
             assertEquals("ACK", in.readLine());
+        }
+    }
+
+    @Test
+    public void theManifestWritesAClassIdAs16HexDigitsAndTheCovNamesAClassJacocoSawOtherBytesOf()
+            throws Exception {
+        File shop = new File(tmp.newFolder("classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), new byte[] {1});
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        System.setProperty(BUILD_TAG_PROPERTY, "tag");
+        jacoco = new FakeJacoco();
+        System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
+        // JaCoCo saw other bytes of Shop than the index reads: its id is not
+        // theirs, and has fewer than 16 hex digits.
+        jacoco.hit = new ExecutionData(0x99L, "com/acme/Shop", new boolean[] {true, false});
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK", in.readLine());
+            send(out, "END test-set-0/test-1");
+            assertEquals("COV {\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[0]},"
+                    + "\"classMismatch\":[\"com/acme/Shop\"]}", in.readLine());
+            String classes = in.readLine();
+            assertTrue(classes, classes.startsWith("CLASSES "));
+            String manifest = new String(Base64.getDecoder().decode(classes.split(" ")[2]), StandardCharsets.UTF_8);
+            assertEquals("{\"com/acme/Shop\":{\"id\":\"0000000000000099\",\"probeCount\":2}}", manifest);
+            assertEquals("ACK", in.readLine());
+        }
+    }
+
+    @Test
+    public void aCutEndSaysSoInItsCovAfterClassMismatch() throws Exception {
+        File shop = new File(tmp.newFolder("classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), new byte[] {1});
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        System.setProperty(END_WAIT_PROPERTY, "50");
+        jacoco = new FakeJacoco();
+        System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
+        jacoco.hit = new ExecutionData(0x99L, "com/acme/Shop", new boolean[] {true, false});
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK", in.readLine());
+            // The test's request is still running when its END comes, and
+            // past END's wait.
+            Object request = RequestGate.enter();
+            try {
+                send(out, "END test-set-0/test-1");
+                assertEquals("COV {\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[0]},"
+                        + "\"classMismatch\":[\"com/acme/Shop\"],\"windowCut\":true}", in.readLine());
+                assertEquals("ACK", in.readLine());
+            } finally {
+                RequestGate.exit(request);
+            }
+            // Its request done, the next test's END is not cut.
+            send(out, "START test-set-0/test-2");
+            assertEquals("ACK", in.readLine());
+            send(out, "END test-set-0/test-2");
+            String cov = in.readLine();
+            assertTrue(cov, cov.startsWith("COV ") && !cov.contains("windowCut"));
         }
     }
 

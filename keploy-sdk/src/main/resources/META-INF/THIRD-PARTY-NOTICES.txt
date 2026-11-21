@@ -1,22 +1,35 @@
-keploy-sdk.jar (Apache License 2.0) carries the following third-party software.
+keploy-sdk's own code is under the Apache License 2.0 (META-INF/LICENSE in
+the jar). Its source is at https://github.com/keploy/java-sdk, under
+keploy-sdk/; the build that makes the jar, renaming the packages below, is
+keploy-sdk/pom.xml. keploy-sdk.jar also carries the third-party software
+below, which stays under its own license.
 
-JaCoCo 0.8.15 - Eclipse Public License 2.0 (https://www.eclipse.org/legal/epl-2.0/)
+JaCoCo 0.8.15 - Eclipse Public License 2.0 (META-INF/LICENSE-EPL-2.0.txt in
+the jar; https://www.eclipse.org/legal/epl-2.0/)
   Copyright (c) 2009, 2026 Mountainminds GmbH & Co. KG and Contributors
   JaCoCo's source code is available under the EPL-2.0 at
-  https://github.com/jacoco/jacoco, tag v0.8.15.
-  - jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:0.8.15; keploy-sdk
-    starts it when the JVM attaches no JaCoCo agent of its own.
+  https://github.com/jacoco/jacoco, tag v0.8.15 (jacocoagent.jar is built
+  from its org.jacoco.agent.rt module), and org.jacoco.core's also from
+  Maven Central as org.jacoco:org.jacoco.core:0.8.15:sources.
+  - jacocoagent.jar, unchanged, from org.jacoco:org.jacoco.agent:0.8.15, at
+    io/keploy/dedup/jacocoagent.jar in the jar; keploy-sdk starts it when the
+    JVM attaches no JaCoCo agent of its own. It holds its own about.html,
+    which is also org.jacoco.agent's.
   - the classes of org.jacoco:org.jacoco.core:0.8.15, unchanged but for their
     package, renamed from org.jacoco.core to io.keploy.shaded.org.jacoco.core
     (maven-shade-plugin relocation, keploy-sdk/pom.xml), so that they never meet
     an app's own JaCoCo.
+  about.html at the root of the jar is org.jacoco.core's, unchanged. Neither
+  it nor the one inside jacocoagent.jar covers the rest of the jar.
 
 ASM 9.10.1 - BSD 3-Clause License
   Source: https://gitlab.ow2.org/asm/asm
   - the classes of org.ow2.asm:asm, asm-commons and asm-tree 9.10.1, which
     org.jacoco.core depends on, unchanged but for their package, renamed from
-    org.objectweb.asm to io.keploy.shaded.org.objectweb.asm; and the copy
-    inside jacocoagent.jar. ASM is subject to the following license:
+    org.objectweb.asm to io.keploy.shaded.org.objectweb.asm.
+  - the copy of ASM inside jacocoagent.jar, whose version the about.html
+    inside jacocoagent.jar names.
+  ASM is subject to the following license:
 
 ASM: a very small and fast Java bytecode manipulation framework
 Copyright (c) 2000-2011 INRIA, France Telecom
@@ -46,10 +59,29 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
 THE POSSIBILITY OF SUCH DAMAGE.
 
-Gson 2.9.1 - Apache License 2.0
-  Source: https://github.com/google/gson
+Gson 2.9.1 - Apache License 2.0 (META-INF/LICENSE in the jar)
+  Copyright (C) 2008 Google Inc.
+  Source: https://github.com/google/gson, tag gson-parent-2.9.1
   - its classes, unchanged but for their package, renamed from com.google.gson
     to io.keploy.shaded.com.google.gson.
 
-junixsocket 2.10.1 - Apache License 2.0
-  Source: https://github.com/kohlschutter/junixsocket
+junixsocket 2.10.1 - Apache License 2.0 (META-INF/LICENSE in the jar)
+  Source: https://github.com/kohlschutter/junixsocket, tag junixsocket-2.10.1
+  - the classes and native libraries of junixsocket-common and
+    junixsocket-native-common 2.10.1, unchanged. Its NOTICE file reads:
+
+junixsocket
+
+Copyright 2009-2024 Christian Kohlschütter
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.

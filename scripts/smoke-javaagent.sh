@@ -32,6 +32,103 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# keploy-sdk.jar carries JaCoCo (EPL-2.0), ASM, Gson and junixsocket: it must
+# hold keploy-sdk's own license, JaCoCo's EPL-2.0 text and about.html, and the
+# notices that name each and say where JaCoCo's source is. A change to the
+# shade plugin's filters or to the jar's resources that drops one fails here.
+licenses_dir="${work_dir}/licenses"
+jacoco_maven=META-INF/maven/org.jacoco
+license_entries=(META-INF/LICENSE META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt about.html
+  "${jacoco_maven}/org.jacoco.core/pom.properties" io/keploy/dedup/jacocoagent.jar)
+mkdir -p "${licenses_dir}"
+(cd "${licenses_dir}" && jar xf "${agent_jar}" "${license_entries[@]}")
+for entry in "${license_entries[@]}"; do
+  if [[ ! -s "${licenses_dir}/${entry}" ]]; then
+    echo "licenses: ${agent_jar} holds no ${entry}" >&2
+    exit 1
+  fi
+done
+if ! cmp -s "${repo_root}/LICENSE" "${licenses_dir}/META-INF/LICENSE"; then
+  echo "licenses: the jar's META-INF/LICENSE is not the repo's LICENSE" >&2
+  exit 1
+fi
+for entry in META-INF/LICENSE-EPL-2.0.txt META-INF/THIRD-PARTY-NOTICES.txt; do
+  if ! cmp -s "${module_dir}/src/main/resources/${entry}" "${licenses_dir}/${entry}"; then
+    echo "licenses: the jar's ${entry} is not keploy-sdk/src/main/resources/${entry}" >&2
+    exit 1
+  fi
+done
+# about.html at the jar's root is org.jacoco.core's, as the notices say. Of
+# org.jacoco.agent, built from the same JaCoCo release, the jar carries the
+# jacocoagent.jar alone, unchanged, under io/keploy/dedup (not its AgentJar,
+# nor its about.html, which is the same file as the about.html inside
+# jacocoagent.jar).
+jacoco_version="$(sed -n 's/^version=//p' "${licenses_dir}/${jacoco_maven}/org.jacoco.core/pom.properties" | tr -d '\r')"
+for artifact in org.jacoco.core org.jacoco.agent; do
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="org.jacoco:${artifact}:${jacoco_version}" -DoutputDirectory="${licenses_dir}"
+  mkdir -p "${licenses_dir}/${artifact}"
+  (cd "${licenses_dir}/${artifact}" && jar xf "../${artifact}-${jacoco_version}.jar" about.html)
+done
+if ! cmp -s "${licenses_dir}/org.jacoco.core/about.html" "${licenses_dir}/about.html"; then
+  echo "licenses: the jar's about.html is not org.jacoco.core's" >&2
+  exit 1
+fi
+(cd "${licenses_dir}/org.jacoco.agent" && jar xf "../org.jacoco.agent-${jacoco_version}.jar" jacocoagent.jar)
+if ! cmp -s "${licenses_dir}/org.jacoco.agent/jacocoagent.jar" "${licenses_dir}/io/keploy/dedup/jacocoagent.jar"; then
+  echo "licenses: the jar's io/keploy/dedup/jacocoagent.jar is not org.jacoco.agent ${jacoco_version}'s jacocoagent.jar" >&2
+  exit 1
+fi
+mkdir -p "${licenses_dir}/jacocoagent"
+(cd "${licenses_dir}/jacocoagent" && jar xf "${licenses_dir}/io/keploy/dedup/jacocoagent.jar" about.html)
+if ! cmp -s "${licenses_dir}/org.jacoco.agent/about.html" "${licenses_dir}/jacocoagent/about.html"; then
+  echo "licenses: org.jacoco.agent's about.html is not the one inside the jar's jacocoagent.jar" >&2
+  exit 1
+fi
+# The jar holds keploy-sdk's own packages and the parts the notices name, and
+# nothing else: a dependency or a package that lands in the jar without its
+# notice fails here. A third-party part goes in THIRD-PARTY-NOTICES.txt first,
+# then in want_parts; a new package of keploy-sdk's own, in want_parts. A file
+# in keploy-sdk's own packages that is not a class is a part by its own name.
+jar_parts="$(jar tf "${agent_jar}" | grep -v '/$' | awk -F/ '
+  $1 == "io" && $2 == "keploy" && $3 == "shaded" { print $1 "/" $2 "/" $3 "/" $4 "/" $5 "/" $6; next }
+  $1 == "io" && $2 == "keploy" && $3 != "shaded" && $NF !~ /\.class$/ { print; next }
+  $1 == "META-INF" && $2 == "versions" && NF > 6 { print $1 "/" $2 "/*/" $4 "/" $5 "/" $6; next }
+  $1 == "META-INF" && ($2 == "maven" || $2 == "native-image") && NF > 3 { print $1 "/" $2 "/" $3; next }
+  $1 == "lib" && NF == 4 && $3 == "jni" && $4 ~ /^(lib)?junixsocket-native-/ { print "lib/*/jni/junixsocket-native"; next }
+  NF <= 3 { print; next }
+  { print $1 "/" $2 "/" $3 }' | LC_ALL=C sort -u)"
+want_parts="$(LC_ALL=C sort <<'PARTS'
+META-INF/LICENSE
+META-INF/LICENSE-EPL-2.0.txt
+META-INF/MANIFEST.MF
+META-INF/THIRD-PARTY-NOTICES.txt
+META-INF/maven/com.google.code.gson
+META-INF/maven/com.kohlschutter.junixsocket
+META-INF/maven/io.keploy
+META-INF/maven/org.jacoco
+META-INF/native-image/com.kohlschutter.junixsocket
+META-INF/versions/*/org/newsclub/lib
+META-INF/versions/*/org/newsclub/net
+about.html
+io/keploy/dedup
+io/keploy/dedup/jacocoagent.jar
+io/keploy/servlet
+io/keploy/shaded/com/google/gson
+io/keploy/shaded/org/jacoco/core
+io/keploy/shaded/org/objectweb/asm
+lib/*/jni/junixsocket-native
+org/newsclub/lib
+org/newsclub/net
+PARTS
+)"
+if [[ "${jar_parts}" != "${want_parts}" ]]; then
+  echo "licenses: ${agent_jar} does not hold exactly the parts THIRD-PARTY-NOTICES.txt names (< the jar, > want_parts):" >&2
+  diff <(printf '%s\n' "${jar_parts}") <(printf '%s\n' "${want_parts}") >&2 || true
+  exit 1
+fi
+echo "licenses: keploy-sdk.jar holds its license, JaCoCo's EPL-2.0 text and about.html, and the notices of every part it holds"
+
 mkdir -p "${work_dir}/src/smoke" "${work_dir}/classes"
 
 cat > "${work_dir}/src/smoke/Work.java" <<'JAVA'
@@ -65,9 +162,9 @@ import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.jar.JarFile;
 import java.util.jar.JarInputStream;
 import java.util.jar.Manifest;
@@ -97,25 +194,17 @@ public final class SmokeHarness {
         // after the START: no socket file was there when the SDK bound its
         // control socket, so it sent no INDEX report then, and it must send
         // it here first, before the test's coverage.
-        AtomicReference<String> index = new AtomicReference<String>();
-        AtomicReference<String> payload = new AtomicReference<String>();
-        CountDownLatch received = new CountDownLatch(1);
+        final BlockingQueue<String> records = new LinkedBlockingQueue<String>();
         Thread receiver = new Thread(new Runnable() {
             @Override
             public void run() {
                 try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
                     server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
-                    for (int n = 0; payload.get() == null; n++) {
+                    for (;;) {
                         try (AFUNIXSocket socket = server.accept()) {
-                            String record = readAll(socket.getInputStream());
-                            if (n == 0 && record.startsWith("{\"kind\":\"index\",")) {
-                                index.set(record);
-                            } else {
-                                payload.set(record);
-                            }
+                            records.add(readAll(socket.getInputStream()));
                         }
                     }
-                    received.countDown();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -131,19 +220,22 @@ public final class SmokeHarness {
         }
         command("END test-set-0/" + mode);
 
-        if (!received.await(10, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("timed out waiting for coverage payload in " + mode);
+        String json = next(records, mode);
+        String report = null;
+        if (json.startsWith("{\"kind\":\"index\",")) {
+            report = json;
+            json = next(records, mode);
         }
-
-        String json = payload.get();
         // The fingerprint is keyed by VM class name (probe-based coverage),
-        // e.g. "smoke/Work" — not a source file like "Work.java".
-        if (json == null
-                || !json.contains("\"id\":\"test-set-0/" + mode + "\"")
-                || !json.contains("smoke/Work")) {
+        // e.g. "smoke/Work" — not a source file like "Work.java". JaCoCo's id
+        // of each class the app ran is the id of the bytes the index read,
+        // so the record names no class in classMismatch: one named here
+        // would lose that class's coverage in Keploy.
+        if (!json.contains("\"id\":\"test-set-0/" + mode + "\"")
+                || !json.contains("smoke/Work")
+                || json.contains("\"classMismatch\"")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
-        String report = index.get();
         if (report == null
                 || !report.contains("\"source\":\"" + wantSource + "\"")
                 || !report.contains("\"jacoco\":\"" + wantJacoco + "\"")
@@ -160,7 +252,7 @@ public final class SmokeHarness {
         String wantJacocoVersion = "attached".equals(wantJacoco)
                 ? versionOf(new File(System.getProperty("smoke.jacocoJar")), null)
                 : "embedded".equals(wantJacoco)
-                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "jacocoagent.jar") : "";
+                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "io/keploy/dedup/jacocoagent.jar") : "";
         if (wantSdkVersion.isEmpty() || wantJacocoVersion.isEmpty() != !wantJacoco.matches("attached|embedded")
                 || !report.endsWith(",\"sdkVersion\":\"" + wantSdkVersion + "\",\"jacocoVersion\":\""
                         + wantJacocoVersion + "\"}")) {
@@ -173,13 +265,58 @@ public final class SmokeHarness {
         }
         System.out.println(mode + ": " + report);
         System.out.println(mode + ": " + json);
+        String otherWork = System.getProperty("smoke.otherWork", "");
+        if (!otherWork.isEmpty()) {
+            runsAnotherCopy(otherWork, mode, records);
+        }
     }
 
-    // loadsItsOwn loads ASM, Gson and JaCoCo's core from the app's own jars
-    // as Spring Boot's launcher loads BOOT-INF/lib: through a loader that asks
-    // its parent, the system class loader, first. keploy-sdk.jar is on the
-    // system class path, so a copy of these it carried under their own names
-    // would be what the app gets, in keploy-sdk's version, not the app's.
+    // runsAnotherCopy runs a test in which only another smoke.Work runs:
+    // one built from other source, which the index never read, in a loader
+    // of its own (as a second web app or an agent's woven copy would be).
+    // JaCoCo measures it under the same name with another id, so the
+    // record must send its probes under smoke/Work and name smoke/Work in
+    // classMismatch, and no other class.
+    private static void runsAnotherCopy(String dir, String mode, BlockingQueue<String> records)
+            throws Exception {
+        String id = "test-set-0/" + mode + "-another-copy";
+        URLClassLoader loader = new URLClassLoader(new URL[] {new File(dir).toURI().toURL()}, null);
+        try {
+            Class<?> other = Class.forName("smoke.Work", false, loader);
+            command("START " + id);
+            Object result = other.getMethod("exercise", int.class).invoke(null, 1);
+            command("END " + id);
+            if (!Integer.valueOf(3).equals(result)) {
+                throw new IllegalStateException("the copy in " + dir + " did not run in " + mode + ": " + result);
+            }
+            String json = next(records, mode);
+            if (!json.contains("\"id\":\"" + id + "\"")
+                    || !json.contains("\"smoke/Work\":[")
+                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]}")) {
+                throw new IllegalStateException("the record of a test that ran another copy of smoke/Work does"
+                        + " not name it, alone, in classMismatch in " + mode + ": " + json);
+            }
+            System.out.println(mode + ": " + json);
+        } finally {
+            loader.close();
+        }
+    }
+
+    private static String next(BlockingQueue<String> records, String mode) throws InterruptedException {
+        String record = records.poll(10, TimeUnit.SECONDS);
+        if (record == null) {
+            throw new IllegalStateException("timed out waiting for a record on the data socket in " + mode);
+        }
+        return record;
+    }
+
+    // loadsItsOwn loads ASM, Gson, JaCoCo's core and JaCoCo's AgentJar from
+    // the app's own jars as Spring Boot's launcher loads BOOT-INF/lib: through
+    // a loader that asks its parent, the system class loader, first.
+    // keploy-sdk.jar is on the system class path, so a copy of these it
+    // carried under their own names would be what the app gets, in
+    // keploy-sdk's version, not the app's; and so would a jacocoagent.jar it
+    // carried at its root, which is where the app's AgentJar looks for its own.
     private static void loadsItsOwn(String jars) throws Exception {
         String[] paths = jars.split(File.pathSeparator);
         URL[] urls = new URL[paths.length];
@@ -189,7 +326,8 @@ public final class SmokeHarness {
         URLClassLoader libraries = new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
         try {
             for (String name : new String[] {
-                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo"}) {
+                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo",
+                    "org.jacoco.agent.AgentJar"}) {
                 Class<?> type = Class.forName(name, false, libraries);
                 URL from = type.getProtectionDomain().getCodeSource() == null
                         ? null : type.getProtectionDomain().getCodeSource().getLocation();
@@ -201,6 +339,16 @@ public final class SmokeHarness {
                     throw new IllegalStateException("the app's " + name + " came from " + from
                             + ", not from the app's own jars " + jars);
                 }
+            }
+            URL agent = (URL) Class.forName("org.jacoco.agent.AgentJar", false, libraries)
+                    .getMethod("getResource").invoke(null);
+            boolean ownAgent = false;
+            for (URL url : urls) {
+                ownAgent |= agent != null && agent.toString().equals("jar:" + url + "!/jacocoagent.jar");
+            }
+            if (!ownAgent) {
+                throw new IllegalStateException("the app's AgentJar read the JaCoCo agent jar " + agent
+                        + ", not the one in the app's own jars " + jars);
             }
         } finally {
             libraries.close();
@@ -279,6 +427,23 @@ public final class PlainApp {
 }
 JAVA
 
+# Another smoke.Work, from other source, compiled into a dir of its own that
+# the index never reads: the copy runsAnotherCopy loads.
+mkdir -p "${work_dir}/other-src/smoke" "${work_dir}/other-work"
+cat > "${work_dir}/other-src/smoke/Work.java" <<'JAVA'
+package smoke;
+
+public final class Work {
+    private Work() {
+    }
+
+    public static int exercise(int input) {
+        return input * 3;
+    }
+}
+JAVA
+javac -d "${work_dir}/other-work" "${work_dir}/other-src/smoke/Work.java"
+
 javac -cp "${agent_jar}" -d "${work_dir}/classes" \
   "${work_dir}/src/smoke/Work.java" \
   "${work_dir}/src/smoke/SmokeHarness.java" \
@@ -332,6 +497,301 @@ run_smoke "classpath-fallback" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "classpath-fallback" derived attached
 
+# With JaCoCo's agent in the JVM, a START and an END read and clear the app's
+# probes in place, in one pass, instead of taking JaCoCo's reset and dump.
+# This is the real (shaded) JaCoCo runtime, which the unit tests do not load:
+# its layout must be the one the pass reads. The END's diagnostics line names
+# the step: `scan=` for the pass, `dump=` for JaCoCo's dump. A second test
+# runs only another copy of smoke.Work (smoke.otherWork): a class JaCoCo
+# first sees there, which the pass must find, and name in classMismatch.
+scan_log="${work_dir}/in-place-scan.log"
+scan_rc=0
+KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "in-place-scan" \
+  java_with_agents "in-place-scan" \
+    -Dsmoke.otherWork="${work_dir}/other-work" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "in-place-scan" derived attached 2>"${scan_log}" || scan_rc=$?
+if [[ "${scan_rc}" -ne 0 ]] \
+  || ! grep -q 'diagnostics: START test-set-0/in-place-scan took .* scan=' "${scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/in-place-scan took .* scan=' "${scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/in-place-scan-another-copy took .* scan=' "${scan_log}" \
+  || grep -q 'cannot be read in place\|the probe scan failed' "${scan_log}"; then
+  cat "${scan_log}" >&2
+  echo "in-place-scan: the agent did not read JaCoCo's probes in place (exit ${scan_rc})" >&2
+  exit 1
+fi
+echo "in-place-scan: START and END read JaCoCo's probes in place"
+
+# KEPLOY_JAVA_SCAN=off: each test takes JaCoCo's dump and reset instead, and
+# its records must be the pass's: no class named for the app's own copy, and
+# the other copy named.
+dump_log="${work_dir}/jacoco-dump.log"
+dump_rc=0
+KEPLOY_JAVA_SCAN=off KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "jacoco-dump" \
+  java_with_agents "jacoco-dump" \
+    -Dsmoke.otherWork="${work_dir}/other-work" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "jacoco-dump" derived attached 2>"${dump_log}" || dump_rc=$?
+if [[ "${dump_rc}" -ne 0 ]] \
+  || ! grep -q 'diagnostics: END test-set-0/jacoco-dump took .* dump=' "${dump_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/jacoco-dump-another-copy took .* dump=' "${dump_log}" \
+  || grep -q 'diagnostics: END test-set-0/jacoco-dump.* scan=' "${dump_log}"; then
+  cat "${dump_log}" >&2
+  echo "jacoco-dump: with KEPLOY_JAVA_SCAN=off the ENDs did not take JaCoCo's dump (exit ${dump_rc})" >&2
+  exit 1
+fi
+echo "jacoco-dump: with KEPLOY_JAVA_SCAN=off each END took JaCoCo's dump"
+
+# keploy-sdk.jar as built, on a real Tomcat, with JaCoCo's own agent attached
+# after it and the index holding Tomcat's classes (as an uber jar's does).
+# The jar's manifest lets the SDK's transformer retransform, so the JVM runs
+# JaCoCo's before it, whatever the -javaagent order: JaCoCo ids Tomcat's own
+# CoyoteAdapter, as the index read it, so the record measures it and names
+# no class in classMismatch, and the SDK still counts Tomcat's requests: the
+# servlet's code after the response (Tail) runs while the END waits for the
+# request, and is in the record. The unit rows attach agent jars they write
+# themselves; this case reads the manifest the release ships.
+# The Tomcat keploy-sdk/pom.xml tests with (ServerTailTest's).
+tomcat_version="$(sed -n '/<artifactId>tomcat-embed-core<\/artifactId>/{n;s/.*<version>\([^<]*\)<\/version>.*/\1/p;}' \
+  "${repo_root}/keploy-sdk/pom.xml")"
+if [[ ! "${tomcat_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "tomcat-jacoco-after: keploy-sdk/pom.xml names no tomcat-embed-core version on the line after its artifactId (read '${tomcat_version}')" >&2
+  exit 1
+fi
+for artifact in "org.apache.tomcat.embed:tomcat-embed-core:${tomcat_version}" \
+  "org.apache.tomcat:tomcat-annotations-api:${tomcat_version}"; do
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/tomcat-libs"
+done
+tomcat_core="${work_dir}/tomcat-libs/tomcat-embed-core-${tomcat_version}.jar"
+tomcat_libs="$(find "${work_dir}/tomcat-libs" -name '*.jar' | sort | paste -sd: -)"
+
+mkdir -p "${work_dir}/tomcat-src/smoke" "${work_dir}/tomcat-classes"
+cat > "${work_dir}/tomcat-src/smoke/TomcatHarness.java" <<'JAVA'
+package smoke;
+
+import org.apache.catalina.Context;
+import org.apache.catalina.startup.Tomcat;
+import org.newsclub.net.unix.AFUNIXServerSocket;
+import org.newsclub.net.unix.AFUNIXSocket;
+import org.newsclub.net.unix.AFUNIXSocketAddress;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+public final class TomcatHarness {
+    private static final File CONTROL_SOCKET = new File("/tmp/coverage_control.sock");
+    private static final File DATA_SOCKET = new File("/tmp/coverage_data.sock");
+    private static final String ADAPTER = "org/apache/catalina/connector/CoyoteAdapter";
+
+    // Hello answers, then runs Tail once the END waits for the request
+    // (a thread is in RequestGate.await), or after 1500 ms when none does:
+    // then the END did not wait, and Tail is not in the record.
+    public static final class Hello extends HttpServlet {
+        @Override
+        protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            response.setContentLength(5);
+            response.getWriter().write("hello");
+            response.flushBuffer();
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1500L);
+            try {
+                while (!endWaits() && System.nanoTime() < deadline) {
+                    Thread.sleep(10L);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            Tail.run();
+        }
+
+        private static boolean endWaits() {
+            for (StackTraceElement[] stack : Thread.getAllStackTraces().values()) {
+                for (StackTraceElement frame : stack) {
+                    if ("io.keploy.dedup.RequestGate".equals(frame.getClassName())
+                            && "await".equals(frame.getMethodName())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
+    static final class Tail {
+        static volatile int runs;
+
+        static void run() {
+            runs++;
+        }
+    }
+
+    // main ends the JVM with 1 when a check fails: Tomcat's utility threads
+    // are not daemons, so a check that threw with Tomcat still running would
+    // leave the JVM up, and the case would hang instead of failing.
+    public static void main(String[] args) {
+        try {
+            run(args[0], new File(args[1]));
+        } catch (Throwable t) {
+            t.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void run(String mode, File base) throws Exception {
+        if (!base.mkdirs()) {
+            throw new IllegalStateException("failed to create " + base);
+        }
+        Tomcat tomcat = new Tomcat();
+        tomcat.setBaseDir(base.getPath());
+        tomcat.setPort(0);
+        tomcat.getConnector().setProperty("address", "127.0.0.1");
+        Context context = tomcat.addContext("", base.getPath());
+        Tomcat.addServlet(context, "hello", new Hello());
+        context.addServletMappingDecoded("/hello", "hello");
+        tomcat.start();
+        int port = tomcat.getConnector().getLocalPort();
+
+        if (DATA_SOCKET.exists() && !DATA_SOCKET.delete()) {
+            throw new IllegalStateException("failed to delete " + DATA_SOCKET);
+        }
+        final BlockingQueue<String> records = new LinkedBlockingQueue<String>();
+        Thread receiver = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
+                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
+                    for (;;) {
+                        try (AFUNIXSocket socket = server.accept()) {
+                            records.add(readAll(socket.getInputStream()));
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "coverage-data-receiver");
+        receiver.setDaemon(true);
+        receiver.start();
+        long deadline = System.currentTimeMillis() + 10000L;
+        while (!DATA_SOCKET.exists() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
+
+        String id = "test-set-0/" + mode;
+        command("START " + id);
+        String body = get(port);
+        command("END " + id);
+        String report = next(records, mode);
+        // The JaCoCo measuring is the one attached after keploy-sdk.jar (the
+        // SDK started none of its own), and the index read Tomcat's jar.
+        if (!report.startsWith("{\"kind\":\"index\",")
+                || !report.contains("\"source\":\"override\"")
+                || !report.contains("\"jacoco\":\"attached\"")
+                || !report.matches(".*\"roots\":\\[[^\\]]*tomcat-embed-core-[^\\]]*\\].*")) {
+            throw new IllegalStateException("the first record on the data socket was no INDEX report with source"
+                    + " override, jacoco attached and Tomcat's jar among its roots in " + mode + ": " + report);
+        }
+        String json = next(records, mode);
+        if (!"hello".equals(body)
+                || !json.contains("\"id\":\"" + id + "\"")
+                || !json.contains("\"" + ADAPTER + "\":[")
+                || !json.contains("\"smoke/TomcatHarness$Tail\":[")
+                || json.contains("\"classMismatch\"")) {
+            throw new IllegalStateException("the record of a request to Tomcat, with JaCoCo attached after"
+                    + " keploy-sdk.jar, does not measure " + ADAPTER + " and the servlet's code after the"
+                    + " response with no class in classMismatch in " + mode + " (body " + body + "): " + json);
+        }
+        System.out.println(mode + ": " + json);
+        tomcat.stop();
+        tomcat.destroy();
+    }
+
+    private static String get(int port) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) URI.create("http://127.0.0.1:" + port + "/hello")
+                .toURL().openConnection();
+        connection.setConnectTimeout(10000);
+        connection.setReadTimeout(15000);
+        try (InputStream input = connection.getInputStream()) {
+            return readAll(input);
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private static void command(String command) throws Exception {
+        try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
+            socket.connect(AFUNIXSocketAddress.of(CONTROL_SOCKET), 3000);
+            // The END waits at most KEPLOY_JAVA_END_WAIT_MS (2000) before it ACKs.
+            socket.setSoTimeout(15000);
+            OutputStream output = socket.getOutputStream();
+            output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            String ack = readAll(socket.getInputStream());
+            if (!"ACK proto=2\n".equals(ack)) {
+                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            }
+        }
+    }
+
+    private static String next(BlockingQueue<String> records, String mode) throws InterruptedException {
+        String record = records.poll(10, TimeUnit.SECONDS);
+        if (record == null) {
+            throw new IllegalStateException("timed out waiting for a record on the data socket in " + mode);
+        }
+        return record;
+    }
+
+    private static String readAll(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return new String(output.toByteArray(), StandardCharsets.UTF_8);
+    }
+}
+JAVA
+javac -cp "${tomcat_libs}:${agent_jar}" -d "${work_dir}/tomcat-classes" \
+  "${work_dir}/tomcat-src/smoke/TomcatHarness.java"
+
+tomcat_log="${work_dir}/tomcat-jacoco-after.log"
+tomcat_rc=0
+KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 KEPLOY_JAVA_END_WAIT_MS=2000 \
+KEPLOY_JAVA_CLASS_DIRS="${work_dir}/tomcat-classes:${tomcat_core}" \
+run_smoke "tomcat-jacoco-after" \
+  timeout -k 10 180 java \
+    -javaagent:"${agent_jar}" \
+    -javaagent:"${jacoco_jar}=includes=smoke.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
+    -cp "${work_dir}/tomcat-classes:${tomcat_libs}:${agent_jar}" \
+    smoke.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" 2>"${tomcat_log}" || tomcat_rc=$?
+if [[ "${tomcat_rc}" -eq 124 || "${tomcat_rc}" -eq 137 ]]; then
+  cat "${tomcat_log}" >&2
+  echo "tomcat-jacoco-after: the Tomcat harness was killed or did not end within 180 s (exit ${tomcat_rc}; 137 can also be the OOM killer)" >&2
+  exit 1
+fi
+if [[ "${tomcat_rc}" -ne 0 ]] \
+  || ! grep -q "Keploy dedup counts Tomcat's requests (org.apache.catalina.connector.CoyoteAdapter)" "${tomcat_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/tomcat-jacoco-after took .* requests=' "${tomcat_log}" \
+  || grep -q 'Can-Retransform-Classes' "${tomcat_log}"; then
+  cat "${tomcat_log}" >&2
+  echo "tomcat-jacoco-after: JaCoCo attached after keploy-sdk.jar did not measure Tomcat's own CoyoteAdapter, or the requests were not counted (exit ${tomcat_rc})" >&2
+  exit 1
+fi
+echo "tomcat-jacoco-after: JaCoCo attached after keploy-sdk.jar measured Tomcat's own CoyoteAdapter, and the requests were counted"
+
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
 cat > "${work_dir}/jar/MANIFEST.MF" <<EOF
@@ -378,13 +838,16 @@ java_with_sdk_only() {
       -jar plain-app.jar "sdk-only-plain-jar" derived embedded
 )
 
-# The app's own ASM, Gson and JaCoCo core, in versions other than the ones
-# keploy-sdk.jar carries. keploy-sdk.jar carries its copies renamed under
-# io/keploy/shaded, so the app gets its own and keploy-sdk its own, whichever
-# comes first: the app's on the class path before keploy-sdk.jar (Jib's
-# launch), or the app's in a loader under the system class loader (Spring
-# Boot's BOOT-INF/lib).
-for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9; do
+# The app's own ASM, Gson, JaCoCo core and JaCoCo agent, in versions other
+# than the ones keploy-sdk.jar carries. keploy-sdk.jar carries its copies
+# renamed under io/keploy/shaded, and its jacocoagent.jar under
+# io/keploy/dedup without JaCoCo's AgentJar, so the app gets its own and
+# keploy-sdk its own, whichever comes first: the app's on the class path before
+# keploy-sdk.jar (Jib's launch; the INDEX report names the JaCoCo keploy-sdk
+# started, which must be its own), or the app's in a loader under the system
+# class loader (Spring Boot's BOOT-INF/lib).
+for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9 \
+  org.jacoco:org.jacoco.agent:0.7.9; do
   mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
     -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/app-libs"
 done
@@ -410,6 +873,26 @@ run_smoke "sdk-only-override-names-keploy-sdk" \
   java_with_sdk_only "sdk-only-override-names-keploy-sdk" \
     -cp "${work_dir}/classes:${agent_jar}" \
     smoke.SmokeHarness "sdk-only-override-names-keploy-sdk" override embedded "${app_class_count}"
+
+# The same pass over the JaCoCo keploy-sdk.jar starts itself, the usual case.
+(
+  cd "${work_dir}/maven"
+  KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 run_smoke "sdk-only-in-place-scan" \
+    java_with_sdk_only "sdk-only-in-place-scan" \
+      -Dsmoke.otherWork="${work_dir}/other-work" \
+      -cp "target/classes:${agent_jar}" \
+      smoke.SmokeHarness "sdk-only-in-place-scan" derived embedded
+)
+sdk_scan_log="${work_dir}/sdk-only-in-place-scan.err"
+if ! grep -q 'diagnostics: START test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/sdk-only-in-place-scan took .* scan=' "${sdk_scan_log}" \
+  || ! grep -q 'diagnostics: END test-set-0/sdk-only-in-place-scan-another-copy took .* scan=' "${sdk_scan_log}" \
+  || grep -q 'cannot be read in place\|the probe scan failed' "${sdk_scan_log}"; then
+  cat "${sdk_scan_log}" >&2
+  echo "sdk-only-in-place-scan: the agent did not read its own JaCoCo's probes in place" >&2
+  exit 1
+fi
+echo "sdk-only-in-place-scan: START and END read the probes of the JaCoCo keploy-sdk.jar started in place"
 
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
 cp -R "${work_dir}/classes/." "${work_dir}/boot-root/BOOT-INF/classes/"

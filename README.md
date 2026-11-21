@@ -17,15 +17,23 @@ from and how to raise it.
 Keploy Enterprise drives dynamic dedup per testcase.
 
 1. Enterprise sends `START <test-set>/<test-id>` on `/tmp/coverage_control.sock`.
-2. The Java agent resets JaCoCo coverage counters for that testcase.
+2. The Java agent clears what the application's classes ran since the last testcase. What it clears is background (a health check, a scheduled job): it is never counted in a testcase's coverage.
 3. Enterprise replays the testcase.
 4. Enterprise sends `END <test-set>/<test-id>` on `/tmp/coverage_control.sock`.
-5. The Java agent dumps JaCoCo execution data and sends the executed probe indices per class (`{className -> [probeIdx]}`) as JSON on `/tmp/coverage_data.sock`. Probes capture branch-level coverage (which branch a test took), so they distinguish tests that run the same lines but take different branches.
+5. The Java agent waits until the testcase's requests are done (below), then reads, and clears, the probes of the application's classes that the testcase hit, and sends the executed probe indices per class (`{className -> [probeIdx]}`) as JSON on `/tmp/coverage_data.sock`. Probes capture branch-level coverage (which branch a test took), so they distinguish tests that run the same lines but take different branches.
 6. Enterprise writes the result to `dedupData.yaml` and uses it to identify duplicates.
 
 Coverage is collected at per-testcase granularity, not process granularity.
 
+A server sends a response before it is done with the request: a filter's code after the chain (a request log, an authentication filter's cleanup) runs after Enterprise has the response and has sent `END`. Since 2.2.0 the agent counts the requests of Tomcat (8.5 to 11), Jetty (9.4 to 12.1) and Undertow, Spring Boot's three servers, from where the server starts running a request to where its response is finished, and each async dispatch of it alike, and `END` first waits until every request that came in since the testcase's `START` is done, for at most `KEPLOY_JAVA_END_WAIT_MS` (200 ms by default, 2 s at most). A request that comes in once `END` has come (a readiness probe, a metrics scrape, or a call the testcase's own code makes after its response) is not waited for. Before, `END` read the probes at once, so under load that code was missed, and the next `START` cleared it as background: the same testcase had different coverage from run to run. A request that is done costs `END` nothing, and a request that came in before the `START` (a stream, a request of the testcase before) is never waited for. When the wait reaches its bound, the log says so at WARNING and the testcase's record ends with `"windowCut":true` (after `classMismatch`; left out otherwise): it holds what was read then, a Keploy that reads the flag does not judge that testcase (an older one judges the hits the record holds), and what the next `START` clears is not sent as background. Limits: what the application runs on threads of its own (an async task, an executor's work between two dispatches of an async request, an Undertow completion listener that runs on the IO thread after an async write) is not counted; Netty, and so WebFlux, is not counted, nor is a server whose classes were loaded before the agent started (it is attached to a running JVM) or whose class loader does not see the agent's classes (a module system such as JBoss Modules); the log says once when a testcase's `END` does not wait, and why. To count them, the agent changes the one method of each server that runs a request (Tomcat's `CoyoteAdapter.service` and `asyncDispatch`, Jetty's `HttpChannel.handle` or, on Jetty 12, its servlet channel's `handle`, Undertow's `Connectors.executeRootHandler`) as the class loads: the server's own code moves to a private method `keploy$request$<name>` beside it, which shows in a stack trace and keeps the method's annotations; the method of the old name, which counts the request and calls it, carries none, so reflection that reads the annotations of `service` itself finds none. The agent makes its change after those of every agent that cannot retransform classes, JaCoCo's among them, whatever the order the agents are attached in: a JaCoCo agent attached before or after keploy-sdk.jar, or in `JAVA_TOOL_OPTIONS`, instruments the server's own class, so `classMismatch` never names it for that. When another agent retransforms or redefines the class later (an APM agent, a profiler, a hot-swap tool), the agent makes its change again, unless the new bytes already carry it (a copy taken from the class as the agent changed it).
+
+Since 2.2.0 a testcase's record also names, in `"classMismatch":[className, ...]` after its probes, each class whose probes come from bytes other than the ones the agent indexed: a class loader that weaves the bytes it defines (load-time weaving) or an agent listed before JaCoCo's that does not ask to retransform changed the class before JaCoCo saw it, or the JVM loaded a multi-release jar's versioned copy. JaCoCo's id for such a class is not the CRC64 of the indexed bytes, so its probe indices do not belong to the indexed class, and Keploy must not read them against it. The key is left out when there is no such class. Of two copies of one class (loaded twice, from different bytes) that a testcase ran, the record reports the copy the agent indexed, else the one the coverage manifest already names, else the lowest class id compared as an unsigned number; a BACKGROUND record chooses alike, and names such classes in a `classMismatch` of its own. Every class id the agent writes (the coverage manifest's `id`) is 16 lowercase hex digits since 2.2.0; older agents wrote it unpadded, so read it as a hex number.
+
+With the JaCoCo agent in the application's JVM (the usual case), steps 2 and 5 are one pass over the probe arrays of the application's classes alone, split across up to four threads (half the cores): a probe is cleared only once it was read as hit, so a hit made while the pass runs is reported by that pass or the next one, never lost. Library classes are neither read nor cleared. If JaCoCo's runtime data cannot be read that way, or the pass fails once, the agent uses JaCoCo's own reset and dump for the rest of the run, as it does when JaCoCo is reached over TCP.
+
 Before the first testcase's coverage, the agent sends Enterprise one INDEX record on `/tmp/coverage_data.sock`: a JSON object starting with `{"kind":"index",` that says how it found the application's own classes (`source`: `override` when the dirs and jars in `KEPLOY_JAVA_CLASS_DIRS` held them, `derived` from the launch or from `target/classes` or `build/classes/java/main` under the working directory, `whole-jar` or `classpath` when it could not tell them from the libraries, `none`), what it found them from in words (`launch`), the dirs and jars it read them from (`roots`, at most 64, and `rootCount`), the package roots it kept (`packages`), how many classes it indexed, the build id of those classes (`jv1-` and 32 hex), which JaCoCo agent measures them (`jacoco`: `embedded`, the one keploy-sdk.jar starts, `attached` by the command, `none`, or `unchecked` when the agent was not started as a `-javaagent`), that embedded agent's `includes=`, and two versions as their jars' manifests name them, or `""` when not known: keploy-sdk.jar's (`sdkVersion`) and that of the JaCoCo agent that measures the classes, embedded or attached (`jacocoVersion`). It carries no class list. It is sent as the agent starts when that path's socket file is there (Enterprise's receiver makes it), and otherwise, or when that send fails, right before the first testcase's coverage; a receiver Enterprise binds anew on that path gets it again before its first record. On the TCP transport used in Kubernetes no INDEX record is sent.
+
+Since 2.2.0 Keploy can also ask for that background, to keep it out of what it compares: it sends the line `BACKGROUND` on `/tmp/coverage_control.sock`. The agent answers `ACK` when it reads JaCoCo's probes in place and a receiver is on `/tmp/coverage_data.sock`, and `IGNORED` otherwise (`KEPLOY_JAVA_SCAN=off`, JaCoCo reached over TCP, the in-place read failed, or no receiver), as an older agent answers a line it does not know. The ask holds for this run of the application and that receiver only: an application started again (native `keploy test` starts it again for each test set) and a receiver Enterprise binds anew on that path (the next docker-compose test set) get no record until Keploy asks again, so Keploy asks after each INDEX record, which comes once per start of the application and once per new receiver. From then on, each `START` that cleared hits made since the previous testcase's `END` sends one BACKGROUND record on `/tmp/coverage_data.sock`, right after that `START` is answered (after the INDEX record, when that receiver does not have it yet): `{"kind":"background","v":1,"build":"<the INDEX record's build id>","after":"<the testcase that ended>","before":"<the testcase that starts>","executedLinesByFile":{className:[probeIdx]}}`, under the key and in the shape of a testcase's record (with its `classMismatch`, left out when empty), plus `"lost":N` when the records of the N windows before it could not be made or sent. A window with no hits sends nothing. What ran before the first testcase (the application's start, the warmup) is not background, and neither is what ran after an `END` that was not taken or a `START` whose `END` never came (a testcase's own hits): none of it is sent. A test's own work that goes on after its `END` (an async task it started) lands in the next window, and so is reported as background. A Keploy that never asks gets no record, short of a new receiver that replaces the one that asked within the same instant (the agent tells receivers apart by the socket file's inode and modification time). On the TCP transport used in Kubernetes there is no BACKGROUND.
 
 The agent binds `/tmp/coverage_control.sock` before the application's `main` runs, so the socket is listening before the application can answer a health check. It answers `ACK` to each command it took, and `IGNORED` to an `END` that no `START` for that testcase came before: nothing is published for it, and Enterprise keeps that testcase out of the comparison. On the TCP transport used in Kubernetes the same `END` is answered with `IGNORED <testcase>` and then `ACK`.
 
@@ -75,7 +83,8 @@ test's coverage would be measured. Application code should not import `io.keploy
 java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar
 ```
 
-It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0; see
+It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0,
+unchanged, at `io/keploy/dedup/jacocoagent.jar`; see
 `META-INF/THIRD-PARTY-NOTICES.txt` in the jar) and starts it itself, before the
 app's `main`, with `includes=` set to the app's own classes, which it finds from
 how the JVM was launched (Spring Boot, Jib, shaded and plain jars, class dirs;
@@ -90,19 +99,27 @@ When the SDK cannot tell the app's classes from its libraries, it says so at
 WARNING and starts JaCoCo on every class; set `KEPLOY_JAVA_CLASS_DIRS` to the
 app's class dirs and jars to fix that.
 
+An app that ships its own `org.jacoco.agent` (any JaCoCo version) keeps it, and
+the SDK keeps its own: `keploy-sdk.jar` holds none of that artifact's classes,
+and its `jacocoagent.jar` is not where that artifact's `AgentJar` looks, so the
+SDK starts JaCoCo 0.8.15 whether the app's jar comes before or after
+`keploy-sdk.jar` on the class path, and the app's `AgentJar` reads the app's own
+`jacocoagent.jar`, also in a Spring Boot fat jar.
+
 If the command attaches a JaCoCo agent of its own (`-javaagent:jacocoagent.jar`,
-in any order, or in `JAVA_TOOL_OPTIONS`), the SDK starts none and reads coverage
-from that one, through JaCoCo's in-process runtime API
-(`org.jacoco.agent.rt.RT.getAgent()`). That JaCoCo instruments every class its
-own options take in. If the in-process API is unavailable (for example because
-the JaCoCo agent is loaded into an isolated classloader), the SDK falls back to
-JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in
-`tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
+before or after keploy-sdk.jar, or in `JAVA_TOOL_OPTIONS`), the SDK starts none
+and reads coverage from that one. The SDK reads it through JaCoCo's in-process
+runtime API (`org.jacoco.agent.rt.RT.getAgent()`). That JaCoCo instruments
+every class its own options take in. If the in-process API is unavailable (for
+example because the JaCoCo agent is loaded into an isolated classloader), the
+SDK falls back to JaCoCo's TCP server mode. To use the fallback explicitly,
+start JaCoCo in `tcpserver` mode and set `KEPLOY_JACOCO_HOST` /
+`KEPLOY_JACOCO_PORT`:
 
 ```bash
 java \
-  -javaagent:/path/to/keploy-sdk.jar \
   -javaagent:/path/to/jacocoagent.jar=address=127.0.0.1,port=36320,output=tcpserver \
+  -javaagent:/path/to/keploy-sdk.jar \
   -jar your-app.jar
 ```
 
@@ -153,6 +170,13 @@ supported ceiling is the lower of two limits — not one:
 
 Both currently sit at **Java 26**, so that is the effective ceiling.
 
+The floor is **Java 8**. keploy-sdk's and keploy-junit5's own code is compiled
+for Java 8 (class file version 52), and, when built on JDK 9 or later (the
+releases are built on JDK 17), against Java 8's API too (keploy-sdk since
+2.2.0, keploy-junit5 from its first release): a call in that code to a method
+Java 8 lacks fails the build, instead of failing on Java 8 at run time. The
+check covers this repo's code, not the libraries shaded into `keploy-sdk.jar`.
+
 ### Why this repo is part of the ceiling
 
 It is easy to assume the JaCoCo agent alone decides this. It does not. The dedup
@@ -199,6 +223,10 @@ ceiling does not quietly fall behind again.
 - `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations of the app's own classes. You rarely need it: see "Which classes count as the app's" below
 - `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath when neither the app's own classes nor the executable jar give any class. `false` leaves the index empty then, and no test's coverage is measured. Default: `true`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
+- `KEPLOY_JAVA_DEDUP_DIAGNOSTICS`: when `true`, `1`, or `yes`, logs one line per START and END that says how long the command took and how long each step did: `warmup`, then `scan` (the pass that clears the background) for a START; `requests` (the wait for the test's requests to finish, when one still ran), `scan` (the pass that reads and clears the test's hits), `filter` (the hits made into the test's probes by class), `json` and `send` for an END, plus `classes` on TCP (the check for new app classes, and the class-zip frame when there are some). Where JaCoCo's own reset and dump are used instead, a START has `reset`, and an END has `dump` (JaCoCo's dump), `parse` and `filter` (to the app's classes) in place of `scan` and `filter`; a step that did not run is left out, so an empty dump has only `dump`. A START that cleared background hits also logs how many classes and probes they were. The app's class files are read once: before the app starts, when keploy-sdk.jar starts JaCoCo itself; otherwise on the first START, by the warmup's thread (timed under `warmup`, and, past the 10 seconds that START waits for the warmup, under its `scan`, which waits for the read, or, with JaCoCo's reset and dump, which never wait for it, on the first END whose dump is not empty, under `filter`), or, with the warmup off, under that START's `scan` (or, with JaCoCo's dump, on the first END whose dump is not empty, under `filter`). On the unix socket `took` ends before the answer is written; on TCP it includes the answer. Use it to see where a test's time goes on your app
+- `KEPLOY_JAVA_SCAN`: `off` (in any case) turns the one-pass read of the application's probes off: each testcase then takes JaCoCo's own reset and dump, as when JaCoCo is reached over TCP, a `START` no longer sees background hits, and `BACKGROUND` is answered `IGNORED`. Use it if the in-place read misbehaves on your JVM; at 50k application classes JaCoCo's reset and dump took about 20 ms per testcase in our profile, against under 2 ms with the in-place read. Default: on
+- `KEPLOY_JAVA_END_WAIT_MS`: how long a testcase's `END` waits, at most, for the requests that came in since its `START` to finish (see "How It Works"). `0` turns the wait off, and leaves the servers' classes unchanged: `END` reads the probes at once, as before 2.2.0. At most `2000`: a larger value waits 2000 ms, said once at WARNING, as a longer wait would cost each testcase more than the agent's overhead allows. Default: `200`
+- `KEPLOY_JAVA_DEDUP_WARMUP_DISABLED`: when `true`, `1`, or `yes`, skips the warmup, which loads and initializes the app's own classes once, on the first START, so that no test is charged with their static initializers. It loads them through the class loader the app runs them with, such as a Spring Boot fat jar's own loader (since 2.2.0; before, a fat jar's classes were not warmed up), so every app class not loaded yet is loaded then, and JaCoCo instruments it: on an app with many classes it never uses, that is more class metadata (metaspace) than the app alone would load. It runs on a thread of its own: the first START waits for it for at most 10 seconds, then goes on, and the warmup stops after the class it is initializing. Its static initializer goes on while the tests run, and each line it runs from then on counts in the test running at the time (between two tests, in none: the next START clears it); classes it did not reach initialize when the app first uses them, as with the warmup off. The log says how long the warmup took, and, when the START stopped waiting, which class it was initializing
 
 ## Which classes count as the app's
 
@@ -251,3 +279,12 @@ For a working reference, see the Java dedup sample in `keploy/samples-java`:
 
 That sample is used in CI to validate Java dynamic dedup for JDK 8, 17, and 21 across native, classpath, Docker, distroless, and restricted Docker runs.
 The CI matrix is narrower than the supported range: it pins the runtimes the sample is exercised on, not the ceiling — see [Supported Java versions](#supported-java-versions).
+
+## License
+
+keploy-sdk is under the Apache License 2.0 (`LICENSE`). `keploy-sdk.jar` also
+carries JaCoCo (Eclipse Public License 2.0), the ASM it depends on (BSD
+3-Clause), Gson and junixsocket (Apache License 2.0). The jar holds
+`META-INF/THIRD-PARTY-NOTICES.txt`, which names each in the version the jar
+carries and says where JaCoCo's source is, next to `META-INF/LICENSE` and
+JaCoCo's `META-INF/LICENSE-EPL-2.0.txt`.
