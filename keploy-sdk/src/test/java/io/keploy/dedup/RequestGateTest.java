@@ -2,12 +2,16 @@ package io.keploy.dedup;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -21,6 +25,14 @@ public class RequestGateTest {
     @Before
     public void setUp() {
         RequestGate.open();
+    }
+
+    @After
+    public void tearDown() {
+        // Each row exits a request on the thread that entered it, as a
+        // server does: the test thread is left outside every window.
+        Runnable task = () -> { };
+        assertSame(task, RequestGate.hand(null, task));
     }
 
     @Test
@@ -50,10 +62,20 @@ public class RequestGateTest {
     public void aRequestThatComesInWhileEndWaitsIsNotWaitedFor() throws Exception {
         // A readiness probe or a scrape that comes in during the wait is not
         // the test's: the wait ends when the test's own request is done.
-        final Object tests = RequestGate.enter();
-        final Object[] probe = new Object[1];
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch testsDone = new CountDownLatch(1);
+        final CountDownLatch probeDone = new CountDownLatch(1);
         final Thread waiter = Thread.currentThread();
-        Thread server = new Thread(new Runnable() {
+        Thread tests = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Object request = RequestGate.enter();
+                entered.countDown();
+                awaitQuietly(testsDone);
+                RequestGate.exit(request);
+            }
+        });
+        Thread probe = new Thread(new Runnable() {
             @Override
             public void run() {
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
@@ -61,45 +83,67 @@ public class RequestGateTest {
                         && System.nanoTime() < deadline) {
                     Thread.yield();
                 }
-                probe[0] = RequestGate.enter();
-                RequestGate.exit(tests);
+                Object request = RequestGate.enter();
+                testsDone.countDown();
+                awaitQuietly(probeDone);
+                RequestGate.exit(request);
             }
         });
-        server.start();
+        tests.start();
+        assertTrue(entered.await(30, TimeUnit.SECONDS));
+        probe.start();
         long began = System.nanoTime();
         assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(60)));
         assertTrue(System.nanoTime() - began < TimeUnit.SECONDS.toNanos(30));
-        server.join();
+        tests.join();
         assertEquals("the probe counts in the window after the END", 1, RequestGate.running());
-        RequestGate.exit(probe[0]);
+        probeDone.countDown();
+        probe.join();
         assertEquals(0, RequestGate.running());
     }
 
     @Test
     public void theWaitEndsWhenTheLastRequestIsDoneNotAtItsBound() throws Exception {
-        final Object first = RequestGate.enter();
-        final Object second = RequestGate.enter();
+        final CountDownLatch entered = new CountDownLatch(1);
+        // When the last request began to exit: the wait must end after it.
+        final AtomicLong lastExit = new AtomicLong();
         Thread finishing = new Thread(new Runnable() {
             @Override
             public void run() {
+                Object first = RequestGate.enter();
+                Object second = RequestGate.enter();
+                entered.countDown();
                 try {
                     Thread.sleep(50);
-                    RequestGate.exit(first);
-                    Thread.sleep(50);
                     RequestGate.exit(second);
+                    Thread.sleep(50);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                } finally {
+                    lastExit.set(System.nanoTime());
+                    RequestGate.exit(first);
                 }
             }
         });
         finishing.start();
+        assertTrue(entered.await(30, TimeUnit.SECONDS));
         long began = System.nanoTime();
         assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(60)));
-        long took = System.nanoTime() - began;
+        long returned = System.nanoTime();
+        long took = returned - began;
         assertTrue("woken when the count reached 0, not at the bound: " + took,
                 took < TimeUnit.SECONDS.toNanos(30));
-        assertTrue("not before the second was done", took >= TimeUnit.MILLISECONDS.toNanos(90));
+        long exited = lastExit.get();
+        assertTrue("not before the last request was done", exited != 0 && returned - exited >= 0);
         finishing.join();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test
@@ -111,10 +155,11 @@ public class RequestGateTest {
             assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(20)));
             // Done after the START: it does not count in the new window.
             Object during = RequestGate.enter();
-            RequestGate.exit(before);
-            before = null;
             assertEquals(1, RequestGate.running());
             RequestGate.exit(during);
+            assertEquals(0, RequestGate.running());
+            RequestGate.exit(before);
+            before = null;
             assertEquals(0, RequestGate.running());
         } finally {
             RequestGate.exit(before);

@@ -25,6 +25,8 @@ import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
+import org.example.jobs.PriorityPool;
+import org.example.servers.AsyncTail;
 import org.example.servers.HelloServlet;
 import org.example.servers.Retransformer;
 import org.example.servers.ServerApp;
@@ -47,6 +49,7 @@ import org.junit.rules.TemporaryFolder;
 public class ServerTailTest {
 
     private static final String TAIL = Tail.class.getName().replace('.', '/');
+    private static final String ASYNC_TAIL = AsyncTail.class.getName().replace('.', '/');
     private static final String ADAPTER = "org.apache.catalina.connector.CoyoteAdapter";
 
     @Rule
@@ -124,14 +127,20 @@ public class ServerTailTest {
     public void withTheWaitOffTheEndMissesTheFiltersCode() throws Exception {
         // As before 2.2.0: the record has the servlet, not the filter's tail.
         Fork fork = new Fork("tomcat", "0", 1500);
-        fork.tests = 2;
+        fork.queries.add("tail=1500");
+        // Nor does work handed to Spring: no request counts, so the executors' change counts only a job's
+        // hand-offs.
+        fork.queries.add("tail=1500&async=event&sleep=10");
         Result result = run(fork);
         for (String cov : result.covs) {
             assertTrue(cov, cov.contains("\"" + HelloServlet.class.getName().replace('.', '/') + "\""));
             assertFalse(cov, cov.contains("\"" + TAIL + "\""));
             assertFalse(cov, cov.contains("windowCut"));
         }
-        assertFalse(result.log, result.log.contains("Keploy dedup counts"));
+        assertFalse(result.log, result.log.contains("Keploy dedup counts Tomcat"));
+        assertTrue(result.log, result.log.contains("Keploy dedup counts Spring's async tasks"
+                + " (org.springframework.core.task.SimpleAsyncTaskExecutor): a task a scheduled job's run hands off"
+                + " counts as that run"));
         assertFalse(result.log, endLine(result.log).contains(" requests="));
         String why = "a test's END does not wait for its requests to finish: KEPLOY_JAVA_END_WAIT_MS is 0";
         assertTrue(result.log, result.log.contains(why));
@@ -168,7 +177,7 @@ public class ServerTailTest {
         assertTrue(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
         assertTrue(result.log, result.log.contains("WARNING: Keploy dedup: the jar keploy-sdk.jar runs from has no"
                 + " Can-Retransform-Classes: true in its manifest, or this JVM cannot retransform, so a JaCoCo agent"
-                + " attached after it instruments the server classes it changes"));
+                + " attached after it instruments the server, scheduler and Spring executor classes it changes"));
     }
 
     @Test
@@ -250,6 +259,117 @@ public class ServerTailTest {
         assertTrue(result.log, result.log.contains("test-set-0/test-1's requests still ran 100 ms after its END"));
     }
 
+    @Test
+    public void theWorkARequestHandsToSpringLandsInItsTestAndAPollersDoesNot() throws Exception {
+        // Each runs AsyncTail 500 ms after the request handed it off, well
+        // after the response: an event to an async multicaster (Fineract's
+        // SimpleAsyncTaskExecutor), a task given to a ThreadPoolTaskExecutor
+        // (submit, execute, submitListenable) or to a SimpleAsyncTaskExecutor
+        // with a concurrency limit, and an @Async call on a plain pool that
+        // returns nothing or a CompletableFuture. A scheduler's poller
+        // publishes the event while the test's window is open (the request
+        // waits for it): END does not wait for it.
+        assertSpringHandOffs(new Fork("tomcat", "2000", 0), "scheduled");
+    }
+
+    @Test
+    public void springSixCountsTheSameHandOffs() throws Exception {
+        // The same on Spring 6.2 (Spring Boot 3.4's), which needs Java 17:
+        // its throttled SimpleAsyncTaskExecutor wraps the task in a
+        // TaskTrackingRunnable, @Async's CompletableFuture goes through
+        // the executor's submitCompletable, and the poller of 6.1's
+        // SimpleAsyncTaskScheduler, a SimpleAsyncTaskExecutor itself, is
+        // started in the changed doExecute by its trigger thread.
+        String spec = System.getProperty("java.specification.version");
+        Assume.assumeTrue("Spring 6 needs Java 17", !spec.startsWith("1.") && Integer.parseInt(spec) >= 17);
+        File target = new File(ServerTailTest.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+                .getParentFile();
+        Fork fork = new Fork("tomcat", "2000", 0);
+        fork.springJars = new File(target, "spring6");
+        File[] jars = fork.springJars.listFiles((dir, name) -> name.endsWith(".jar"));
+        assertTrue("no Spring 6 jars in " + fork.springJars + " (the build's spring6-rows profile copies them)",
+                jars != null && jars.length == 8);
+        assertSpringHandOffs(fork, "scheduled", "simplescheduled");
+    }
+
+    // assertSpringHandOffs runs a test for each way AsyncWork hands work to
+    // Spring, then one for each poller named: each hand-off's work lands in
+    // its test, and no poller's is waited for.
+    private void assertSpringHandOffs(Fork fork, String... pollers) throws Exception {
+        String[] counted = {"event", "pool", "execute", "listenable", "async", "completable", "throttled"};
+        for (String how : counted) {
+            fork.queries.add("async=" + how + "&sleep=500");
+        }
+        for (String poller : pollers) {
+            fork.queries.add("async=" + poller + "&sleep=4000");
+        }
+        Result result = run(fork);
+        assertEquals(result.log, fork.queries.size(), result.covs.size());
+        for (int test = 0; test < counted.length; test++) {
+            String cov = result.covs.get(test);
+            assertTrue(fork.queries.get(test) + ": " + cov, cov.contains("\"" + ASYNC_TAIL + "\""));
+            assertFalse(fork.queries.get(test) + ": " + cov, cov.contains("windowCut"));
+        }
+        for (int test = counted.length; test < fork.queries.size(); test++) {
+            String polled = result.covs.get(test);
+            assertFalse(fork.queries.get(test) + ": " + polled, polled.contains("\"" + ASYNC_TAIL + "\""));
+            assertFalse("END did not wait for the poller's event: " + polled, polled.contains("windowCut"));
+        }
+        for (String broken : new String[] {"VerifyError", "LinkageError", "NoSuchMethodError", "NoClassDefFoundError",
+            "Exception in thread"}) {
+            assertFalse(result.log, result.log.contains(broken));
+        }
+        for (String executor : new String[] {"org.springframework.core.task.SimpleAsyncTaskExecutor",
+            "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor",
+            "org.springframework.aop.interceptor.AsyncExecutionAspectSupport"}) {
+            assertTrue(result.log, result.log.contains("Keploy dedup counts Spring's async tasks (" + executor
+                    + "): a test's END waits for the tasks its requests hand off to finish"));
+        }
+    }
+
+    @Test
+    public void workARequestHandsToSpringPastTheWaitCutsTheEnd() throws Exception {
+        Fork fork = new Fork("tomcat", "100", 0);
+        fork.queries.add("async=event&sleep=4000");
+        Result result = run(fork);
+        assertFalse(result.cov, result.cov.contains("\"" + ASYNC_TAIL + "\""));
+        assertTrue(result.cov, result.cov.endsWith(",\"windowCut\":true}"));
+        assertTrue(result.log, result.log.contains("test-set-0/test-1's requests still ran 100 ms after its END"));
+    }
+
+    @Test
+    public void aRequestsTasksForAPriorityPoolGoAsTheyAre() throws Exception {
+        // Two requests hand an app's priority pool its tasks, which its
+        // queue's Comparator casts to the app's type: they go as they are,
+        // so execute does not throw and the queue's order is kept (each
+        // request answers "hello"), and the log says once that the pool's
+        // tasks are not counted. Wrapped, execute threw ClassCastException.
+        Fork fork = new Fork("tomcat", "2000", 0);
+        fork.queries.add("async=priority&sleep=0");
+        fork.queries.add("async=priority&sleep=0");
+        Result result = run(fork);
+        assertEquals(result.log, 2, result.covs.size());
+        String said = "Keploy dedup does not count the tasks handed to " + PriorityPool.class.getName()
+                + "$Pool: its pool's queue, a java.util.concurrent.PriorityBlockingQueue, may order its tasks by"
+                + " their own type, so each reaches it as it is";
+        assertTrue(result.log, result.log.contains(said));
+        assertEquals(result.log, result.log.indexOf(said), result.log.lastIndexOf(said));
+        for (String cov : result.covs) {
+            assertFalse(cov, cov.contains("windowCut"));
+        }
+    }
+
+    @Test
+    public void anAppWithoutSpringRunsAsBefore() throws Exception {
+        Fork fork = new Fork("tomcat", "2000", 500);
+        fork.noSpring = true;
+        Result result = run(fork);
+        assertTrue(result.cov, result.cov.contains("\"" + TAIL + "\""));
+        assertFalse(result.cov, result.cov.contains("windowCut"));
+        assertFalse(result.log, result.log.contains("Keploy dedup counts Spring"));
+        assertFalse(result.log, result.log.contains("NoClassDefFoundError") || result.log.contains("ClassNotFound"));
+    }
+
     private static final class Result {
         String cov;
         final List<String> covs = new ArrayList<>();
@@ -265,7 +385,10 @@ public class ServerTailTest {
     // in JAVA_TOOL_OPTIONS); retransformer, when not null, attaches
     // Retransformer with it as its args ("load": before the SDK; "" and
     // "redefine": after it); without retransformable, the SDK's jar has no
-    // Can-Retransform-Classes.
+    // Can-Retransform-Classes; queries, when not empty, are the query of
+    // each test's request in turn (one test each) instead of ?tail=; with
+    // noSpring, Spring's jars are not on the app's class path; with
+    // springJars, the jars there are on it in place of the test's Spring.
     private static final class Fork {
         final String server;
         final String endWait;
@@ -276,6 +399,9 @@ public class ServerTailTest {
         String jacoco;
         String retransformer;
         boolean retransformable = true;
+        final List<String> queries = new ArrayList<>();
+        boolean noSpring;
+        File springJars;
 
         Fork(String server, String endWait, long tailMillis) {
             this.server = server;
@@ -293,10 +419,11 @@ public class ServerTailTest {
     private Result run(Fork fork) throws Exception {
         String server = fork.server;
         long tailMillis = fork.tailMillis;
-        int tests = fork.tests;
+        int tests = fork.queries.isEmpty() ? fork.tests : fork.queries.size();
         boolean modules = fork.modules;
         File classes = tmp.newFolder();
-        for (Class<?> app : new Class<?>[] {ServerApp.class, HelloServlet.class, TailFilter.class, Tail.class}) {
+        for (Class<?> app : new Class<?>[] {ServerApp.class, HelloServlet.class, TailFilter.class, Tail.class,
+                AsyncTail.class}) {
             String key = app.getName().replace('.', '/') + ".class";
             File copy = new File(classes, key);
             copy.getParentFile().mkdirs();
@@ -338,7 +465,15 @@ public class ServerTailTest {
                 String entry = new File(path).getAbsolutePath();
                 String jar = new File(entry).getName();
                 boolean tomcat = jar.startsWith("tomcat-embed-core-") || jar.startsWith("tomcat-annotations-api-");
+                if ((fork.noSpring || fork.springJars != null) && jar.startsWith("spring-")) {
+                    continue;
+                }
                 (modules && tomcat ? modulePath : classPath).add(entry);
+            }
+            if (fork.springJars != null) {
+                for (File jar : fork.springJars.listFiles((dir, name) -> name.endsWith(".jar"))) {
+                    classPath.add(jar.getAbsolutePath());
+                }
             }
             if (modules) {
                 assertEquals(modulePath.toString(), 2, modulePath.size());
@@ -384,7 +519,8 @@ public class ServerTailTest {
                     for (int test = 1; test <= tests; test++) {
                         send(out, "START test-set-0/test-" + test);
                         assertEquals("ACK", in.readLine());
-                        assertEquals("hello", get(port, "/hello?tail=" + tailMillis));
+                        String query = fork.queries.isEmpty() ? "tail=" + tailMillis : fork.queries.get(test - 1);
+                        assertEquals("hello", get(port, "/hello?" + query));
                         send(out, "END test-set-0/test-" + test);
                         String cov = in.readLine();
                         assertTrue(cov, cov != null && cov.startsWith("COV "));

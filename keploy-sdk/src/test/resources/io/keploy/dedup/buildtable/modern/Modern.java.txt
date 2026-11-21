@@ -1,0 +1,101 @@
+package io.keploy.modern;
+
+import java.util.List;
+import java.util.function.IntUnaryOperator;
+
+/** Java 17 and 21 code shapes for the probe map's rows (javac --release 21 -g). */
+public class Modern {
+
+    sealed interface Shape permits Circle, Square, Rect {
+    }
+
+    record Circle(int r) implements Shape {
+    }
+
+    record Square(int side) implements Shape {
+    }
+
+    record Rect(int w, int h) implements Shape {
+        Rect {
+            if (w < 0 || h < 0) {
+                throw new IllegalArgumentException("negative");
+            }
+        }
+    }
+
+    enum Color { RED, GREEN, BLUE }
+
+    record Pair(Object left, Object right) {
+    }
+
+    static int area(Shape s) {
+        return switch (s) {
+            case Circle c when c.r() > 10 -> 3 * c.r() * c.r() + 1;
+            case Circle c -> 3 * c.r() * c.r();
+            case Square q -> q.side() * q.side();
+            case Rect(int w, int h) when w == h -> w * w;
+            case Rect(int w, int h) -> w * h;
+        };
+    }
+
+    static int weight(Color c) {
+        return switch (c) {
+            case RED -> 1;
+            case GREEN -> 2;
+            case BLUE -> 3;
+        };
+    }
+
+    static int code(String s) {
+        return switch (s) {
+            case "a", "b" -> 1;
+            case "c" -> {
+                int n = s.length();
+                yield n + 2;
+            }
+            default -> {
+                if (s.isEmpty()) {
+                    yield 0;
+                }
+                yield -1;
+            }
+        };
+    }
+
+    static String describe(Object o) {
+        if (o instanceof Integer i && i > 0) {
+            return "positive " + i;
+        }
+        if (!(o instanceof String s)) {
+            return "other";
+        }
+        return s.isBlank() ? "blank" : s;
+    }
+
+    static int nested(Pair p) {
+        if (p instanceof Pair(Integer a, Integer b)) {
+            return a + b;
+        }
+        return switch (p.left()) {
+            case null -> -1;
+            case String s when s.length() > 3 -> s.length();
+            case String s -> 0;
+            default -> 1;
+        };
+    }
+
+    static int guarded(List<String> xs) {
+        int total = 0;
+        try {
+            for (String x : xs) {
+                total += code(x);
+            }
+        } catch (IllegalStateException e) {
+            total = -2;
+        } finally {
+            total++;
+        }
+        IntUnaryOperator twice = v -> v > 100 ? v : v * 2;
+        return twice.applyAsInt(total);
+    }
+}

@@ -437,7 +437,9 @@ public class AppIndexTest {
         String build = "";
         if (classes > 0) {
             String hex = String.format("%016x", CRC64.classId(new byte[] {1}));
-            build = "jv1-" + sha256(hex).substring(0, 32);
+            // Keploy's codecoverage.JavaBuildID bytes: the table format, the analyzer's JaCoCo release, then the ids.
+            build = "jv1-" + sha256("keploy-java-table 1\njacoco " + IndexReportTest.jacocoCore() + "\n" + hex)
+                    .substring(0, 32);
         }
         assertEquals(index.toString(), build, index.get("build").getAsString());
         // start() is not premain: it starts no JaCoCo and looks for none.
