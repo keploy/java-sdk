@@ -12,6 +12,7 @@ public class ReportJob implements Job {
     @Override
     public void execute(JobExecutionContext context) {
         Work.report();
+        Events.fromJob();
         ran.countDown();
     }
 }

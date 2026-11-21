@@ -127,7 +127,8 @@ public class ServerTailTest {
         // As before 2.2.0: the record has the servlet, not the filter's tail.
         Fork fork = new Fork("tomcat", "0", 1500);
         fork.queries.add("tail=1500");
-        // Nor does work handed to Spring, so no executor changes.
+        // Nor does work handed to Spring: no request counts, so the executors' change counts only a job's
+        // hand-offs.
         fork.queries.add("tail=1500&async=event&sleep=10");
         Result result = run(fork);
         for (String cov : result.covs) {
@@ -135,7 +136,10 @@ public class ServerTailTest {
             assertFalse(cov, cov.contains("\"" + TAIL + "\""));
             assertFalse(cov, cov.contains("windowCut"));
         }
-        assertFalse(result.log, result.log.contains("Keploy dedup counts"));
+        assertFalse(result.log, result.log.contains("Keploy dedup counts Tomcat"));
+        assertTrue(result.log, result.log.contains("Keploy dedup counts Spring's async tasks"
+                + " (org.springframework.core.task.SimpleAsyncTaskExecutor): a task a scheduled job's run hands off"
+                + " counts as that run"));
         assertFalse(result.log, endLine(result.log).contains(" requests="));
         String why = "a test's END does not wait for its requests to finish: KEPLOY_JAVA_END_WAIT_MS is 0";
         assertTrue(result.log, result.log.contains(why));
@@ -172,7 +176,7 @@ public class ServerTailTest {
         assertTrue(result.cov, mismatched(result.cov).contains("org/apache/catalina/connector/CoyoteAdapter"));
         assertTrue(result.log, result.log.contains("WARNING: Keploy dedup: the jar keploy-sdk.jar runs from has no"
                 + " Can-Retransform-Classes: true in its manifest, or this JVM cannot retransform, so a JaCoCo agent"
-                + " attached after it instruments the server and scheduler classes it changes"));
+                + " attached after it instruments the server, scheduler and Spring executor classes it changes"));
     }
 
     @Test

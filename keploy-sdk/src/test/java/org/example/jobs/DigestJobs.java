@@ -20,5 +20,6 @@ public class DigestJobs {
             hold.await();
         }
         Work.digest();
+        Events.fromJob();
     }
 }

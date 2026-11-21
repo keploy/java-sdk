@@ -2,6 +2,7 @@ package io.keploy.dedup;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -422,8 +424,42 @@ public class CoverageTcpClientTest {
     // frame: Keploy still gets the COV, then the ACK. The row also checks that
     // the failure reached END's own handler, so it fails, and asks for another
     // fault, once this one stops escaping the frame's build.
-    @Test
-    public void anEndWhoseClassesFrameFailsStillSendsItsCovThenAck() throws Exception {
+    @Test(timeout = 60000)
+    public void aJobThatStartsWhileEndWaitsForTheRequestsOrReadsTheHitsIsNamed() throws Exception {
+        // The longest wait: END waits for the request until this row lets it go.
+        System.setProperty(END_WAIT_PROPERTY, "2000");
+        jacoco = new FakeJacoco();
+        System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            InputStream in = sdk.getInputStream();
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK\n", readReply(in));
+            jacoco.onDump = () -> JobGate.exit(JobGate.enter(new Object(), "scheduled"));
+            Object request = RequestGate.enter();
+            try {
+                send(out, "END test-set-0/test-1");
+                // END took the window it waits on: the request no longer counts in the current one.
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+                while (RequestGate.running() != 0) {
+                    assertTrue("END never waited for the request", System.nanoTime() < deadline);
+                    Thread.sleep(1);
+                }
+                JobGate.exit(JobGate.enter(new Object(), "quartz"));
+            } finally {
+                RequestGate.exit(request);
+            }
+            String reply = readReply(in);
+            assertFalse("END did not reach its bound: " + reply, reply.contains("windowCut"));
+            assertTrue(reply, reply.endsWith(
+                    ",\"contaminated\":[\"quartz:java.lang.Object\",\"scheduled:java.lang.Object\"]}\nACK\n"));
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void anEndWhoseClassesFrameFailsStillSendsItsCovThenAckAndWarnsOncePerConnection() throws Exception {
         assumeTrue("the build tag is read from the environment", System.getenv("KEPLOY_BUILD_TAG") == null);
         inProcessJacoco();
         assertTrue(KeployDedupAgent.start());
@@ -447,31 +483,52 @@ public class CoverageTcpClientTest {
         };
         logger.setLevel(Level.FINE);
         logger.addHandler(handler);
-        try (Socket sdk = collector.accept()) {
-            sdk.setSoTimeout(30000);
-            OutputStream out = sdk.getOutputStream();
-            InputStream in = sdk.getInputStream();
-            send(out, "START test-set-0/test-1");
-            assertEquals("ACK\n", readReply(in));
-            BuildTagUnreadable unreadable = new BuildTagUnreadable(jvm);
-            System.setProperties(unreadable);
-            send(out, "END test-set-0/test-1");
-            String reply = readReply(in);
-            assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-1\"") && reply.endsWith("}\nACK\n"));
-            assertEquals("COV, ACK and the end of the reply: " + reply, 3, reply.split("\n", -1).length);
-            assertTrue("the build tag's read threw", unreadable.thrown.get() > 0);
-            boolean escaped = false;
-            for (LogRecord record : logged) {
-                escaped |= "Failed to send the COV or CLASSES frame for test-set-0/test-1".equals(record.getMessage())
-                        && record.getThrown() instanceof IllegalStateException
-                        && "the build tag cannot be read".equals(record.getThrown().getMessage());
+        BuildTagUnreadable unreadable = new BuildTagUnreadable(jvm);
+        try {
+            // Two tests on a connection, then one on the next: each connection warns once, at its first.
+            for (int connection = 1, test = 1; connection <= 2; connection++) {
+                try (Socket sdk = collector.accept()) {
+                    sdk.setSoTimeout(30000);
+                    OutputStream out = sdk.getOutputStream();
+                    InputStream in = sdk.getInputStream();
+                    for (int last = test + (connection == 1 ? 2 : 1); test < last; test++) {
+                        String id = "test-set-0/test-" + test;
+                        System.setProperties(jvm);
+                        send(out, "START " + id);
+                        assertEquals("ACK\n", readReply(in));
+                        System.setProperties(unreadable);
+                        int thrown = unreadable.thrown.get();
+                        send(out, "END " + id);
+                        String reply = readReply(in);
+                        assertTrue(reply, reply.startsWith("COV {\"id\":\"" + id + "\"") && reply.endsWith("}\nACK\n"));
+                        assertEquals("COV, ACK and the end of the reply: " + reply, 3, reply.split("\n", -1).length);
+                        assertTrue("the build tag's read threw", unreadable.thrown.get() > thrown);
+                        assertEquals("connection " + connection + ", " + id + ": " + warnings(logged),
+                                connection, warnings(logged).size());
+                    }
+                }
             }
-            assertTrue("the build tag's failure reached END's handler", escaped);
+            for (LogRecord record : warnings(logged)) {
+                assertTrue(String.valueOf(record.getThrown()), record.getThrown() instanceof IllegalStateException
+                        && "the build tag cannot be read".equals(record.getThrown().getMessage()));
+            }
         } finally {
             System.setProperties(jvm);
             logger.removeHandler(handler);
             logger.setLevel(level);
         }
+    }
+
+    // warnings are the WARNING records that say a CLASSES frame could not be built.
+    private static List<LogRecord> warnings(List<LogRecord> logged) {
+        List<LogRecord> out = new java.util.ArrayList<>();
+        for (LogRecord record : logged) {
+            if (record.getLevel() == Level.WARNING && record.getMessage() != null
+                    && record.getMessage().startsWith("Keploy dedup: could not build the CLASSES or MANIFEST frame")) {
+                out.add(record);
+            }
+        }
+        return out;
     }
 
     // The JVM's system properties, but a read of the build tag throws.

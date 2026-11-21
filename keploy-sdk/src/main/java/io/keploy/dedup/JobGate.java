@@ -25,6 +25,15 @@ import java.util.Set;
  * test and still runs at its START counts in it, and one that ended before
  * the START does not (the START clears what it ran).
  *
+ * <p>The work a job's run hands to a Spring TaskExecutor (an event listener
+ * on an async multicaster, a task submitted to a ThreadPoolTaskExecutor,
+ * an {@code @Async} method) counts as a run of that job, named the same,
+ * from when the task starts until it returns or throws: RequestGate's
+ * {@link RequestGate#hand(Runnable)} wraps it as the job's when the thread
+ * handing it off is in the job's run, so a test whose window the task runs in is marked
+ * with the job even when the job's own run ended before the test began.
+ * What that task hands off counts the same way.
+ *
  * <p>Jobs the app runs on threads of its own, a custom executor or a
  * {@code java.util.Timer} are not seen, and neither are message listeners or
  * a request's async work that runs past its END.
@@ -48,6 +57,9 @@ public final class JobGate {
     // opens is either seen running by the opening or sees the window open.
     private static final Set<Run> RUNNING = new HashSet<>();
     private static Window window;
+    // The run this thread is in: a job's own, or that of a task a job's run
+    // handed off; null on any other thread.
+    private static final ThreadLocal<Run> CURRENT = new ThreadLocal<>();
 
     private JobGate() {
     }
@@ -63,13 +75,8 @@ public final class JobGate {
     public static Object enter(Object job, String kind) {
         Run run = null;
         try {
-            run = new Run(name(job, kind));
-            synchronized (LOCK) {
-                RUNNING.add(run);
-                if (window != null) {
-                    window.mark(run.name);
-                }
-            }
+            run = new Run(name(job, kind), CURRENT.get());
+            begin(run);
         } catch (Throwable t) {
             // The job runs on. A run counted as going on before this (an
             // OutOfMemoryError on the job's thread as the window counts it)
@@ -77,6 +84,39 @@ public final class JobGate {
             // every later window would name it.
         }
         return run;
+    }
+
+    // enterAs counts a task a job's run handed off as a run of that job, as
+    // enter does, from when the task starts; exit counts it done. Never
+    // throws, as enter.
+    static Object enterAs(String name) {
+        Run run = null;
+        try {
+            run = new Run(name, CURRENT.get());
+            begin(run);
+        } catch (Throwable t) {
+            // As in enter: the task runs on, and a run counted is handed back.
+        }
+        return run;
+    }
+
+    // begin counts run as going on, in the window open now if any, and as
+    // the run this thread is in until its exit.
+    private static void begin(Run run) {
+        synchronized (LOCK) {
+            RUNNING.add(run);
+            if (window != null) {
+                window.mark(run.name);
+            }
+        }
+        CURRENT.set(run);
+    }
+
+    // running is the name of the job whose run this thread is in (the job's
+    // own, or a task it handed off), or null when it is in none.
+    static String running() {
+        Run run = CURRENT.get();
+        return run == null ? null : run.name;
     }
 
     /**
@@ -87,8 +127,26 @@ public final class JobGate {
      */
     public static void exit(Object token) {
         if (token instanceof Run) {
+            Run run = (Run) token;
             synchronized (LOCK) {
-                RUNNING.remove(token);
+                RUNNING.remove(run);
+            }
+            run.over = true;
+            // The thread is back in the run it was in before, if any. A run
+            // exited out of order leaves the thread in the run it is in, and
+            // never puts it back in a run that is over: else each task the
+            // thread hands off from then on would name that job.
+            if (CURRENT.get() != run) {
+                return;
+            }
+            Run back = run.outer;
+            while (back != null && back.over) {
+                back = back.outer;
+            }
+            if (back == null) {
+                CURRENT.remove();
+            } else {
+                CURRENT.set(back);
             }
         }
     }
@@ -167,9 +225,14 @@ public final class JobGate {
     private static final class Run {
 
         private final String name;
+        // The run the thread was in when this one began, or null.
+        private final Run outer;
+        // Whether its exit came; only its own thread reads or sets it.
+        private boolean over;
 
-        private Run(String name) {
+        private Run(String name, Run outer) {
             this.name = name;
+            this.outer = outer;
         }
     }
 

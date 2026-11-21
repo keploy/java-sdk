@@ -67,6 +67,24 @@ final class Schedulers {
                     throw new IllegalStateException("the @Scheduled method did not start");
                 }
                 return;
+            case "quartz-publish":
+                Events.arm(false);
+                run("quartz");
+                return;
+            case "spring-publish-hold":
+                Events.arm(true);
+                run("spring");
+                Events.awaitEntered();
+                return;
+            case "listener-block":
+                Events.block();
+                return;
+            case "listener-unblock":
+                Events.unblock();
+                return;
+            case "listener-done":
+                Events.finish();
+                return;
             case "spring-release":
                 CountDownLatch release = DigestJobs.release;
                 DigestJobs.release = null;
@@ -81,5 +99,6 @@ final class Schedulers {
     void close() throws Exception {
         quartz.shutdown(true);
         context.close();
+        Events.close();
     }
 }

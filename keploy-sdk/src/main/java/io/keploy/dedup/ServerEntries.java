@@ -64,8 +64,9 @@ import org.objectweb.asm.Type;
  * and {@code @Async}'s interceptor that take a task become methods that
  * hand the task to RequestGate, then call their own code, renamed
  * {@code keploy$async$<name>}, with what RequestGate gave back, and when that
- * throws, tell RequestGate the task was dropped. Those count only when END
- * waits for requests.
+ * throws, tell RequestGate the task was dropped. A task a job's run hands
+ * off counts as that run whether or not END waits for requests; a
+ * request's counts only when it does (servers are changed only then).
  */
 final class ServerEntries implements ClassFileTransformer {
 
@@ -188,7 +189,10 @@ final class ServerEntries implements ClassFileTransformer {
             }
             return null;
         }
-        if (entry.job == null && !requests) {
+        // With the wait off, servers are left as they are, and so no task
+        // counts as a request's; the executors still count a task a job's
+        // run hands off as that run (RequestGate.hand).
+        if (entry.job == null && !entry.async && !requests) {
             return null;
         }
         String name = className.replace('/', '.');
@@ -201,7 +205,7 @@ final class ServerEntries implements ClassFileTransformer {
             }
             if (!seesGate(loader)) {
                 LOGGER.log(Level.WARNING, "Keploy dedup does not count " + entry.what() + ": the class loader of "
-                        + name + " does not see keploy-sdk.jar's classes, so " + entry.lost());
+                        + name + " does not see keploy-sdk.jar's classes, so " + entry.lost(requests));
                 return null;
             }
             // Bytes that already carry the change (another agent's copy of
@@ -224,7 +228,8 @@ final class ServerEntries implements ClassFileTransformer {
                 }
                 names.add(className);
             }
-            LOGGER.log(Level.INFO, "Keploy dedup counts " + entry.what() + " (" + name + "): " + entry.effect());
+            LOGGER.log(Level.INFO, "Keploy dedup counts " + entry.what() + " (" + name + "): "
+                    + entry.effect(requests));
             return wrapped;
         } catch (Throwable t) {
             // Never fail the server's class: it loads unchanged.
@@ -353,16 +358,21 @@ final class ServerEntries implements ClassFileTransformer {
         }
 
         // effect is what counting them does.
-        private String effect() {
-            return async ? "a test's END waits for the tasks its requests hand off to finish, as for the requests"
+        private String effect(boolean requests) {
+            String jobs = "a task a scheduled job's run hands off counts as that run, so a test whose window it"
+                    + " runs in is marked contaminated in its record";
+            return async ? (requests ? "a test's END waits for the tasks its requests hand off to finish, as for"
+                    + " the requests, and " + jobs : jobs)
                     : job == null ? "a test's END waits for them to finish"
                     : "a test whose window a run overlaps is marked contaminated in its record, and Keploy does"
                     + " not judge it";
         }
 
         // lost is what is lost when they cannot be counted.
-        private String lost() {
-            return async ? "a test's END reads its hits without waiting for the tasks its requests hand off"
+        private String lost(boolean requests) {
+            String jobs = "a test is not marked contaminated when work a scheduled job hands off runs in its window";
+            return async ? (requests ? "a test's END reads its hits without waiting for the tasks its requests"
+                    + " hand off, and " + jobs : jobs)
                     : job == null ? "a test's END reads its hits without waiting for its requests to finish"
                     : "a test a job runs in is not marked contaminated";
         }
