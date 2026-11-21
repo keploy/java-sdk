@@ -29,9 +29,12 @@ import java.util.concurrent.locks.LockSupport;
  * ServerEntries makes those executors pass each task they are handed to
  * {@link #hand(Runnable)} or {@link #hand(Callable)}, which, on a thread
  * that runs a request or such a task, counts the task in the window that
- * thread counts in, from the hand-off until the task returns or throws. A
- * task handed from any other thread (a scheduler's, the app's own) is not
- * counted.
+ * thread counts in, from the hand-off until the task returns or throws. On
+ * a thread in a scheduled job's run (JobGate), or in a task such a run
+ * handed off, the task counts as a run of that job while it runs, so a
+ * test whose window it runs in is marked with the job; END does not wait
+ * for it. A task handed from any other thread (a plain scheduler's, the
+ * app's own) is not counted.
  *
  * <p>Public only for the server and Spring classes ServerEntries changes,
  * which call it from their own packages; not an API.
@@ -90,40 +93,62 @@ public final class RequestGate {
     /**
      * Counts a task an executor is handed on a thread that runs a request,
      * or a task a request handed off, in that thread's window until the
-     * task is done, and returns what the executor runs instead of it; on any
-     * other thread, or for a task already counted, returns the task.
+     * task is done, and returns what the executor runs instead of it. On a
+     * thread in a scheduled job's run, it returns a task that counts as a
+     * run of that job while it runs. On any other thread, for a task
+     * already counted, or for a task that is {@link Comparable}, it returns
+     * the task.
+     *
+     * <p>A Comparable task is not counted: an executor can order its tasks
+     * by their own type (a pool whose queue is a PriorityBlockingQueue), and
+     * one handed a task of another type throws. END does not wait for such a
+     * task, and it is no job's run.
      *
      * @param task the task the executor is handed
      * @return what the executor runs instead
      */
     public static Runnable hand(Runnable task) {
+        if (task == null || task instanceof Handed || task instanceof Comparable) {
+            return task;
+        }
         Window window = INSIDE.get();
-        if (window == null || task == null || task instanceof Handed) {
+        String job = window == null ? JobGate.running() : null;
+        if (window == null && job == null) {
             return task;
         }
         // A task that is a Future stays one, for the executor's cancel at
         // shutdown and its purge of cancelled tasks.
-        Handed handed = task instanceof Future ? new HandedFuture(window, task) : new Handed(window, task);
+        Handed handed = task instanceof Future ? new HandedFuture(window, job, task)
+                : new Handed(window, job, task);
         // Counted last, as enter() counts: a failed allocation (out of
         // memory) leaves nothing counted that no task would release.
-        window.running.incrementAndGet();
+        if (window != null) {
+            window.running.incrementAndGet();
+        }
         return handed;
     }
 
     /**
-     * Counts a task an executor is handed as {@link #hand(Runnable)} does.
+     * Counts a task an executor is handed as {@link #hand(Runnable)} does,
+     * and returns a Comparable task as it is.
      *
      * @param task the task the executor is handed
      * @param <T> what the task returns
      * @return what the executor runs instead
      */
     public static <T> Callable<T> hand(Callable<T> task) {
-        Window window = INSIDE.get();
-        if (window == null || task == null || task instanceof HandedCall) {
+        if (task == null || task instanceof HandedCall || task instanceof Comparable) {
             return task;
         }
-        HandedCall<T> handed = new HandedCall<>(window, task);
-        window.running.incrementAndGet();
+        Window window = INSIDE.get();
+        String job = window == null ? JobGate.running() : null;
+        if (window == null && job == null) {
+            return task;
+        }
+        HandedCall<T> handed = new HandedCall<>(window, job, task);
+        if (window != null) {
+            window.running.incrementAndGet();
+        }
         return handed;
     }
 
@@ -210,40 +235,55 @@ public final class RequestGate {
         }
     }
 
-    // Hand is a task counted in a window: done once, when it returns or
-    // throws, or when the executor did not take it.
+    // Hand is a task counted in a request's window: done once, when it
+    // returns or throws, or when the executor did not take it. Or, with no
+    // window, a task a job's run handed off: a run of that job while it
+    // runs, and nothing to count done when the executor did not take it.
     private abstract static class Hand {
 
         private static final AtomicIntegerFieldUpdater<Hand> RELEASED =
                 AtomicIntegerFieldUpdater.newUpdater(Hand.class, "released");
 
+        // The window it counts in, or null for a job's task.
         final Window window;
+        // The job whose run handed it off, when window is null.
+        final String job;
         private volatile int released;
 
-        Hand(Window window) {
+        Hand(Window window, String job) {
             this.window = window;
+            this.job = job;
         }
 
         final void release() {
-            if (RELEASED.compareAndSet(this, 0, 1)) {
+            if (window != null && RELEASED.compareAndSet(this, 0, 1)) {
                 done(window);
             }
         }
 
         // enter makes the running thread count in the task's window, so
         // that what the task hands off counts too, and returns the window
-        // the thread counted in before.
-        final Window enter() {
+        // the thread counted in before; for a job's task, it starts a run
+        // of the job (so what the task hands off is the job's too), and
+        // returns its token.
+        final Object enter() {
+            if (window == null) {
+                return JobGate.enterAs(job);
+            }
             Window outer = INSIDE.get();
             INSIDE.set(window);
             return outer;
         }
 
-        final void exit(Window outer) {
+        final void exit(Object outer) {
+            if (window == null) {
+                JobGate.exit(outer);
+                return;
+            }
             if (outer == null) {
                 INSIDE.remove();
             } else {
-                INSIDE.set(outer);
+                INSIDE.set((Window) outer);
             }
             release();
         }
@@ -253,14 +293,14 @@ public final class RequestGate {
 
         final Runnable task;
 
-        Handed(Window window, Runnable task) {
-            super(window);
+        Handed(Window window, String job, Runnable task) {
+            super(window, job);
             this.task = task;
         }
 
         @Override
         public final void run() {
-            Window outer = enter();
+            Object outer = enter();
             try {
                 task.run();
             } finally {
@@ -276,8 +316,8 @@ public final class RequestGate {
 
     private static final class HandedFuture extends Handed implements RunnableFuture<Object> {
 
-        HandedFuture(Window window, Runnable task) {
-            super(window, task);
+        HandedFuture(Window window, String job, Runnable task) {
+            super(window, job, task);
         }
 
         @SuppressWarnings("unchecked")
@@ -316,14 +356,14 @@ public final class RequestGate {
 
         private final Callable<T> task;
 
-        HandedCall(Window window, Callable<T> task) {
-            super(window);
+        HandedCall(Window window, String job, Callable<T> task) {
+            super(window, job);
             this.task = task;
         }
 
         @Override
         public T call() throws Exception {
-            Window outer = enter();
+            Object outer = enter();
             try {
                 return task.call();
             } finally {

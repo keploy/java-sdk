@@ -45,6 +45,9 @@ public class JobTailTest {
 
     private static final String QUARTZ = "\"quartz:reports.nightly\"";
     private static final String SCHEDULED = "\"scheduled:" + DigestJobs.class.getName() + ".sendDigest\"";
+    private static final String POOL = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
+    private static final String JOBS_ASYNC = "a task a scheduled job's run hands off counts as that run, so a test"
+            + " whose window it runs in is marked contaminated in its record";
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -95,6 +98,59 @@ public class JobTailTest {
             assertEquals(cov, "[" + SCHEDULED + "]", contaminated(cov));
             cov = app.test("test-3");
             assertEquals(cov, "", contaminated(cov));
+            // A job's async work counts as its run too.
+            app.command("spring-publish-hold");
+            cov = app.test("test-4", "listener-done");
+            assertEquals(cov, "[" + SCHEDULED + "]", contaminated(cov));
+            // END never waits with the wait off, for a job's task still
+            // running at it either: it is named, and the END not cut.
+            app.command("spring-publish-hold");
+            cov = app.test("test-5");
+            assertEquals(cov, "[" + SCHEDULED + "]", contaminated(cov));
+            assertFalse(cov, cov.contains("windowCut"));
+            String end = endLine(app, "test-5");
+            assertFalse(end, end.contains(" requests="));
+            app.command("listener-done");
+            assertTrue(app.log(), app.log().contains("Keploy dedup counts Spring's async tasks ("
+                    + POOL + "): " + JOBS_ASYNC));
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void aJobsAsyncWorkMarksTheTestWhoseWindowItRunsInAfterTheJobReturned() throws Exception {
+        try (App app = new App(false, null)) {
+            // A Quartz job publishes to an async multicaster and returns. Its listener waits for the pool's
+            // one thread, which the app's own task holds, so it starts only in the next test's window.
+            app.command("listener-block");
+            app.command("quartz-publish");
+            String cov = app.test("test-1", "listener-unblock", "listener-done");
+            assertEquals("the app's own task is no job's: " + cov, "[" + QUARTZ + "]", contaminated(cov));
+            assertTrue("the listener's hits land in the test: " + cov,
+                    cov.contains("\"" + Work.class.getName().replace('.', '/') + "\""));
+
+            // An @Scheduled method publishes and returns; its listener runs as the next test starts.
+            app.command("spring-publish-hold");
+            cov = app.test("test-2", "listener-done");
+            assertEquals(cov, "[" + SCHEDULED + "]", contaminated(cov));
+
+            // END does not wait for a job's task still running at it: it is
+            // named, and the END not cut.
+            app.command("spring-publish-hold");
+            cov = app.test("test-3");
+            assertEquals(cov, "[" + SCHEDULED + "]", contaminated(cov));
+            assertFalse(cov, cov.contains("windowCut"));
+            String end = endLine(app, "test-3");
+            assertFalse(end, end.contains(" requests="));
+            app.command("listener-done");
+
+            // A job's hand-off that runs and ends between two tests is in neither.
+            app.command("quartz-publish");
+            app.command("listener-done");
+            cov = app.test("test-4");
+            assertEquals(cov, "", contaminated(cov));
+            assertTrue(app.log(), app.log().contains("Keploy dedup counts Spring's async tasks (" + POOL + "): a"
+                    + " test's END waits for the tasks its requests hand off to finish, as for the requests, and "
+                    + JOBS_ASYNC));
         }
     }
 
@@ -107,6 +163,23 @@ public class JobTailTest {
             assertFalse(log, log.contains("job runs"));
             assertFalse(log, log.contains("NoClassDefFoundError"));
         }
+    }
+
+    // endLine is the diagnostics line of a test's END, which the SDK logs
+    // once its reply is sent: waited for.
+    private static String endLine(App app, String id) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        String log;
+        do {
+            log = app.log();
+            for (String line : log.split("\n")) {
+                if (line.contains("END test-set-0/" + id + " took ")) {
+                    return line;
+                }
+            }
+            Thread.sleep(20);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("no diagnostics line of " + id + "'s END: " + log);
     }
 
     // contaminated is the contaminated list of a record, "" when it has none.
@@ -134,7 +207,9 @@ public class JobTailTest {
         App(boolean plain, String endWait) throws Exception {
             File classes = tmp.newFolder();
             for (Class<?> type : new Class<?>[] {JobApp.class, Work.class, ReportJob.class, DigestJobs.class,
-                OnDemandScheduler.class, SpringJobs.class, Class.forName("org.example.jobs.Schedulers")}) {
+                OnDemandScheduler.class, SpringJobs.class, Class.forName("org.example.jobs.Schedulers"),
+                Class.forName("org.example.jobs.Events"), Class.forName("org.example.jobs.Events$Ready"),
+                Class.forName("org.example.jobs.Events$Listener")}) {
                 String key = type.getName().replace('.', '/') + ".class";
                 File copy = new File(classes, key);
                 copy.getParentFile().mkdirs();
@@ -172,6 +247,7 @@ public class JobTailTest {
             env.put("KEPLOY_JAVA_CLASS_DIRS", classes.getPath());
             env.put("KEPLOY_COVERAGE_ENDPOINT", "127.0.0.1:" + collector.getLocalPort());
             env.put("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED", "true");
+            env.put("KEPLOY_JAVA_DEDUP_DIAGNOSTICS", "true");
             if (endWait != null) {
                 env.put("KEPLOY_JAVA_END_WAIT_MS", endWait);
             }

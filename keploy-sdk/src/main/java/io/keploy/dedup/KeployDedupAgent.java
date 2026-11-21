@@ -11,6 +11,7 @@ import org.newsclub.net.unix.AFUNIXServerSocket;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -128,6 +129,10 @@ public final class KeployDedupAgent {
     private static final AtomicBoolean END_WAIT_INVALID_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean END_WAIT_CAPPED_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean NOT_COUNTED_LOGGED = new AtomicBoolean(false);
+    // Whether this JVM ever added ServerEntries (countRequests, from a
+    // -javaagent's premain): once it has, its classes stay changed, and job
+    // runs are seen, across a stop() and a start() with no instrumentation.
+    static volatile boolean transformerAdded;
     // The answer to a command not taken (a START that could not clear the
     // counters, an END with no START for that test, as after a restart, an
     // END whose scan lost hits it had cleared): nothing is published
@@ -299,9 +304,11 @@ public final class KeployDedupAgent {
             // and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
             countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco));
-        } else {
-            // Attached to a running JVM, or started from the app's code:
-            // ServerEntries cannot change a class, so no job run is seen.
+        } else if (!transformerAdded) {
+            // Attached to a running JVM, or started from the app's code, and
+            // never as a -javaagent: ServerEntries cannot change a class, so
+            // no job run is seen. A start() after a -javaagent's (a context
+            // reload) still sees them: premain's ServerEntries changed them.
             log(Level.INFO, "Keploy dedup does not see the app's scheduled jobs' runs: keploy-sdk.jar was not"
                     + " started as a -javaagent, so a test a Quartz job or a Spring @Scheduled method ran in is"
                     + " not marked contaminated in its record", null);
@@ -327,19 +334,21 @@ public final class KeployDedupAgent {
     // which then ids the changed server class: classMismatch names it when
     // the index holds it, and the log says so when the JVM has a JaCoCo
     // agent of its own (jacocoAttached).
-    private static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
+    static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
         boolean requests = endWaitMillis() != 0;
         try {
             boolean retransformable = instrumentation.isRetransformClassesSupported();
             if (!retransformable && jacocoAttached) {
                 log(Level.WARNING, "Keploy dedup: the jar keploy-sdk.jar runs from has no Can-Retransform-Classes:"
                         + " true in its manifest, or this JVM cannot retransform, so a JaCoCo agent attached after"
-                        + " it instruments the " + (requests ? "server and scheduler" : "scheduler")
+                        + " it instruments the " + (requests ? "server, scheduler and Spring executor"
+                                : "scheduler and Spring executor")
                         + " classes it changes, and each test's classMismatch names them when Keploy measures"
                         + " them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
                         null);
             }
             instrumentation.addTransformer(new ServerEntries(requests), retransformable);
+            transformerAdded = true;
         } catch (RuntimeException e) {
             log(Level.WARNING, "Keploy dedup does not count the app's requests or see its scheduled jobs' runs:"
                     + " their classes could not be changed to count them", e);
@@ -1323,8 +1332,14 @@ public final class KeployDedupAgent {
         // full CLASSES frame even if the manifest hasn't grown since the drop.
         void resetBytecodeSentForNewConnection() {
             bytecodeSentThisConnection = false;
+            frameFailureLogged = false;
             lastUploadedManifestSize.set(-1);
         }
+
+        // Whether a CLASSES or MANIFEST frame that could not be built was
+        // logged at WARNING on this connection: once, then at FINE, as each
+        // END tries again.
+        private volatile boolean frameFailureLogged = false;
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex,
                 Instrumentation instrumentation) {
@@ -1793,24 +1808,24 @@ public final class KeployDedupAgent {
         // are base64'd to keep the whole frame on one line. Called after each
         // capture; a no-op until the manifest grows or when KEPLOY_BUILD_TAG unset.
         String pollBytecodeFrame() {
-            final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
-            if (buildTag.isEmpty()) {
-                return null;
-            }
-            final int size = liveManifest.size();
-            if (size == 0) {
-                return null; // no classes hit yet
-            }
-            // Send the constant class zip once per connection; after that, only a
-            // manifest-only frame when the manifest actually grows. This removes
-            // the old per-growth zip resend (O(n^2) bytes) and keeps any single
-            // line small once the zip is out, so the collector's line reader never
-            // trips its max-line cap mid-replay.
-            final boolean sendZip = !bytecodeSentThisConnection;
-            if (!sendZip && size <= lastUploadedManifestSize.get()) {
-                return null; // zip already sent and manifest unchanged since last send
-            }
             try {
+                final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
+                if (buildTag.isEmpty()) {
+                    return null;
+                }
+                final int size = liveManifest.size();
+                if (size == 0) {
+                    return null; // no classes hit yet
+                }
+                // Send the constant class zip once per connection; after that, only a
+                // manifest-only frame when the manifest actually grows. This removes
+                // the old per-growth zip resend (O(n^2) bytes) and keeps any single
+                // line small once the zip is out, so the collector's line reader never
+                // trips its max-line cap mid-replay.
+                final boolean sendZip = !bytecodeSentThisConnection;
+                if (!sendZip && size <= lastUploadedManifestSize.get()) {
+                    return null; // zip already sent and manifest unchanged since last send
+                }
                 Map<String, ManifestEntry> snapshot = new LinkedHashMap<>(liveManifest);
                 String manifestJson = GSON.toJson(snapshot);
                 String frame;
@@ -1830,7 +1845,12 @@ public final class KeployDedupAgent {
                 lastUploadedManifestSize.set(size);
                 return frame;
             } catch (Throwable e) {
-                log(Level.WARNING, "Keploy dedup: failed to build bytecode frame: " + e.getMessage(), null);
+                // Not sent, and tried again at the next END: until one is
+                // built, Keploy has none of this build's class bytes.
+                Level level = frameFailureLogged ? Level.FINE : Level.WARNING;
+                frameFailureLogged = true;
+                log(level, "Keploy dedup: could not build the CLASSES or MANIFEST frame of the app's class bytes for"
+                        + " Keploy; each END tries again, and this connection logs it at WARNING only once", e);
                 return null;
             }
         }
@@ -1928,12 +1948,25 @@ public final class KeployDedupAgent {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
                 socket.setSoTimeout(SOCKET_TIMEOUT_MILLIS);
-
-                RemoteControlWriter remoteWriter = new RemoteControlWriter(socket.getOutputStream());
-                RemoteControlReader remoteReader = new RemoteControlReader(socket.getInputStream());
+                // The command leaves in one write (JaCoCo's writer writes it a
+                // byte or two at a time, each a segment of its own on a raw
+                // stream), and Nagle never holds a write back behind the
+                // tcpserver's delayed ACK: a stall of about 40 ms per dump.
+                try {
+                    socket.setTcpNoDelay(true);
+                } catch (SocketException e) {
+                    log(Level.FINE, "Could not set TCP_NODELAY on the socket to JaCoCo's tcpserver", e);
+                }
+                OutputStream commands = new BufferedOutputStream(socket.getOutputStream(), 64);
+                RemoteControlWriter remoteWriter = new RemoteControlWriter(commands);
+                // Read a buffer at a time: JaCoCo's reader reads a byte at a
+                // time, a read of the socket each on a raw stream.
+                RemoteControlReader remoteReader = new RemoteControlReader(
+                        new BufferedInputStream(socket.getInputStream(), 32 * 1024));
                 remoteReader.setSessionInfoVisitor(writer);
                 remoteReader.setExecutionDataVisitor(writer);
                 remoteWriter.visitDumpCommand(dump, reset);
+                commands.flush();
 
                 if (!remoteReader.read()) {
                     throw new IOException("JaCoCo socket closed before coverage data was returned");

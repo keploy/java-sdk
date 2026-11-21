@@ -13,6 +13,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.Instrumentation;
+import java.lang.reflect.Proxy;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +29,9 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
@@ -58,6 +64,7 @@ public class ControlSocketTest {
     private static final String JACOCO_PORT_PROPERTY = "keploy.jacoco.port";
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
     private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
+    private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
 
@@ -106,6 +113,7 @@ public class ControlSocketTest {
         // A TABLE row answers ACK whatever heap this JVM was given (-DargLine=-Xmx...): the heap check is off
         // unless a row sets its own bound.
         System.setProperty(BuildTable.MIN_HEAP_PROPERTY, "0");
+        KeployDedupAgent.transformerAdded = false;
     }
 
     /** A TABLE row needs the heap check's env var unset: it would win over the property setUp sets. */
@@ -129,6 +137,8 @@ public class ControlSocketTest {
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
         System.clearProperty(CLASS_DIRS_PROPERTY);
         System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
+        System.clearProperty(END_WAIT_PROPERTY);
+        KeployDedupAgent.transformerAdded = false;
         if (jacoco != null) {
             jacoco.close();
         }
@@ -221,6 +231,92 @@ public class ControlSocketTest {
         assertNotNull(payload);
         assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-2\""));
         assertFalse(payload, payload.contains("contaminated"));
+    }
+
+    @Test(timeout = 60000)
+    public void aJobThatStartsWhileEndWaitsForTheTestsRequestsIsNamed() throws Exception {
+        // The longest wait: END waits for the request until this row lets it go.
+        System.setProperty(END_WAIT_PROPERTY, "2000");
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        Object request = RequestGate.enter();
+        ExecutorService ender = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> end = ender.submit(() -> send("END test-set-0/test-1"));
+            // END took the window it waits on: the request no longer counts in the current one.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            while (RequestGate.running() != 0) {
+                assertTrue("END never waited for the request", System.nanoTime() < deadline);
+                Thread.sleep(1);
+            }
+            JobGate.exit(JobGate.enter(new Object(), "quartz"));
+            RequestGate.exit(request);
+            request = null;
+            assertEquals(TAKEN, end.get(30, TimeUnit.SECONDS));
+        } finally {
+            if (request != null) {
+                RequestGate.exit(request);
+            }
+            ender.shutdownNow();
+        }
+        String payload = data.next();
+        assertNotNull(payload);
+        assertFalse("END did not reach its bound: " + payload, payload.contains("windowCut"));
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"quartz:java.lang.Object\"]}"));
+    }
+
+    @Test(timeout = 60000)
+    public void aJobThatStartsWhileEndReadsTheHitsIsNamed() throws Exception {
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        jacoco.onDump = () -> JobGate.exit(JobGate.enter(new Object(), "scheduled"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"scheduled:java.lang.Object\"]}"));
+    }
+
+    @Test(timeout = 60000)
+    public void eachCommandToJacocosTcpServerArrivesWholeWithNoNagleStall() throws Exception {
+        // Nagle held all but the command's first byte or two behind the
+        // tcpserver's delayed ACK. What this checks is that the whole command
+        // is there at the stand-in's first read; on loopback with Nagle off,
+        // a command written a byte at a time usually is too.
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        // JaCoCo's header (a block byte, two chars) and the dump command (a block byte, two booleans).
+        assertTrue(jacoco.firstReads.toString(), jacoco.firstReads.size() >= 2);
+        for (int got : jacoco.firstReads) {
+            assertEquals("each connection's first read got its whole command: " + jacoco.firstReads, 8, got);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void aStartAfterTheSdkRanAsAJavaagentDoesNotSayNoJobRunIsSeen() throws Exception {
+        List<ClassFileTransformer> added = new ArrayList<>();
+        Instrumentation premains = (Instrumentation) Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[] {Instrumentation.class}, (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "addTransformer":
+                            added.add((ClassFileTransformer) args[0]);
+                            return null;
+                        case "isRetransformClassesSupported":
+                            return Boolean.TRUE;
+                        default:
+                            throw new UnsupportedOperationException(method.getName());
+                    }
+                });
+        KeployDedupAgent.countRequests(premains, false);
+        assertEquals("premain added ServerEntries", 1, added.size());
+        // A stop() and a start() from the app's code (a context reload): premain's changes still count job runs.
+        startWithJacoco();
+        for (String line : logged) {
+            assertFalse(line, line.startsWith("Keploy dedup does not see the app's scheduled jobs' runs"));
+        }
     }
 
     @Test(timeout = 60000)

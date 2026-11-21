@@ -571,6 +571,26 @@ public class ServerEntriesTest {
     }
 
     @Test
+    public void anExecutorWhoseLoaderDoesNotSeeTheGateIsNotChangedAndTheLogSaysWhatIsLost() throws Exception {
+        String pool = "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor";
+        byte[] classfile = AsyncHandTest.executorStandIn(pool, Opcodes.V1_8);
+        String lost = "WARNING Keploy dedup does not count Spring's async tasks: the class loader of"
+                + " org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor does not see keploy-sdk.jar's"
+                + " classes, so ";
+        String jobs = "a test is not marked contaminated when work a scheduled job hands off runs in its window";
+        // Each mode's line, as that mode's transform logs it.
+        try (URLClassLoader alone = new URLClassLoader(new URL[0], null)) {
+            logged.clear();
+            assertNull(new ServerEntries(true).transform(alone, pool, null, null, classfile));
+            assertEquals(lost + "a test's END reads its hits without waiting for the tasks its requests hand off,"
+                    + " and " + jobs, logged(lost));
+            logged.clear();
+            assertNull(new ServerEntries(false).transform(alone, pool, null, null, classfile));
+            assertEquals("with the wait off", lost + jobs, logged(lost));
+        }
+    }
+
+    @Test
     public void nettyIsNamedAsAServerNotCounted() throws Exception {
         assertNull(new ServerEntries().transform(getClass().getClassLoader(),
                 "io/netty/handler/codec/http/HttpServerCodec", null, null, new byte[0]));

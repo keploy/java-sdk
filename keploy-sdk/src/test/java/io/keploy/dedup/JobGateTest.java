@@ -1,6 +1,9 @@
 package io.keploy.dedup;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
@@ -10,6 +13,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -30,10 +41,146 @@ public class JobGateTest {
 
     @After
     public void tearDown() {
-        for (Object token : open) {
-            JobGate.exit(token);
+        // Last in, first out, as a job's runs end on its thread: so the
+        // thread is back in no run.
+        for (int i = open.size() - 1; i >= 0; i--) {
+            JobGate.exit(open.get(i));
         }
         JobGate.close();
+        assertNull("the test thread is in no job's run", JobGate.running());
+    }
+
+    // handOff has a run of a job hand task off, as Spring's changed
+    // executors do (RequestGate.hand), and returns what they would run; the
+    // run is over when it returns.
+    private static Runnable handOff(String group, String name, Runnable task) {
+        Object run = JobGate.enter(new QuartzShell(group, name), "quartz");
+        try {
+            Runnable handed = RequestGate.hand(task);
+            assertNotSame("a task a job's run hands off is the job's", task, handed);
+            return handed;
+        } finally {
+            JobGate.exit(run);
+        }
+    }
+
+    @Test(timeout = 30000)
+    public void aTaskAJobsRunHandsOffCountsAsThatJobsRunWhereverItRuns() throws Exception {
+        Runnable handed = handOff("reports", "nightly", () -> { });
+        assertNull("the job's thread is in no run once the job returned", JobGate.running());
+        // The job's run ended before the window; the task it handed off runs in it, on another thread.
+        JobGate.open();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            pool.submit(handed).get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(Collections.singletonList("quartz:reports.nightly"), JobGate.close());
+        JobGate.open();
+        assertEquals("the task is done: a later window does not name it", Collections.<String>emptyList(),
+                JobGate.close());
+    }
+
+    @Test(timeout = 30000)
+    public void aJobsTaskStillRunningWhenTheWindowOpensIsNamed() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<String> runningIn = new AtomicReference<>();
+        Runnable handed = handOff("reports", "held", () -> {
+            runningIn.set(JobGate.running());
+            started.countDown();
+            await(release);
+        });
+        Thread thread = new Thread(handed, "listener");
+        thread.start();
+        assertTrue(started.await(10, TimeUnit.SECONDS));
+        assertEquals("the task's thread is in a run of the job", "quartz:reports.held", runningIn.get());
+        JobGate.open();
+        release.countDown();
+        thread.join(10000);
+        assertEquals(Collections.singletonList("quartz:reports.held"), JobGate.close());
+    }
+
+    @Test(timeout = 30000)
+    public void aJobsTaskThatReturnedBeforeTheWindowOpenedIsNotNamed() throws Exception {
+        Thread thread = new Thread(handOff("reports", "early", () -> { }), "listener");
+        thread.start();
+        thread.join(10000);
+        JobGate.open();
+        assertEquals(Collections.<String>emptyList(), JobGate.close());
+    }
+
+    @Test(timeout = 30000)
+    public void whatAJobsTaskHandsOffIsTheJobsToo() throws Exception {
+        AtomicReference<Runnable> inner = new AtomicReference<>();
+        Runnable outer = handOff("reports", "chain", () -> inner.set(RequestGate.hand(() -> { })));
+        Thread thread = new Thread(outer, "listener");
+        thread.start();
+        thread.join(10000);
+        assertTrue("the task's hand-off is wrapped", inner.get() != null);
+        JobGate.open();
+        Thread last = new Thread(inner.get(), "listener-2");
+        last.start();
+        last.join(10000);
+        assertEquals(Collections.singletonList("quartz:reports.chain"), JobGate.close());
+    }
+
+    @Test
+    public void aJobsTaskRunOnItsOwnThreadLeavesTheThreadInTheJobsRun() {
+        Object run = enter(new QuartzShell("reports", "inline"), "quartz");
+        // A caller-runs pool, or a sync executor, runs the task on the job's thread.
+        RequestGate.hand(() -> { }).run();
+        assertEquals("back in the job's own run", "quartz:reports.inline", JobGate.running());
+        // A job's run in a job's run (one calls the other's run()) gives the thread back the outer run too.
+        JobGate.exit(JobGate.enter(new QuartzShell("reports", "nested"), "quartz"));
+        assertEquals("back in the outer run", "quartz:reports.inline", JobGate.running());
+        Runnable task = () -> { };
+        assertNotSame("what it hands off after is still the job's", task, RequestGate.hand(task));
+        JobGate.exit(run);
+        assertNull(JobGate.running());
+    }
+
+    @Test(timeout = 30000)
+    public void endDoesNotWaitForAJobsTaskAndAFutureOrACallableStaysOne() throws Exception {
+        RequestGate.open();
+        JobGate.open();
+        Object run = enter(new QuartzShell("reports", "future"), "quartz");
+        FutureTask<String> future = new FutureTask<>(() -> "done");
+        Runnable handed = RequestGate.hand(future);
+        Callable<String> call = () -> "called";
+        Callable<String> handedCall = RequestGate.hand(call);
+        JobGate.exit(run);
+        assertTrue("a Future stays one", handed instanceof Future);
+        assertNotSame(call, handedCall);
+        assertEquals("END waits for no job's task", 0, RequestGate.running());
+        assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(5)));
+        // An executor that did not take them: nothing to count done.
+        RequestGate.dropped(handed, future);
+        ((Future<?>) handed).cancel(false);
+        assertTrue("its cancel reaches the task", future.isCancelled());
+        assertEquals("called", handedCall.call());
+        assertEquals(Collections.singletonList("quartz:reports.future"), JobGate.close());
+    }
+
+    @Test
+    public void aTaskHandedOffOutsideAnyRunOrRequestIsTheTaskItself() {
+        Runnable task = () -> { };
+        Callable<String> call = () -> "x";
+        try {
+            assertSame(task, RequestGate.hand(task));
+            assertSame(call, RequestGate.hand(call));
+        } catch (RuntimeException e) {
+            throw new AssertionError("hand threw off a job's run", e);
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private Object enter(Object job, String kind) {
@@ -146,6 +293,19 @@ public class JobGateTest {
         JobGate.open();
         JobGate.exit(enter(new Thrower(), "scheduled"));
         assertEquals(Collections.singletonList("scheduled:" + Thrower.class.getName()), JobGate.close());
+    }
+
+    @Test
+    public void runsExitedOutOfOrderLeaveTheThreadInNoRun() {
+        Object outer = enter(new QuartzShell("a", "outer"), "quartz");
+        Object inner = enter(new QuartzShell("a", "inner"), "quartz");
+        JobGate.exit(outer);
+        assertEquals("the thread is still in the inner run", "quartz:a.inner", JobGate.running());
+        JobGate.exit(inner);
+        assertNull("the inner run's exit does not put the thread back in the outer run, which is over",
+                JobGate.running());
+        JobGate.open();
+        assertEquals(Collections.<String>emptyList(), JobGate.close());
     }
 
     @Test

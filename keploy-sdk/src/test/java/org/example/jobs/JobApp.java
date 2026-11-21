@@ -15,8 +15,13 @@ import java.nio.charset.StandardCharsets;
  * answers "DONE" once the job's run is over (its run() returned):
  * "quartz" fires the Quartz job, "spring" runs the @Scheduled method,
  * "spring-hold" starts it and answers once it waits, "spring-release" lets
- * it go on. With "plain" as its argument it loads neither scheduler, and
- * neither is on its class path: Schedulers, which uses them, never loads.
+ * it go on. "quartz-publish" and "spring-publish-hold" have the job publish
+ * an event to an async multicaster and return (the listener held at its
+ * start for the latter), "listener-block" and "listener-unblock" hold and
+ * free its pool's thread, and "listener-done" lets the listener go on and
+ * answers once it is done and its run is over. With "plain" as its argument
+ * it loads neither scheduler, and neither is on its class path: Schedulers,
+ * which uses them, never loads.
  */
 public final class JobApp {
 

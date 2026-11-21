@@ -12,11 +12,17 @@ import static org.junit.Assert.fail;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
@@ -97,6 +103,94 @@ public class AsyncHandTest {
         assertSame(call, RequestGate.hand(call));
         assertNull(RequestGate.hand((Runnable) null));
         assertEquals(0, RequestGate.running());
+    }
+
+    @Test(timeout = 60000)
+    public void aComparableTaskGoesAsItIsSoAPriorityPoolStillOrdersIt() throws Exception {
+        // A pool whose queue orders its tasks by their own type, its one
+        // thread busy: tasks handed off in a request's window, in a job's
+        // run and off both queue as they are, and run in their order.
+        // Wrapped, the queue threw ClassCastException in execute.
+        CountDownLatch busy = new CountDownLatch(1);
+        CountDownLatch free = new CountDownLatch(1);
+        List<Integer> ran = new CopyOnWriteArrayList<>();
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
+                new PriorityBlockingQueue<Runnable>());
+        try {
+            pool.execute(() -> {
+                busy.countDown();
+                try {
+                    free.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertTrue(busy.await(30, TimeUnit.SECONDS));
+            Ranked last = new Ranked(3, ran);
+            Ranked first = new Ranked(1, ran);
+            Ranked second = new Ranked(2, ran);
+            RankedCall call = new RankedCall();
+            Object request = RequestGate.enter();
+            try {
+                assertSame("a request's", last, RequestGate.hand(last));
+                assertSame("a request's", call, RequestGate.hand(call));
+                pool.execute(RequestGate.hand(last));
+                assertEquals("not counted: END does not wait for it", 1, RequestGate.running());
+            } finally {
+                RequestGate.exit(request);
+            }
+            Object run = JobGate.enter(new Object(), "scheduled");
+            try {
+                assertSame("a job's", first, RequestGate.hand(first));
+                assertSame("a job's", call, RequestGate.hand(call));
+                pool.execute(RequestGate.hand(first));
+            } finally {
+                JobGate.exit(run);
+            }
+            pool.execute(RequestGate.hand(second));
+            free.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
+            assertEquals("in their order", Arrays.asList(1, 2, 3), ran);
+        } finally {
+            free.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    // Ranked is an app's task that a priority pool orders by its rank.
+    private static final class Ranked implements Runnable, Comparable<Ranked> {
+
+        private final int rank;
+        private final List<Integer> ran;
+
+        Ranked(int rank, List<Integer> ran) {
+            this.rank = rank;
+            this.ran = ran;
+        }
+
+        @Override
+        public void run() {
+            ran.add(rank);
+        }
+
+        @Override
+        public int compareTo(Ranked other) {
+            return Integer.compare(rank, other.rank);
+        }
+    }
+
+    private static final class RankedCall implements Callable<String>, Comparable<RankedCall> {
+
+        @Override
+        public String call() {
+            return "x";
+        }
+
+        @Override
+        public int compareTo(RankedCall other) {
+            return 0;
+        }
     }
 
     @Test
@@ -378,10 +472,30 @@ public class AsyncHandTest {
     }
 
     @Test
-    public void withEndsWaitOffNoExecutorIsChanged() throws Exception {
+    public void withEndsWaitOffEachExecutorCountsOnlyAJobsHandOffs() throws Exception {
+        // With the wait off no server is changed, so no thread runs a
+        // request; a task a job's run hands off still counts as that run.
         for (String name : new String[] {SIMPLE, POOL, ASYNC}) {
-            assertNull(name, new ServerEntries(false).transform(getClass().getClassLoader(), name, null, null,
-                    executorStandIn(name, Opcodes.V1_8)));
+            byte[] changed = new ServerEntries(false).transform(getClass().getClassLoader(), name, null, null,
+                    executorStandIn(name, Opcodes.V1_8));
+            assertNotNull(name, changed);
+            Class<?> type = load(name, changed);
+            Object executor = type.getDeclaredConstructor().newInstance();
+            Method runnable = type.getMethod(method(name), Runnable.class, long.class);
+            Runnable task = () -> { };
+            runnable.invoke(executor, task, 7L);
+            assertSame(name + ": off a job's run, as handed", task, lastTask);
+            Object run = JobGate.enter(new Object(), "scheduled");
+            try {
+                runnable.invoke(executor, task, 7L);
+                assertNotSame(name + ": a job's hand-off", task, lastTask);
+            } finally {
+                JobGate.exit(run);
+            }
+            assertEquals(name + ": END waits for no job's task", 0, RequestGate.running());
+            JobGate.open();
+            ((Runnable) lastTask).run();
+            assertEquals(name, Collections.singletonList("scheduled:java.lang.Object"), JobGate.close());
         }
     }
 
@@ -431,7 +545,7 @@ public class AsyncHandTest {
     // executorStandIn is a class named as an executor's, with three
     // methods of the name its entry counts: one handed a Runnable and a
     // long, one a Callable, and one no task (left as it is).
-    private static byte[] executorStandIn(String internalName, int version) {
+    static byte[] executorStandIn(String internalName, int version) {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         writer.visit(version, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
         MethodVisitor init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);

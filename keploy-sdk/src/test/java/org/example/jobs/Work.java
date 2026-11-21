@@ -15,4 +15,8 @@ public final class Work {
     public static void digest() {
         done += 2;
     }
+
+    public static void listen() {
+        done += 3;
+    }
 }
