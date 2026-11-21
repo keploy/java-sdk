@@ -26,15 +26,17 @@ import java.util.concurrent.locks.LockSupport;
  * <p>The work a request hands to a Spring TaskExecutor (an event listener
  * on an async multicaster, an {@code @Async} method, a task submitted to
  * a ThreadPoolTaskExecutor) counts as that request's until it is done:
- * ServerEntries makes those executors pass each task they are handed to
- * {@link #hand(Runnable)} or {@link #hand(Callable)}, which, on a thread
- * that runs a request or such a task, counts the task in the window that
- * thread counts in, from the hand-off until the task returns or throws. On
- * a thread in a scheduled job's run (JobGate), or in a task such a run
- * handed off, the task counts as a run of that job while it runs, so a
- * test whose window it runs in is marked with the job; END does not wait
- * for it. A task handed from any other thread (a plain scheduler's, the
- * app's own) is not counted.
+ * ServerEntries makes those executors pass each task they are handed, and
+ * the executor it is for, to {@link #hand(Object, Runnable)} or
+ * {@link #hand(Object, Callable)}, which, on a thread that runs a request
+ * or such a task, counts the task in the window that thread counts in,
+ * from the hand-off until the task returns or throws. On a thread in a
+ * scheduled job's run (JobGate), or in a task such a run handed off, the
+ * task counts as a run of that job while it runs, so a test whose window
+ * it runs in is marked with the job; END does not wait for it. A task
+ * handed from any other thread (a plain scheduler's, the app's own), or to
+ * an executor whose pool may order its tasks by their type
+ * (OrderedPools), is not counted.
  *
  * <p>Public only for the server and Spring classes ServerEntries changes,
  * which call it from their own packages; not an API.
@@ -96,24 +98,26 @@ public final class RequestGate {
      * task is done, and returns what the executor runs instead of it. On a
      * thread in a scheduled job's run, it returns a task that counts as a
      * run of that job while it runs. On any other thread, for a task
-     * already counted, or for a task that is {@link Comparable}, it returns
-     * the task.
+     * already counted, for a task that is {@link Comparable}, or for an
+     * executor whose pool may order its tasks by their type, it returns the
+     * task.
      *
-     * <p>A Comparable task is not counted: an executor can order its tasks
-     * by their own type (a pool whose queue is a PriorityBlockingQueue), and
-     * one handed a task of another type throws. END does not wait for such a
-     * task, and it is no job's run.
+     * <p>Neither of the last two is counted: a pool whose queue orders its
+     * tasks (a PriorityBlockingQueue, or a queue with a Comparator) casts
+     * each to the app's own type, and throws on a task of another type. END
+     * does not wait for such a task, and it is no job's run.
      *
+     * @param executor the executor the task is for, or null
      * @param task the task the executor is handed
      * @return what the executor runs instead
      */
-    public static Runnable hand(Runnable task) {
+    public static Runnable hand(Object executor, Runnable task) {
         if (task == null || task instanceof Handed || task instanceof Comparable) {
             return task;
         }
         Window window = INSIDE.get();
         String job = window == null ? JobGate.running() : null;
-        if (window == null && job == null) {
+        if ((window == null && job == null) || OrderedPools.orders(executor)) {
             return task;
         }
         // A task that is a Future stays one, for the executor's cancel at
@@ -129,20 +133,21 @@ public final class RequestGate {
     }
 
     /**
-     * Counts a task an executor is handed as {@link #hand(Runnable)} does,
-     * and returns a Comparable task as it is.
+     * Counts a task an executor is handed as {@link #hand(Object, Runnable)}
+     * does, and returns it as it is where that does.
      *
+     * @param executor the executor the task is for, or null
      * @param task the task the executor is handed
      * @param <T> what the task returns
      * @return what the executor runs instead
      */
-    public static <T> Callable<T> hand(Callable<T> task) {
+    public static <T> Callable<T> hand(Object executor, Callable<T> task) {
         if (task == null || task instanceof HandedCall || task instanceof Comparable) {
             return task;
         }
         Window window = INSIDE.get();
         String job = window == null ? JobGate.running() : null;
-        if (window == null && job == null) {
+        if ((window == null && job == null) || OrderedPools.orders(executor)) {
             return task;
         }
         HandedCall<T> handed = new HandedCall<>(window, job, task);
@@ -153,7 +158,7 @@ public final class RequestGate {
     }
 
     /**
-     * Counts a task {@link #hand(Runnable)} counted as done when the
+     * Counts a task {@link #hand(Object, Runnable)} counted as done when the
      * executor threw instead of taking it (it rejected it, or was shut
      * down), so that END does not wait for a task that never runs.
      *

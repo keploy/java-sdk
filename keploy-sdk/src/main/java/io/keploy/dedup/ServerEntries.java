@@ -59,10 +59,12 @@ import org.objectweb.asm.Type;
  * not END waits for requests.
  *
  * <p>It makes the work a request hands to a Spring TaskExecutor count as
- * the request's (see {@link RequestGate#hand(Runnable)}): the methods of
- * SimpleAsyncTaskExecutor (an async event multicaster's), ThreadPoolTaskExecutor
- * and {@code @Async}'s interceptor that take a task become methods that
- * hand the task to RequestGate, then call their own code, renamed
+ * the request's (see {@link RequestGate#hand(Object, Runnable)}): the
+ * methods of SimpleAsyncTaskExecutor (an async event multicaster's),
+ * ThreadPoolTaskExecutor and {@code @Async}'s interceptor that take a task
+ * become methods that hand the task, and the executor it is for (the
+ * interceptor's executor argument, else the executor itself), to
+ * RequestGate, then call their own code, renamed
  * {@code keploy$async$<name>}, with what RequestGate gave back, and when that
  * throws, tell RequestGate the task was dropped. A task a job's run hands
  * off counts as that run whether or not END waits for requests; a
@@ -78,6 +80,9 @@ final class ServerEntries implements ClassFileTransformer {
     static final String ASYNC_RENAMED = "keploy$async$";
     private static final String RUNNABLE = "Ljava/lang/Runnable;";
     private static final String CALLABLE = "Ljava/util/concurrent/Callable;";
+    // The type of the executor a task is for, when a method takes it as an
+    // argument, as @Async's interceptor's doSubmit does.
+    private static final String EXECUTOR = "Lorg/springframework/core/task/AsyncTaskExecutor;";
 
     // The servers' request entries: the class, and the methods a request
     // runs in, the response finished when they return.
@@ -520,16 +525,29 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitEnd();
         }
 
+        // executor is the index of a method's first AsyncTaskExecutor
+        // argument: the executor its task is for; -1 when it has none.
+        private static int executor(Type[] args) {
+            for (int i = 0; i < args.length; i++) {
+                if (args[i].getDescriptor().equals(EXECUTOR)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
         // handing adds, under an executor's method's name and access, a
-        // method that hands its task to RequestGate and calls the renamed
-        // one with what RequestGate gave back in its place; when that
-        // throws, RequestGate hears the task was dropped.
+        // method that hands its task, and the executor it is for (its
+        // executor argument, else this), to RequestGate and calls the
+        // renamed one with what RequestGate gave back in its place; when
+        // that throws, RequestGate hears the task was dropped.
         private void handing(Method method) {
             int access = method.access & ~Opcodes.ACC_SYNCHRONIZED;
             boolean isStatic = (access & Opcodes.ACC_STATIC) != 0;
             Type[] args = Type.getArgumentTypes(method.descriptor);
             Type returns = Type.getReturnType(method.descriptor);
             int task = task(method.descriptor);
+            int executor = executor(args);
             String taskType = args[task].getDescriptor();
             MethodVisitor mv = super.visitMethod(access, method.name, method.descriptor, method.signature,
                     method.exceptions);
@@ -546,9 +564,13 @@ final class ServerEntries implements ClassFileTransformer {
                 slot++;
             }
             int taskSlot = -1;
+            int executorSlot = -1;
             for (int i = 0; i < args.length; i++) {
                 if (i == task) {
                     taskSlot = slot;
+                }
+                if (i == executor) {
+                    executorSlot = slot;
                 }
                 locals.add(frameType(args[i]));
                 slot += args[i].getSize();
@@ -556,8 +578,16 @@ final class ServerEntries implements ClassFileTransformer {
             int handed = slot;
             locals.add(args[task].getInternalName());
 
+            if (executorSlot >= 0) {
+                mv.visitVarInsn(Opcodes.ALOAD, executorSlot);
+            } else if (isStatic) {
+                mv.visitInsn(Opcodes.ACONST_NULL);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, 0);
+            }
             mv.visitVarInsn(Opcodes.ALOAD, taskSlot);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "hand", "(" + taskType + ")" + taskType, false);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "hand", "(Ljava/lang/Object;" + taskType + ")" + taskType,
+                    false);
             mv.visitVarInsn(Opcodes.ASTORE, handed);
             mv.visitLabel(start);
             slot = 0;

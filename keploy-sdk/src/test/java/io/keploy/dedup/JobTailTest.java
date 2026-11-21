@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +28,7 @@ import java.util.zip.ZipEntry;
 import org.example.jobs.DigestJobs;
 import org.example.jobs.JobApp;
 import org.example.jobs.OnDemandScheduler;
+import org.example.jobs.PriorityPool;
 import org.example.jobs.ReportJob;
 import org.example.jobs.SpringJobs;
 import org.example.jobs.Work;
@@ -151,6 +153,43 @@ public class JobTailTest {
             assertTrue(app.log(), app.log().contains("Keploy dedup counts Spring's async tasks (" + POOL + "): a"
                     + " test's END waits for the tasks its requests hand off to finish, as for the requests, and "
                     + JOBS_ASYNC));
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void aJobsTasksForAPriorityPoolGoAsTheyAre() throws Exception {
+        priorityPool(null);
+    }
+
+    @Test(timeout = 120000)
+    public void aJobsTasksForAPriorityPoolGoAsTheyAreWithTheEndWaitOff() throws Exception {
+        priorityPool("0");
+    }
+
+    // priorityPool has a Quartz job, an @Scheduled method and the app's own
+    // thread hand an app's priority pool its tasks, which its queue's
+    // Comparator casts to the app's type: each goes as it is, so none
+    // throws and the queue's order is kept, and the log says once that the
+    // pool's tasks are not counted. Wrapped, the jobs' execute threw
+    // ClassCastException.
+    private void priorityPool(String endWait) throws Exception {
+        try (App app = new App(false, endWait)) {
+            app.command("priority-quartz");
+            app.command("priority-spring");
+            app.command("priority-app");
+            String log = app.log();
+            List<String> results = new ArrayList<>();
+            for (String line : log.split("\n")) {
+                if (line.startsWith("PRIORITY ")) {
+                    results.add(line.trim());
+                }
+            }
+            assertEquals(log, Arrays.asList("PRIORITY job ok", "PRIORITY job ok", "PRIORITY app ok"), results);
+            String said = "Keploy dedup does not count the tasks handed to " + PriorityPool.class.getName()
+                    + "$Pool: its pool's queue, a java.util.concurrent.PriorityBlockingQueue, may order its tasks by"
+                    + " their own type, so each reaches it as it is";
+            assertEquals(log, log.indexOf(said), log.lastIndexOf(said));
+            assertTrue(log, log.contains(said));
         }
     }
 

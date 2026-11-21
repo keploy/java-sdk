@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.example.jobs.PriorityPool;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.interceptor.AsyncExecutionInterceptor;
 import org.springframework.context.ApplicationEvent;
@@ -30,9 +31,10 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * counts). "scheduled" has a scheduler's poller publish the event instead,
  * while the request waits until it has, and "simplescheduled" has the
  * poller of Spring 6.1's SimpleAsyncTaskScheduler (a SimpleAsyncTaskExecutor
- * itself, which starts each run in doExecute) do so. Loaded only when a
- * request asks for it: an app without Spring on its class path never loads
- * it.
+ * itself, which starts each run in doExecute) do so. "priority" hands an
+ * app's priority pool its tasks (PriorityPool), and throws unless they all
+ * ran in the queue's order. Loaded only when a request asks for it: an
+ * app without Spring on its class path never loads it.
  */
 public final class AsyncWork {
 
@@ -125,6 +127,12 @@ public final class AsyncWork {
                 break;
             case "simplescheduled":
                 fire(SIMPLE_FIRE, millis);
+                break;
+            case "priority":
+                String result = PriorityPool.handOff();
+                if (!result.equals("ok")) {
+                    throw new IllegalStateException("the priority pool: " + result);
+                }
                 break;
             default:
                 throw new IllegalArgumentException(how);
