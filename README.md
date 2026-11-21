@@ -25,6 +25,8 @@ Keploy Enterprise drives dynamic dedup per testcase.
 
 Coverage is collected at per-testcase granularity, not process granularity.
 
+Before the first testcase's coverage, the agent sends Enterprise one INDEX record on `/tmp/coverage_data.sock`: a JSON object starting with `{"kind":"index",` that says how it found the application's own classes (`source`: `override` when the dirs and jars in `KEPLOY_JAVA_CLASS_DIRS` held them, `derived` from the launch or from `target/classes` or `build/classes/java/main` under the working directory, `whole-jar` or `classpath` when it could not tell them from the libraries, `none`), what it found them from in words (`launch`), the dirs and jars it read them from (`roots`, at most 64, and `rootCount`), the package roots it kept (`packages`), how many classes it indexed, the build id of those classes (`jv1-` and 32 hex), which JaCoCo agent measures them (`jacoco`: `embedded`, the one keploy-sdk.jar starts, `attached` by the command, `none`, or `unchecked` when the agent was not started as a `-javaagent`), that embedded agent's `includes=`, and two versions as their jars' manifests name them, or `""` when not known: keploy-sdk.jar's (`sdkVersion`) and that of the JaCoCo agent that measures the classes, embedded or attached (`jacocoVersion`). It carries no class list. It is sent as the agent starts when that path's socket file is there (Enterprise's receiver makes it), and otherwise, or when that send fails, right before the first testcase's coverage; a receiver Enterprise binds anew on that path gets it again before its first record. On the TCP transport used in Kubernetes no INDEX record is sent.
+
 The agent binds `/tmp/coverage_control.sock` before the application's `main` runs, so the socket is listening before the application can answer a health check. It answers `ACK` to each command it took, and `IGNORED` to an `END` that no `START` for that testcase came before: nothing is published for it, and Enterprise keeps that testcase out of the comparison. On the TCP transport used in Kubernetes the same `END` is answered with `IGNORED <testcase>` and then `ACK`.
 
 ## How to Use
@@ -61,23 +63,41 @@ Download the `keploy-sdk` jar and keep it outside your application dependencies.
 </plugin>
 ```
 
-The SDK no longer has to be added to `dependencies`, and application code should not import `io.keploy.*` classes for dynamic deduplication.
+Do not add `io.keploy:keploy-sdk` to the app's dependencies, and remove it if it is there: it must not be on the
+app's classpath, where an older copy would run in place of the attached `keploy-sdk.jar` and start no JaCoCo, so no
+test's coverage would be measured. Application code should not import `io.keploy.*` classes for dynamic deduplication.
 
-### 2. Run the App with the Keploy and JaCoCo Java Agents
+### 2. Run the App with the Keploy Java Agent
 
-The dedup agent reads coverage in-process via JaCoCo's runtime API (`org.jacoco.agent.rt.RT.getAgent()`), so attaching the JaCoCo Java agent is the only runtime requirement in the common cases below:
-
-- Maven/Gradle dev runs where application classes are under `target/classes` or `build/classes/java/main`
-- packaged `java -jar` runs where the application classes live inside the executable jar
+`keploy-sdk.jar` is the only agent the app needs:
 
 ```bash
-java \
-  -javaagent:/path/to/keploy-sdk.jar \
-  -javaagent:/path/to/jacocoagent.jar \
-  -jar your-app.jar
+java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar
 ```
 
-If the in-process API is unavailable (for example because the JaCoCo agent is loaded into an isolated classloader), the SDK transparently falls back to JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in `tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
+It carries the JaCoCo agent (`jacocoagent.jar`, JaCoCo 0.8.15, EPL-2.0; see
+`META-INF/THIRD-PARTY-NOTICES.txt` in the jar) and starts it itself, before the
+app's `main`, with `includes=` set to the app's own classes, which it finds from
+how the JVM was launched (Spring Boot, Jib, shaded and plain jars, class dirs;
+`KEPLOY_JAVA_CLASS_DIRS` overrides it). JaCoCo then instruments only those
+classes, not every library class the app loads. The startup log says which:
+
+```
+INFO: Keploy dedup: started JaCoCo 0.8.15 on the app's <n> classes alone (includes=com.example.shop.*)
+```
+
+When the SDK cannot tell the app's classes from its libraries, it says so at
+WARNING and starts JaCoCo on every class; set `KEPLOY_JAVA_CLASS_DIRS` to the
+app's class dirs and jars to fix that.
+
+If the command attaches a JaCoCo agent of its own (`-javaagent:jacocoagent.jar`,
+in any order, or in `JAVA_TOOL_OPTIONS`), the SDK starts none and reads coverage
+from that one, through JaCoCo's in-process runtime API
+(`org.jacoco.agent.rt.RT.getAgent()`). That JaCoCo instruments every class its
+own options take in. If the in-process API is unavailable (for example because
+the JaCoCo agent is loaded into an isolated classloader), the SDK falls back to
+JaCoCo's TCP server mode. To use the fallback explicitly, start JaCoCo in
+`tcpserver` mode and set `KEPLOY_JACOCO_HOST` / `KEPLOY_JACOCO_PORT`:
 
 ```bash
 java \
@@ -91,7 +111,7 @@ java \
 Run replay with dynamic dedup enabled:
 
 ```bash
-keploy test -c "java -javaagent:/path/to/keploy-sdk.jar -javaagent:/path/to/jacocoagent.jar -jar your-app.jar" \
+keploy test -c "java -javaagent:/path/to/keploy-sdk.jar -jar your-app.jar" \
   --dedup \
   --language java
 ```
@@ -128,7 +148,7 @@ supported ceiling is the lower of two limits — not one:
 
 | Component | Role | Reads up to |
 | --- | --- | --- |
-| `jacocoagent.jar` (k8s-proxy init image) | analyzes coverage | Java 26 (JaCoCo 0.8.15) |
+| `jacocoagent.jar` (carried in `keploy-sdk.jar`; on k8s, the k8s-proxy init image's) | analyzes coverage | Java 26 (JaCoCo 0.8.15) |
 | `keploy-sdk.jar` (this repo) | instruments the app, via the ASM shaded in through `org.jacoco:org.jacoco.core` | Java 26 (jacoco.core 0.8.15) |
 
 Both currently sit at **Java 26**, so that is the effective ceiling.
@@ -153,7 +173,10 @@ reason instead of failing silently.
 
 ### Raising it
 
-1. Bump `org.jacoco:org.jacoco.core` in `keploy-sdk/pom.xml`, and cut a release.
+1. Bump `jacoco.version` in `keploy-sdk/pom.xml` (both `org.jacoco.core` and the
+   `jacocoagent.jar` the SDK carries), change the JaCoCo and ASM versions named in
+   `keploy-sdk/src/main/resources/META-INF/THIRD-PARTY-NOTICES.txt` and in this
+   README to match, and cut a release.
 2. In k8s-proxy, bump `KEPLOY_SDK_VERSION` (`build/dedup-jars/build.sh`) to that
    release, and set `BundledJaCoCoVersion`, `JaCoCoOfficialMaxJava` and
    `SDKShadedASMMaxJava` in `pkg/platform/dedupinject/jacocompat.go`.
@@ -173,9 +196,52 @@ ceiling does not quietly fall behind again.
 
 - `KEPLOY_JACOCO_HOST`: JaCoCo TCP host used when the in-process runtime API is unavailable. Default: `127.0.0.1`
 - `KEPLOY_JACOCO_PORT`: JaCoCo TCP port used when the in-process runtime API is unavailable. Default: `36320`
-- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations to analyze for executed lines when your build output lives outside the standard locations
-- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath if standard class roots and the executable archive do not provide application classes. Default: `true`
+- `KEPLOY_JAVA_CLASS_DIRS`: optional comma-separated class, jar, war, ear, or zip locations of the app's own classes. You rarely need it: see "Which classes count as the app's" below
+- `KEPLOY_JAVA_CLASSPATH_FALLBACK`: scans the full classpath when neither the app's own classes nor the executable jar give any class. `false` leaves the index empty then, and no test's coverage is measured. Default: `true`
 - `KEPLOY_JAVA_DEDUP_DISABLED`: disables the Java dedup agent when set to `true`, `1`, or `yes`
+
+## Which classes count as the app's
+
+Dedup fingerprints a test by the app's own code it runs, not by library code
+(Spring, Hibernate, Jetty), which runs on nearly every request. The agent finds
+the app's classes, in this order:
+
+1. `KEPLOY_JAVA_CLASS_DIRS`, and `target/classes` or `build/classes/java/main`
+   under the working dir.
+2. From how the JVM was launched. The dir or jar that holds the main class is
+   the app's own and counts whole, so generated code outside its package
+   (OpenAPI, jOOQ, protobuf) counts too. Other jars give only the classes under
+   the main class's package root: its package cut to three parts
+   (`org.apache.fineract` for `org.apache.fineract.ServerApplication`), or a
+   longer Maven groupId that the package is in.
+   - `java -cp ... Main` (Jib's `/app/classes` and `/app/libs`, or any other
+     classpath): every class in the classpath's directories and in the jar
+     that holds the main class, and the classes under the root in its other
+     jars.
+   - A Spring Boot jar or war, or the dir it was extracted to: every class in
+     `BOOT-INF/classes`, and the classes under the root in `BOOT-INF/lib`'s
+     jars. A thin jar counts by its `Start-Class`.
+   - A Vert.x app: its `Main-Verticle`, or the verticle its command runs, is
+     the main class.
+   - Any other jar: all of it, and the classes under the root in the jars its
+     manifest's `Class-Path` names. A shaded jar (one that holds other
+     projects' `META-INF/maven` metadata) gives only the classes under the root.
+     A jar shaded of libraries that carry no such metadata (as Gradle's shadow
+     often is) counts whole, library classes too.
+   A launch the agent cannot read this way is not guessed at: a main class in
+   none of the jars or dirs launched (a launcher stub, as Quarkus runs), a
+   known server's, framework's or test runner's launcher (Tomcat, Jetty,
+   WildFly, Play, Helidon MP, Karaf, Felix, Equinox, Maven, Gradle), or
+   `java -m`. The list is of known launchers: a launcher it does not know is
+   taken for the app, so set `KEPLOY_JAVA_CLASS_DIRS` for one.
+3. Failing those, the whole executable jar, then the whole classpath
+   (`KEPLOY_JAVA_CLASSPATH_FALLBACK`). The agent then logs a WARNING: library
+   code makes duplicate tests look different, so dedup keeps more tests than
+   it should, and the startup warmup is skipped. When even those give no
+   class, the WARNING says no test's coverage is measured. Either way, set
+   `KEPLOY_JAVA_CLASS_DIRS`.
+
+The agent logs where its classes came from, and how many, at the first test.
 
 ## Sample
 

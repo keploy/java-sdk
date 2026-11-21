@@ -62,10 +62,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.jar.JarFile;
+import java.util.jar.JarInputStream;
+import java.util.jar.Manifest;
 
 public final class SmokeHarness {
     private static final File CONTROL_SOCKET = new File("/tmp/coverage_control.sock");
@@ -73,6 +78,12 @@ public final class SmokeHarness {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length == 0 ? "unknown" : args[0];
+        // What the INDEX report must say: where the app's classes came from,
+        // and which JaCoCo measures them.
+        String wantSource = args.length > 1 ? args[1] : "";
+        String wantJacoco = args.length > 2 ? args[2] : "";
+        // How many classes the index must hold, when the case says.
+        String wantClasses = args.length > 3 ? args[3] : "";
 
         // Keploy fires its first test as soon as the app answers a health
         // check, so the agent has to be listening before main runs. This START
@@ -82,17 +93,29 @@ public final class SmokeHarness {
 
         delete(DATA_SOCKET);
 
+        // Keploy's receiver: one record per connection. This one is bound
+        // after the START: no socket file was there when the SDK bound its
+        // control socket, so it sent no INDEX report then, and it must send
+        // it here first, before the test's coverage.
+        AtomicReference<String> index = new AtomicReference<String>();
         AtomicReference<String> payload = new AtomicReference<String>();
         CountDownLatch received = new CountDownLatch(1);
         Thread receiver = new Thread(new Runnable() {
             @Override
             public void run() {
                 try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
-                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 1);
-                    try (AFUNIXSocket socket = server.accept()) {
-                        payload.set(readAll(socket.getInputStream()));
-                        received.countDown();
+                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
+                    for (int n = 0; payload.get() == null; n++) {
+                        try (AFUNIXSocket socket = server.accept()) {
+                            String record = readAll(socket.getInputStream());
+                            if (n == 0 && record.startsWith("{\"kind\":\"index\",")) {
+                                index.set(record);
+                            } else {
+                                payload.set(record);
+                            }
+                        }
                     }
+                    received.countDown();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -120,7 +143,68 @@ public final class SmokeHarness {
                 || !json.contains("smoke/Work")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
+        String report = index.get();
+        if (report == null
+                || !report.contains("\"source\":\"" + wantSource + "\"")
+                || !report.contains("\"jacoco\":\"" + wantJacoco + "\"")
+                || ("embedded".equals(wantJacoco) != report.matches(".*\"includes\":\"[^\"]*smoke\\.Work.*"))
+                || (!wantClasses.isEmpty() && !report.matches(".*\"classes\":" + wantClasses + "[,}].*"))) {
+            throw new IllegalStateException("the first record on the data socket was no INDEX report with source "
+                    + wantSource + ", jacoco " + wantJacoco
+                    + (wantClasses.isEmpty() ? "" : " and " + wantClasses + " classes") + " in " + mode + ": " + report);
+        }
+        // keploy-sdk's version and the measuring JaCoCo's, as their jars'
+        // manifests name them: the one the command attached, or the one
+        // keploy-sdk.jar carries and started.
+        String wantSdkVersion = versionOf(new File(System.getProperty("smoke.sdkJar")), null);
+        String wantJacocoVersion = "attached".equals(wantJacoco)
+                ? versionOf(new File(System.getProperty("smoke.jacocoJar")), null)
+                : "embedded".equals(wantJacoco)
+                ? versionOf(new File(System.getProperty("smoke.sdkJar")), "jacocoagent.jar") : "";
+        if (wantSdkVersion.isEmpty() || wantJacocoVersion.isEmpty() != !wantJacoco.matches("attached|embedded")
+                || !report.endsWith(",\"sdkVersion\":\"" + wantSdkVersion + "\",\"jacocoVersion\":\""
+                        + wantJacocoVersion + "\"}")) {
+            throw new IllegalStateException("the INDEX report did not name keploy-sdk " + wantSdkVersion
+                    + " and JaCoCo " + wantJacocoVersion + " in " + mode + ": " + report);
+        }
+        String ownLibraries = System.getProperty("smoke.ownLibraries", "");
+        if (!ownLibraries.isEmpty()) {
+            loadsItsOwn(ownLibraries);
+        }
+        System.out.println(mode + ": " + report);
         System.out.println(mode + ": " + json);
+    }
+
+    // loadsItsOwn loads ASM, Gson and JaCoCo's core from the app's own jars
+    // as Spring Boot's launcher loads BOOT-INF/lib: through a loader that asks
+    // its parent, the system class loader, first. keploy-sdk.jar is on the
+    // system class path, so a copy of these it carried under their own names
+    // would be what the app gets, in keploy-sdk's version, not the app's.
+    private static void loadsItsOwn(String jars) throws Exception {
+        String[] paths = jars.split(File.pathSeparator);
+        URL[] urls = new URL[paths.length];
+        for (int i = 0; i < paths.length; i++) {
+            urls[i] = new File(paths[i]).toURI().toURL();
+        }
+        URLClassLoader libraries = new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
+        try {
+            for (String name : new String[] {
+                    "org.objectweb.asm.ClassReader", "com.google.gson.Gson", "org.jacoco.core.JaCoCo"}) {
+                Class<?> type = Class.forName(name, false, libraries);
+                URL from = type.getProtectionDomain().getCodeSource() == null
+                        ? null : type.getProtectionDomain().getCodeSource().getLocation();
+                boolean own = false;
+                for (URL url : urls) {
+                    own |= from != null && new File(from.toURI()).equals(new File(url.toURI()));
+                }
+                if (!own) {
+                    throw new IllegalStateException("the app's " + name + " came from " + from
+                            + ", not from the app's own jars " + jars);
+                }
+            }
+        } finally {
+            libraries.close();
+        }
     }
 
     private static void command(String command) throws Exception {
@@ -135,6 +219,21 @@ public final class SmokeHarness {
             if (!"ACK proto=2\n".equals(ack)) {
                 throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
+        }
+    }
+
+    // versionOf is the Implementation-Version of jar's manifest, or of the
+    // manifest of the jar nested in it at entry when entry is not null.
+    private static String versionOf(File jar, String entry) throws Exception {
+        try (JarFile file = new JarFile(jar)) {
+            Manifest manifest = file.getManifest();
+            if (entry != null) {
+                try (JarInputStream nested = new JarInputStream(file.getInputStream(file.getEntry(entry)))) {
+                    manifest = nested.getManifest();
+                }
+            }
+            String version = manifest == null ? null : manifest.getMainAttributes().getValue("Implementation-Version");
+            return version == null ? "" : version;
         }
     }
 
@@ -201,6 +300,7 @@ java_with_agents() {
   java \
     -javaagent:"${agent_jar}" \
     -javaagent:"${jacoco_jar}=destfile=/tmp/keploy-sdk-smoke-${mode}.exec" \
+    -Dsmoke.sdkJar="${agent_jar}" -Dsmoke.jacocoJar="${jacoco_jar}" \
     "$@"
 }
 
@@ -213,7 +313,7 @@ cp -R "${work_dir}/classes/." "${work_dir}/gradle/build/classes/java/main/"
   run_smoke "maven-classes" \
     java_with_agents "maven-classes" \
       -cp "target/classes:${agent_jar}" \
-      smoke.SmokeHarness "maven-classes"
+      smoke.SmokeHarness "maven-classes" derived attached
 )
 
 (
@@ -221,13 +321,16 @@ cp -R "${work_dir}/classes/." "${work_dir}/gradle/build/classes/java/main/"
   run_smoke "gradle-classes" \
     java_with_agents "gradle-classes" \
       -cp "build/classes/java/main:${agent_jar}" \
-      smoke.SmokeHarness "gradle-classes"
+      smoke.SmokeHarness "gradle-classes" derived attached
 )
 
+# Named for the whole-classpath fallback this layout once took: the agent now
+# takes the dir that holds the main class (its package, smoke, has one part,
+# so the INDEX lists no package root).
 run_smoke "classpath-fallback" \
   java_with_agents "classpath-fallback" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "classpath-fallback"
+    smoke.SmokeHarness "classpath-fallback" derived attached
 
 mkdir -p "${work_dir}/jar/lib"
 cp "${agent_jar}" "${work_dir}/jar/lib/keploy-sdk.jar"
@@ -242,8 +345,71 @@ jar cfm "${work_dir}/jar/plain-app.jar" "${work_dir}/jar/MANIFEST.MF" -C "${work
   cd "${work_dir}/jar"
   run_smoke "plain-jar" \
     java_with_agents "plain-jar" \
-      -jar plain-app.jar "plain-jar"
+      -jar plain-app.jar "plain-jar" derived attached
 )
+
+# keploy-sdk.jar alone: it starts the JaCoCo agent it carries, with includes=
+# the app's classes, so the command attaches no jacocoagent.jar. Its log
+# must say it did, or a JaCoCo found elsewhere could pass these cases.
+java_with_sdk_only() {
+  local mode="${1:?mode required}"
+  shift
+  java -javaagent:"${agent_jar}" -Dsmoke.sdkJar="${agent_jar}" "$@" 2>"${work_dir}/${mode}.err" \
+    || { cat "${work_dir}/${mode}.err" >&2; exit 1; }
+  if ! grep -q "started JaCoCo .* on the app's .* classes alone (includes=" "${work_dir}/${mode}.err"; then
+    cat "${work_dir}/${mode}.err" >&2
+    echo "${mode}: keploy-sdk.jar did not start its JaCoCo agent on the app's classes" >&2
+    exit 1
+  fi
+}
+
+(
+  cd "${work_dir}/maven"
+  run_smoke "sdk-only-maven-classes" \
+    java_with_sdk_only "sdk-only-maven-classes" \
+      -cp "target/classes:${agent_jar}" \
+      smoke.SmokeHarness "sdk-only-maven-classes" derived embedded
+)
+
+(
+  cd "${work_dir}/jar"
+  run_smoke "sdk-only-plain-jar" \
+    java_with_sdk_only "sdk-only-plain-jar" \
+      -jar plain-app.jar "sdk-only-plain-jar" derived embedded
+)
+
+# The app's own ASM, Gson and JaCoCo core, in versions other than the ones
+# keploy-sdk.jar carries. keploy-sdk.jar carries its copies renamed under
+# io/keploy/shaded, so the app gets its own and keploy-sdk its own, whichever
+# comes first: the app's on the class path before keploy-sdk.jar (Jib's
+# launch), or the app's in a loader under the system class loader (Spring
+# Boot's BOOT-INF/lib).
+for artifact in org.ow2.asm:asm:5.2 com.google.code.gson:gson:2.11.0 org.jacoco:org.jacoco.core:0.7.9; do
+  mvn -q -f "${repo_root}/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy \
+    -Dartifact="${artifact}" -DoutputDirectory="${work_dir}/app-libs"
+done
+app_libs="$(find "${work_dir}/app-libs" -name '*.jar' | sort | paste -sd: -)"
+
+run_smoke "sdk-only-app-libraries-first" \
+  java_with_sdk_only "sdk-only-app-libraries-first" \
+    -cp "${app_libs}:${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-app-libraries-first" derived embedded
+
+run_smoke "sdk-only-app-libraries-in-own-loader" \
+  java_with_sdk_only "sdk-only-app-libraries-in-own-loader" \
+    -Dsmoke.ownLibraries="${app_libs}" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-app-libraries-in-own-loader" derived embedded
+
+# keploy-sdk.jar's own classes, the libraries it carries among them, are
+# never the app's: an override that names keploy-sdk.jar still indexes the
+# app's classes alone.
+app_class_count="$(find "${work_dir}/classes" -name '*.class' | wc -l | tr -d ' ')"
+KEPLOY_JAVA_CLASS_DIRS="${work_dir}/classes:${agent_jar}" \
+run_smoke "sdk-only-override-names-keploy-sdk" \
+  java_with_sdk_only "sdk-only-override-names-keploy-sdk" \
+    -cp "${work_dir}/classes:${agent_jar}" \
+    smoke.SmokeHarness "sdk-only-override-names-keploy-sdk" override embedded "${app_class_count}"
 
 mkdir -p "${work_dir}/boot-root/BOOT-INF/classes" "${work_dir}/war-root/WEB-INF/classes"
 cp -R "${work_dir}/classes/." "${work_dir}/boot-root/BOOT-INF/classes/"
@@ -255,13 +421,13 @@ KEPLOY_JAVA_CLASS_DIRS="${work_dir}/spring-boot-layout.jar" \
 run_smoke "spring-boot-layout" \
   java_with_agents "spring-boot-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "spring-boot-layout"
+    smoke.SmokeHarness "spring-boot-layout" override attached
 
 KEPLOY_JAVA_CLASS_DIRS="${work_dir}/servlet-layout.war" \
 run_smoke "servlet-war-layout" \
   java_with_agents "servlet-war-layout" \
     -cp "${work_dir}/classes:${agent_jar}" \
-    smoke.SmokeHarness "servlet-war-layout"
+    smoke.SmokeHarness "servlet-war-layout" override attached
 
 # The agent binds the control socket in premain, so junixsocket's native
 # library loads there, before main runs. A JVM that cannot load it must still
