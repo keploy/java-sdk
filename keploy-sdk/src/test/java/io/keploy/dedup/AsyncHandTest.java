@@ -30,6 +30,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -544,10 +545,23 @@ public class AsyncHandTest {
         // is missing (getMethod throws NoClassDefFoundError), its
         // getThreadPoolExecutor() or its pool's getQueue() throws, or its
         // queue is null. Its tasks go as they are, the log says so once,
-        // and the app's call sees nothing thrown.
+        // and the app's call sees nothing thrown. A class loader's
+        // RuntimeException is the class's for good, as a missing type is. An
+        // app's own getThreadPoolExecutor() that throws IllegalStateException
+        // is said too: only Spring's says its pool is not initialized, and
+        // only by that. A getThreadPoolExecutor() declared by a class named
+        // as Spring's ThreadPoolTaskExecutor (a later or patched Spring)
+        // that throws anything else, or whose pool's getQueue() throws
+        // IllegalStateException itself, is said.
         Object[][] cases = {
             {missingTypeExecutor(), "java.lang.NoClassDefFoundError: org/example/pools/Absent"},
             {new PoolError(), "java.lang.NoClassDefFoundError: missing/Pool"},
+            {loaderExecutor("LoaderRuntime", new IllegalArgumentException("loader")),
+                "java.lang.IllegalArgumentException: loader"},
+            {new PoolUnsupported(), "java.lang.UnsupportedOperationException"},
+            {new PoolHidden(), "java.lang.IllegalStateException: hidden"},
+            {springNamed("SpringNamedUnsupported", false), "java.lang.UnsupportedOperationException"},
+            {springNamed("SpringNamedClosed", true), "java.lang.IllegalStateException: closed"},
             {new QueueError(), "java.lang.NoClassDefFoundError: missing/Queue"},
             {new QueueState(), "java.lang.IllegalStateException: closed"},
             {new QueueNull(), "java.lang.NullPointerException"},
@@ -598,6 +612,167 @@ public class AsyncHandTest {
         }
     }
 
+    @Test
+    public void aFailureForNowIsNeitherKeptNorSaid() throws Exception {
+        // Reading each executor's pool runs out of stack once: in its
+        // getThreadPoolExecutor(), or in its class loader as getMethod
+        // resolves a type its class names. That task goes as it is, the log
+        // says nothing, and the next task the executor is handed is counted.
+        Logger logger = Logger.getLogger(KeployDedupAgent.class.getName());
+        List<String> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                logged.add(record.getLevel() + " " + record.getMessage());
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.addHandler(handler);
+        Object request = RequestGate.enter();
+        try {
+            for (Object executor : new Object[] {new PoolOnce(),
+                loaderExecutor("LoaderStack", new StackOverflowError("for now"))}) {
+                String label = executor.getClass().getName();
+                Runnable first = () -> { };
+                assertSame(label + ": out of stack, as it is", first, handed(executor, first));
+                assertEquals(label + ": nothing said " + logged, 0, logged.size());
+                Runnable task = () -> { };
+                Callable<String> call = () -> "x";
+                Runnable counted = handed(executor, task);
+                Callable<String> countedCall = handed(executor, call);
+                assertNotSame(label + ": the next task is counted", task, counted);
+                assertNotSame(label + ": the next task is counted", call, countedCall);
+                assertEquals(label, 3, RequestGate.running());
+                RequestGate.dropped(counted, task);
+                RequestGate.dropped(countedCall, call);
+                assertEquals(label + ": nothing said " + logged, 0, logged.size());
+            }
+            assertEquals("only the request runs", 1, RequestGate.running());
+        } finally {
+            RequestGate.exit(request);
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Test
+    public void nothingTheAppsOwnCodeThrowsReachesItsCall() throws Exception {
+        // QueueRude's getQueue() throws an exception of the app's whose
+        // toString() throws; LoudPriority's pool orders its tasks, and the
+        // app's log Handler throws on the line that says so. Each task goes
+        // as it is, and the app's call sees nothing thrown.
+        Logger logger = Logger.getLogger(KeployDedupAgent.class.getName());
+        Handler loud = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                throw new IllegalStateException("the app's handler");
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.addHandler(loud);
+        Object request = RequestGate.enter();
+        try {
+            for (Object executor : new Object[] {new QueueRude(),
+                new LoudPriority(pool(new PriorityBlockingQueue<>()))}) {
+                String label = executor.getClass().getName();
+                for (int i = 0; i < 2; i++) {
+                    Runnable task = () -> { };
+                    Callable<String> call = () -> "x";
+                    assertSame(label, task, handed(executor, task));
+                    assertSame(label, call, handed(executor, call));
+                }
+            }
+            assertEquals("only the request runs", 1, RequestGate.running());
+        } finally {
+            RequestGate.exit(request);
+            logger.removeHandler(loud);
+        }
+    }
+
+    // The app's call to its executor: anything hand throws fails the row.
+    private static Runnable handed(Object executor, Runnable task) {
+        try {
+            return RequestGate.hand(executor, task);
+        } catch (Throwable e) {
+            throw new AssertionError(executor.getClass().getName() + ": the app's call threw " + e, e);
+        }
+    }
+
+    private static <T> Callable<T> handed(Object executor, Callable<T> task) {
+        try {
+            return RequestGate.hand(executor, task);
+        } catch (Throwable e) {
+            throw new AssertionError(executor.getClass().getName() + ": the app's call threw " + e, e);
+        }
+    }
+
+    // An executor whose class's public method names a type its class
+    // loader throws first on the first time it is asked for it, and loads
+    // after that; its pool keeps its tasks in order.
+    private static Object loaderExecutor(String simpleName, Throwable first) throws Exception {
+        String name = "org.example.pools." + simpleName;
+        String late = name + "Late";
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        String parent = Type.getInternalName(InOrder.class);
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name.replace('.', '/'), null, parent,
+                null);
+        MethodVisitor init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, parent, "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(0, 0);
+        init.visitEnd();
+        MethodVisitor use = writer.visitMethod(Opcodes.ACC_PUBLIC, "use", "(L" + late.replace('.', '/') + ";)V", null,
+                null);
+        use.visitCode();
+        use.visitInsn(Opcodes.RETURN);
+        use.visitMaxs(0, 0);
+        use.visitEnd();
+        writer.visitEnd();
+        byte[] type = writer.toByteArray();
+        ClassWriter lateWriter = new ClassWriter(0);
+        lateWriter.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, late.replace('.', '/'), null,
+                "java/lang/Object", null);
+        lateWriter.visitEnd();
+        byte[] lateType = lateWriter.toByteArray();
+        AtomicBoolean failed = new AtomicBoolean();
+        ClassLoader loader = new ClassLoader(AsyncHandTest.class.getClassLoader()) {
+            @Override
+            protected Class<?> findClass(String binary) throws ClassNotFoundException {
+                if (binary.equals(name)) {
+                    return defineClass(binary, type, 0, type.length);
+                }
+                if (binary.equals(late)) {
+                    if (failed.compareAndSet(false, true)) {
+                        if (first instanceof Error) {
+                            throw (Error) first;
+                        }
+                        throw (RuntimeException) first;
+                    }
+                    return defineClass(binary, lateType, 0, lateType.length);
+                }
+                return super.findClass(binary);
+            }
+        };
+        Object executor = loader.loadClass(name).getDeclaredConstructor().newInstance();
+        assertFalse("not loaded yet", failed.get());
+        return executor;
+    }
+
     // An executor whose class has a public getThreadPoolExecutor() and a
     // public method that names a type no class loader has.
     private static Object missingTypeExecutor() throws Exception {
@@ -625,6 +800,89 @@ public class AsyncHandTest {
         use.visitEnd();
         writer.visitEnd();
         return load(name, writer.toByteArray()).getDeclaredConstructor().newInstance();
+    }
+
+    // An executor of class org.example.pools.simpleName, whose public
+    // getThreadPoolExecutor() is declared by its superclass, a class named
+    // as Spring's ThreadPoolTaskExecutor that a loader of its own defines
+    // (Spring's own is never that class). The method throws
+    // UnsupportedOperationException, or, when closed, returns a pool whose
+    // getQueue() throws IllegalStateException itself.
+    private static Object springNamed(String simpleName, boolean closed) throws Exception {
+        String spring = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
+        String name = "org.example.pools." + simpleName;
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, spring.replace('.', '/'), null,
+                "java/lang/Object", null);
+        MethodVisitor init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(0, 0);
+        init.visitEnd();
+        MethodVisitor pool = writer.visitMethod(Opcodes.ACC_PUBLIC, "getThreadPoolExecutor",
+                "()Ljava/util/concurrent/ThreadPoolExecutor;", null, null);
+        pool.visitCode();
+        if (closed) {
+            pool.visitMethodInsn(Opcodes.INVOKESTATIC, Type.getInternalName(AsyncHandTest.class), "closedPool",
+                    "()Ljava/util/concurrent/ThreadPoolExecutor;", false);
+            pool.visitInsn(Opcodes.ARETURN);
+        } else {
+            String thrown = Type.getInternalName(UnsupportedOperationException.class);
+            pool.visitTypeInsn(Opcodes.NEW, thrown);
+            pool.visitInsn(Opcodes.DUP);
+            pool.visitMethodInsn(Opcodes.INVOKESPECIAL, thrown, "<init>", "()V", false);
+            pool.visitInsn(Opcodes.ATHROW);
+        }
+        pool.visitMaxs(0, 0);
+        pool.visitEnd();
+        writer.visitEnd();
+        byte[] springType = writer.toByteArray();
+        ClassWriter subWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        subWriter.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name.replace('.', '/'), null,
+                spring.replace('.', '/'), null);
+        MethodVisitor subInit = subWriter.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        subInit.visitCode();
+        subInit.visitVarInsn(Opcodes.ALOAD, 0);
+        subInit.visitMethodInsn(Opcodes.INVOKESPECIAL, spring.replace('.', '/'), "<init>", "()V", false);
+        subInit.visitInsn(Opcodes.RETURN);
+        subInit.visitMaxs(0, 0);
+        subInit.visitEnd();
+        subWriter.visitEnd();
+        byte[] subType = subWriter.toByteArray();
+        // Child-first for the two names: the subclass's superclass must be
+        // this loader's stand-in, not Spring's own from the parent.
+        ClassLoader loader = new ClassLoader(AsyncHandTest.class.getClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String binary, boolean resolve) throws ClassNotFoundException {
+                byte[] type = binary.equals(spring) ? springType : binary.equals(name) ? subType : null;
+                if (type == null) {
+                    return super.loadClass(binary, resolve);
+                }
+                synchronized (getClassLoadingLock(binary)) {
+                    Class<?> found = findLoadedClass(binary);
+                    if (found == null) {
+                        found = defineClass(binary, type, 0, type.length);
+                    }
+                    if (resolve) {
+                        resolveClass(found);
+                    }
+                    return found;
+                }
+            }
+        };
+        Object executor = loader.loadClass(name).getDeclaredConstructor().newInstance();
+        Class<?> declaring = executor.getClass().getMethod("getThreadPoolExecutor").getDeclaringClass();
+        assertEquals("named as Spring's", spring, declaring.getName());
+        assertNotSame("not Spring's own", ThreadPoolTaskExecutor.class, declaring);
+        return executor;
+    }
+
+    // The pool the closed stand-in's getThreadPoolExecutor() returns. Public:
+    // the stand-in is in another runtime package.
+    public static ThreadPoolExecutor closedPool() {
+        return new Broken(new IllegalStateException("closed"), null);
     }
 
     // A pool whose getQueue() throws what it is made with, or returns null.
@@ -662,6 +920,98 @@ public class AsyncHandTest {
         @Override
         public ThreadPoolExecutor getThreadPoolExecutor() {
             throw new NoClassDefFoundError("missing/Pool");
+        }
+    }
+
+    public static final class PoolUnsupported extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        PoolUnsupported() {
+            super(null);
+        }
+
+        @Override
+        public ThreadPoolExecutor getThreadPoolExecutor() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    // An app's executor that hides its pool the way Spring's does before
+    // it is initialized, but is not Spring's.
+    public static final class PoolHidden extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        PoolHidden() {
+            super(null);
+        }
+
+        @Override
+        public ThreadPoolExecutor getThreadPoolExecutor() {
+            throw new IllegalStateException("hidden");
+        }
+    }
+
+    // An executor whose getThreadPoolExecutor() runs out of stack the
+    // first time, and returns its pool, in order, after that.
+    public static final class PoolOnce extends Executor {
+
+        private static final long serialVersionUID = 1L;
+        private final AtomicBoolean thrown = new AtomicBoolean();
+
+        PoolOnce() {
+            super(pool(new LinkedBlockingQueue<>()));
+        }
+
+        @Override
+        public ThreadPoolExecutor getThreadPoolExecutor() {
+            if (thrown.compareAndSet(false, true)) {
+                throw new StackOverflowError("for now");
+            }
+            return super.getThreadPoolExecutor();
+        }
+    }
+
+    // An executor whose pool keeps its tasks in order, for a class of
+    // another package to extend.
+    public static class InOrder extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        public InOrder() {
+            super(pool(new LinkedBlockingQueue<>()));
+        }
+    }
+
+    // An exception of the app's whose message, and so its toString(),
+    // throws.
+    static final class Rude extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+        private String detail;
+
+        @Override
+        public String getMessage() {
+            return detail.trim();
+        }
+    }
+
+    public static final class QueueRude extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        QueueRude() {
+            super(new Broken(new Rude(), null));
+        }
+    }
+
+    public static final class LoudPriority extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        LoudPriority(ThreadPoolExecutor pool) {
+            super(pool);
         }
     }
 
