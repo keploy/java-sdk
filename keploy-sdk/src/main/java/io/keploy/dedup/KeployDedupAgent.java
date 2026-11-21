@@ -11,6 +11,8 @@ import org.newsclub.net.unix.AFUNIXServerSocket;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -27,6 +29,7 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -84,7 +87,13 @@ public final class KeployDedupAgent {
 
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
             boolean windowCut) {
-        return GSON.toJson(new DedupPayload(id, new TestCoverage(probesByClass, classMismatch, windowCut)));
+        return toDedupJson(id, probesByClass, classMismatch, windowCut, Collections.<String>emptyList());
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
+            boolean windowCut, List<String> contaminated) {
+        return GSON.toJson(new DedupPayload(id,
+                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated)));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -120,6 +129,10 @@ public final class KeployDedupAgent {
     private static final AtomicBoolean END_WAIT_INVALID_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean END_WAIT_CAPPED_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean NOT_COUNTED_LOGGED = new AtomicBoolean(false);
+    // Whether this JVM ever added ServerEntries (countRequests, from a
+    // -javaagent's premain): once it has, its classes stay changed, and job
+    // runs are seen, across a stop() and a start() with no instrumentation.
+    static volatile boolean transformerAdded;
     // The answer to a command not taken (a START that could not clear the
     // counters, an END with no START for that test, as after a restart, an
     // END whose scan lost hits it had cleared): nothing is published
@@ -291,6 +304,14 @@ public final class KeployDedupAgent {
             // and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
             countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco));
+        } else if (!transformerAdded) {
+            // Attached to a running JVM, or started from the app's code, and
+            // never as a -javaagent: ServerEntries cannot change a class, so
+            // no job run is seen. A start() after a -javaagent's (a context
+            // reload) still sees them: premain's ServerEntries changed them.
+            log(Level.INFO, "Keploy dedup does not see the app's scheduled jobs' runs: keploy-sdk.jar was not"
+                    + " started as a -javaagent, so a test a Quartz job or a Spring @Scheduled method ran in is"
+                    + " not marked contaminated in its record", null);
         }
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
@@ -302,7 +323,9 @@ public final class KeployDedupAgent {
 
     // countRequests makes the requests of the app's server count in
     // RequestGate (ServerEntries), so that a test's END waits for them to
-    // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0. From premain, before the
+    // finish, unless KEPLOY_JAVA_END_WAIT_MS is 0, and the runs of its
+    // scheduled jobs count in JobGate, so that a test a job ran in is marked
+    // contaminated, whatever the wait. From premain, before the
     // app's main loads its server, and after startJacoco. ServerEntries can
     // retransform when keploy-sdk.jar's manifest lets it (Can-Retransform-
     // Classes), so the JVM runs it after JaCoCo's transformer even when a
@@ -311,23 +334,24 @@ public final class KeployDedupAgent {
     // which then ids the changed server class: classMismatch names it when
     // the index holds it, and the log says so when the JVM has a JaCoCo
     // agent of its own (jacocoAttached).
-    private static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
-        if (endWaitMillis() == 0) {
-            return;
-        }
+    static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
+        boolean requests = endWaitMillis() != 0;
         try {
             boolean retransformable = instrumentation.isRetransformClassesSupported();
             if (!retransformable && jacocoAttached) {
                 log(Level.WARNING, "Keploy dedup: the jar keploy-sdk.jar runs from has no Can-Retransform-Classes:"
                         + " true in its manifest, or this JVM cannot retransform, so a JaCoCo agent attached after"
-                        + " it instruments the server classes it changes, and each test's classMismatch names them"
-                        + " when Keploy measures them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
+                        + " it instruments the " + (requests ? "server, scheduler and Spring executor"
+                                : "scheduler and Spring executor")
+                        + " classes it changes, and each test's classMismatch names them when Keploy measures"
+                        + " them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
                         null);
             }
-            instrumentation.addTransformer(new ServerEntries(), retransformable);
+            instrumentation.addTransformer(new ServerEntries(requests), retransformable);
+            transformerAdded = true;
         } catch (RuntimeException e) {
-            log(Level.WARNING, "Keploy dedup does not count the app's requests: their server could not be"
-                    + " changed to count them", e);
+            log(Level.WARNING, "Keploy dedup does not count the app's requests or see its scheduled jobs' runs:"
+                    + " their classes could not be changed to count them", e);
         }
     }
 
@@ -807,6 +831,23 @@ public final class KeployDedupAgent {
                     return;
                 }
 
+                if (BuildTable.COMMAND.equals(line.trim())) { // the build table: ACK, then sent on its own thread
+                    String reply; // or IGNORED, with reason=low_heap when the heap is short
+                    try {
+                        CoverageIndex index = collector.coverageIndex; // its count only if read: no load here
+                        reply = BuildTable.answer(() -> {
+                                    List<ClassEntry> read = index.entries;
+                                    return read == null ? -1 : read.size();
+                                },
+                                () -> BuildTable.files(index.entries(), e -> e.className, e -> e.bytes),
+                                new File(dataSocketPath));
+                    } catch (Throwable t) { // thrown past here, it would end the accept loop: IGNORED instead
+                        log(Level.WARNING, "Keploy coverage: the build table was not started", t);
+                        reply = UNIX_REPLY_IGNORED;
+                    }
+                    writeReply(commandSocket.getOutputStream(), reply);
+                    return;
+                }
                 boolean taken;
                 try {
                     taken = run(line.trim());
@@ -892,10 +933,9 @@ public final class KeployDedupAgent {
 
             try {
                 boolean cut = !collector.awaitRequests(command.testId, phases);
-                TestCoverage coverage = collector.capture(phases);
-                if (cut) {
-                    coverage = coverage.cut();
-                }
+                // The job window closes once the hits are read: a job that
+                // started while they were read may be in them.
+                TestCoverage coverage = collector.capture(phases).ended(cut, JobGate.close());
                 if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
@@ -985,6 +1025,11 @@ public final class KeployDedupAgent {
     private static final class CoverageTcpClient implements CoverageWorker {
 
         private static final long RECONNECT_DELAY_MILLIS = 1000;
+        // A reply up to this size leaves in one write. Above it (the CLASSES
+        // frame, sent once per connection with the class files; a MANIFEST
+        // frame once the app has hit several hundred classes; a very large
+        // COV) a frame goes to the socket as it is, so it is never copied.
+        private static final int REPLY_BUFFER_BYTES = 64 * 1024;
 
         private final CoverageCollector collector;
         private final String host;
@@ -1032,6 +1077,17 @@ public final class KeployDedupAgent {
             // Bounded connect, but NO read timeout: the connection is long-lived and
             // idles between tests waiting for the next START/END command.
             open.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
+            // Keploy waits on each reply, so no part of one may wait in this
+            // kernel for Keploy's ACK of the part before it (Nagle), which
+            // Keploy's kernel delays by about 40 ms, once per test. Each reply
+            // is also sent in one write (see out below).
+            try {
+                open.setTcpNoDelay(true);
+            } catch (SocketException e) {
+                log(Level.INFO, "Keploy dedup: TCP_NODELAY could not be set on the socket to " + host + ":" + port
+                        + " (" + e.getClass().getSimpleName() + ": " + e.getMessage() + "), so a reply sent in"
+                        + " more than one write may wait about 40 ms", null);
+            }
             socket = open;
             connectFailureLogged = false;
             // Fresh connection (possibly a new proxy replica after a drop): re-arm
@@ -1042,7 +1098,9 @@ public final class KeployDedupAgent {
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
                          new InputStreamReader(active.getInputStream(), StandardCharsets.UTF_8))) {
-                OutputStream out = active.getOutputStream();
+                // dispatch writes a reply's lines here and ack sends them in one
+                // write once the reply is whole.
+                OutputStream out = new BufferedOutputStream(active.getOutputStream(), REPLY_BUFFER_BYTES);
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
@@ -1094,7 +1152,7 @@ public final class KeployDedupAgent {
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
-                    writeLine(out, "ACK");
+                    ack(out);
                     return;
                 }
 
@@ -1109,7 +1167,7 @@ public final class KeployDedupAgent {
                         // follows, as it ends the collector's wait, and a collector
                         // that does not know this frame skips it.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        writeLine(out, "ACK");
+                        ack(out);
                         return;
                     }
 
@@ -1120,17 +1178,14 @@ public final class KeployDedupAgent {
                     TestCoverage coverage;
                     try {
                         boolean cut = !collector.awaitRequests(command.testId, phases);
-                        coverage = collector.capture(phases);
-                        if (cut) {
-                            coverage = coverage.cut();
-                        }
+                        coverage = collector.capture(phases).ended(cut, JobGate.close());
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                         activeTestId = "";
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        writeLine(out, "ACK");
+                        ack(out);
                         return;
                     }
                     if (coverage.probesByClass.isEmpty()) {
@@ -1142,29 +1197,40 @@ public final class KeployDedupAgent {
                         // transport likewise always publishes).
                         String cov = "COV " + GSON.toJson(new DedupPayload(command.testId, coverage));
                         phases.mark("json");
+                        // Past here, nothing can leave this ACK without the COV:
+                        // a failure building the CLASSES frame skips only that
+                        // frame. A COV that fits the buffer only fills it, so a
+                        // reply that fits the buffer still leaves in one write,
+                        // at the ACK.
                         writeLine(out, cov);
-                        phases.mark("send");
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building
-                        // or sending it must not skip the already-sent COV or the ACK.
+                        // it skips only this frame.
                         String classesFrame = collector.pollBytecodeFrame();
+                        phases.mark("classes");
                         if (classesFrame != null) {
                             writeLine(out, classesFrame);
                         }
-                        phases.mark("classes");
                     } catch (Exception e) {
-                        log(Level.FINE, "Failed to send CLASSES frame for " + command.testId, e);
+                        log(Level.FINE, "Failed to send the COV or CLASSES frame for " + command.testId, e);
                     } finally {
                         activeTestId = "";
-                        writeLine(out, "ACK");
+                        ack(out);
+                        phases.mark("send");
                     }
                 }
             }
         }
 
-        private void writeLine(OutputStream out, String message) throws IOException {
-            out.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+        // writeLine adds a line to the reply; ack ends the reply and sends it.
+        private static void writeLine(OutputStream out, String message) throws IOException {
+            out.write(message.getBytes(StandardCharsets.UTF_8));
+            out.write('\n');
+        }
+
+        private static void ack(OutputStream out) throws IOException {
+            writeLine(out, "ACK");
             out.flush();
         }
 
@@ -1266,8 +1332,14 @@ public final class KeployDedupAgent {
         // full CLASSES frame even if the manifest hasn't grown since the drop.
         void resetBytecodeSentForNewConnection() {
             bytecodeSentThisConnection = false;
+            frameFailureLogged = false;
             lastUploadedManifestSize.set(-1);
         }
+
+        // Whether a CLASSES or MANIFEST frame that could not be built was
+        // logged at WARNING on this connection: once, then at FINE, as each
+        // END tries again.
+        private volatile boolean frameFailureLogged = false;
 
         private CoverageCollector(JacocoClient jacocoClient, CoverageIndex coverageIndex,
                 Instrumentation instrumentation) {
@@ -1325,6 +1397,10 @@ public final class KeployDedupAgent {
         // hits. Without it, or when the pass fails (in any way: a START only
         // has to clear), JaCoCo resets every class, and cleared stays empty.
         private boolean begin(Phases phases, List<ProbeScan.Hit> cleared) {
+            // A job running now, or that starts before END reads the hits,
+            // runs in this test's window: opened before the clear, as what
+            // a job ran before is cleared only once it has ended.
+            JobGate.open();
             // This test's requests come in from now on; END waits for them
             // alone.
             RequestGate.open();
@@ -1732,24 +1808,24 @@ public final class KeployDedupAgent {
         // are base64'd to keep the whole frame on one line. Called after each
         // capture; a no-op until the manifest grows or when KEPLOY_BUILD_TAG unset.
         String pollBytecodeFrame() {
-            final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
-            if (buildTag.isEmpty()) {
-                return null;
-            }
-            final int size = liveManifest.size();
-            if (size == 0) {
-                return null; // no classes hit yet
-            }
-            // Send the constant class zip once per connection; after that, only a
-            // manifest-only frame when the manifest actually grows. This removes
-            // the old per-growth zip resend (O(n^2) bytes) and keeps any single
-            // line small once the zip is out, so the collector's line reader never
-            // trips its max-line cap mid-replay.
-            final boolean sendZip = !bytecodeSentThisConnection;
-            if (!sendZip && size <= lastUploadedManifestSize.get()) {
-                return null; // zip already sent and manifest unchanged since last send
-            }
             try {
+                final String buildTag = envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", "");
+                if (buildTag.isEmpty()) {
+                    return null;
+                }
+                final int size = liveManifest.size();
+                if (size == 0) {
+                    return null; // no classes hit yet
+                }
+                // Send the constant class zip once per connection; after that, only a
+                // manifest-only frame when the manifest actually grows. This removes
+                // the old per-growth zip resend (O(n^2) bytes) and keeps any single
+                // line small once the zip is out, so the collector's line reader never
+                // trips its max-line cap mid-replay.
+                final boolean sendZip = !bytecodeSentThisConnection;
+                if (!sendZip && size <= lastUploadedManifestSize.get()) {
+                    return null; // zip already sent and manifest unchanged since last send
+                }
                 Map<String, ManifestEntry> snapshot = new LinkedHashMap<>(liveManifest);
                 String manifestJson = GSON.toJson(snapshot);
                 String frame;
@@ -1769,7 +1845,12 @@ public final class KeployDedupAgent {
                 lastUploadedManifestSize.set(size);
                 return frame;
             } catch (Throwable e) {
-                log(Level.WARNING, "Keploy dedup: failed to build bytecode frame: " + e.getMessage(), null);
+                // Not sent, and tried again at the next END: until one is
+                // built, Keploy has none of this build's class bytes.
+                Level level = frameFailureLogged ? Level.FINE : Level.WARNING;
+                frameFailureLogged = true;
+                log(level, "Keploy dedup: could not build the CLASSES or MANIFEST frame of the app's class bytes for"
+                        + " Keploy; each END tries again, and this connection logs it at WARNING only once", e);
                 return null;
             }
         }
@@ -1867,12 +1948,25 @@ public final class KeployDedupAgent {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getByName(host), port), SOCKET_TIMEOUT_MILLIS);
                 socket.setSoTimeout(SOCKET_TIMEOUT_MILLIS);
-
-                RemoteControlWriter remoteWriter = new RemoteControlWriter(socket.getOutputStream());
-                RemoteControlReader remoteReader = new RemoteControlReader(socket.getInputStream());
+                // The command leaves in one write (JaCoCo's writer writes it a
+                // byte or two at a time, each a segment of its own on a raw
+                // stream), and Nagle never holds a write back behind the
+                // tcpserver's delayed ACK: a stall of about 40 ms per dump.
+                try {
+                    socket.setTcpNoDelay(true);
+                } catch (SocketException e) {
+                    log(Level.FINE, "Could not set TCP_NODELAY on the socket to JaCoCo's tcpserver", e);
+                }
+                OutputStream commands = new BufferedOutputStream(socket.getOutputStream(), 64);
+                RemoteControlWriter remoteWriter = new RemoteControlWriter(commands);
+                // Read a buffer at a time: JaCoCo's reader reads a byte at a
+                // time, a read of the socket each on a raw stream.
+                RemoteControlReader remoteReader = new RemoteControlReader(
+                        new BufferedInputStream(socket.getInputStream(), 32 * 1024));
                 remoteReader.setSessionInfoVisitor(writer);
                 remoteReader.setExecutionDataVisitor(writer);
                 remoteWriter.visitDumpCommand(dump, reset);
+                commands.flush();
 
                 if (!remoteReader.read()) {
                     throw new IOException("JaCoCo socket closed before coverage data was returned");
@@ -2525,6 +2619,12 @@ public final class KeployDedupAgent {
     // probes are not those of the indexed class. Left out when there is
     // none, so that the record is the same as before for every other test.
     // Receivers that do not know the key ignore it.
+    //
+    // contaminated names the scheduled jobs whose runs overlapped the
+    // test's window (JobGate): "quartz:<group>.<name>" or
+    // "scheduled:<class>.<method>", at most 8, then "+N" for N more. Their
+    // hits are in executedLinesByFile with the test's own. Left out when
+    // none ran in it, as classMismatch.
     private static final class DedupPayload {
 
         private final String id;
@@ -2532,19 +2632,21 @@ public final class KeployDedupAgent {
         private final Map<String, List<Integer>> executedLinesByFile;
         private final List<String> classMismatch;
         private final Boolean windowCut;
+        private final List<String> contaminated;
 
         private DedupPayload(String id, TestCoverage coverage) {
             this.id = id;
             this.executedLinesByFile = coverage.probesByClass;
             this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
             this.windowCut = coverage.windowCut ? Boolean.TRUE : null;
+            this.contaminated = coverage.contaminated.isEmpty() ? null : coverage.contaminated;
         }
     }
 
     // TestCoverage is a test's coverage as its END read it: the probes hit
     // by class, the classes among them that are not the class the index
-    // read, and whether the END was cut (its requests still ran at the end
-    // of its wait).
+    // read, whether the END was cut (its requests still ran at the end of
+    // its wait), and the scheduled jobs that ran in its window.
     private static final class TestCoverage {
 
         static final TestCoverage NONE = new TestCoverage(Collections.<String, List<Integer>>emptyMap(),
@@ -2553,20 +2655,25 @@ public final class KeployDedupAgent {
         final Map<String, List<Integer>> probesByClass;
         final List<String> classMismatch;
         final boolean windowCut;
+        final List<String> contaminated;
 
         TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
-            this(probesByClass, classMismatch, false);
+            this(probesByClass, classMismatch, false, Collections.<String>emptyList());
         }
 
-        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut) {
+        TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut,
+                List<String> contaminated) {
             this.probesByClass = probesByClass;
             this.classMismatch = classMismatch;
             this.windowCut = windowCut;
+            this.contaminated = contaminated;
         }
 
-        // cut is this coverage, read at the end of a wait its requests outran.
-        TestCoverage cut() {
-            return new TestCoverage(probesByClass, classMismatch, true);
+        // ended is this coverage as its END sends it: cut when it was read
+        // at the end of a wait its requests outran, and with the jobs that
+        // ran in its window.
+        TestCoverage ended(boolean cut, List<String> jobs) {
+            return new TestCoverage(probesByClass, classMismatch, cut, jobs);
         }
     }
 

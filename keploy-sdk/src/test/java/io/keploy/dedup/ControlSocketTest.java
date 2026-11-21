@@ -13,21 +13,32 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.Instrumentation;
+import java.lang.reflect.Proxy;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import org.jacoco.core.internal.data.CRC64;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -52,6 +63,8 @@ public class ControlSocketTest {
 
     private static final String JACOCO_PORT_PROPERTY = "keploy.jacoco.port";
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
+    private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
+    private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
     private static final String TAKEN = "ACK proto=2\n";
     private static final String IGNORED = "IGNORED proto=2\n";
 
@@ -63,11 +76,16 @@ public class ControlSocketTest {
     // What the agent logged at SEVERE during the test: the first 20 of them,
     // so that a server looping on a closed socket fails a row, not the JVM.
     private final List<String> severe = new CopyOnWriteArrayList<>();
+    // And the first 200 messages it logged at INFO or above.
+    private final List<String> logged = new CopyOnWriteArrayList<>();
     private final Handler severeLog = new Handler() {
         @Override
         public void publish(LogRecord record) {
             if (record.getLevel().intValue() >= Level.SEVERE.intValue() && severe.size() < 20) {
                 severe.add(record.getMessage());
+            }
+            if (record.getLevel().intValue() >= Level.INFO.intValue() && logged.size() < 200) {
+                logged.add(record.getMessage());
             }
         }
 
@@ -92,6 +110,16 @@ public class ControlSocketTest {
         KeployDedupAgent.dataSocketPath = new File(dir, "data.sock").getAbsolutePath();
         // The warmup loads every class on the test classpath; nothing here needs it.
         System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        // A TABLE row answers ACK whatever heap this JVM was given (-DargLine=-Xmx...): the heap check is off
+        // unless a row sets its own bound.
+        System.setProperty(BuildTable.MIN_HEAP_PROPERTY, "0");
+        KeployDedupAgent.transformerAdded = false;
+    }
+
+    /** A TABLE row needs the heap check's env var unset: it would win over the property setUp sets. */
+    private static void assumeNoMinHeapEnv() {
+        String v = System.getenv(BuildTable.MIN_HEAP_ENV);
+        org.junit.Assume.assumeTrue(BuildTable.MIN_HEAP_ENV + " is set", v == null || v.trim().isEmpty());
     }
 
     @After
@@ -107,19 +135,27 @@ public class ControlSocketTest {
         KeployDedupAgent.dataSocketPath = savedDataPath;
         System.clearProperty(JACOCO_PORT_PROPERTY);
         System.clearProperty(WARMUP_DISABLED_PROPERTY);
+        System.clearProperty(CLASS_DIRS_PROPERTY);
+        System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
+        System.clearProperty(END_WAIT_PROPERTY);
+        KeployDedupAgent.transformerAdded = false;
         if (jacoco != null) {
             jacoco.close();
         }
         if (data != null) {
             data.close();
         }
-        File[] left = dir.listFiles();
+        delete(dir);
+    }
+
+    private static void delete(File f) {
+        File[] left = f.listFiles();
         if (left != null) {
-            for (File f : left) {
-                f.delete();
+            for (File c : left) {
+                delete(c);
             }
         }
-        dir.delete();
+        f.delete();
     }
 
     @Test
@@ -168,6 +204,353 @@ public class ControlSocketTest {
         String payload = data.next();
         assertNotNull("the END's coverage reached the data socket", payload);
         assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+    }
+
+    @Test
+    public void aJobRunningInATestsWindowIsNamedInItsRecordAndOneBetweenTestsIsNot() throws Exception {
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        // Running when the START opens the window, done before its END.
+        Object running = JobGate.enter(new Object(), "quartz");
+        try {
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+        } finally {
+            JobGate.exit(running);
+        }
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"quartz:java.lang.Object\"]}"));
+
+        // A run between two tests is in neither.
+        JobGate.exit(JobGate.enter(new Object(), "scheduled"));
+        assertEquals(TAKEN, send("START test-set-0/test-2"));
+        assertEquals(TAKEN, send("END test-set-0/test-2"));
+        payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-2\""));
+        assertFalse(payload, payload.contains("contaminated"));
+    }
+
+    @Test(timeout = 60000)
+    public void aJobThatStartsWhileEndWaitsForTheTestsRequestsIsNamed() throws Exception {
+        // The longest wait: END waits for the request until this row lets it go.
+        System.setProperty(END_WAIT_PROPERTY, "2000");
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        Object request = RequestGate.enter();
+        ExecutorService ender = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> end = ender.submit(() -> send("END test-set-0/test-1"));
+            // END took the window it waits on: the request no longer counts in the current one.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            while (RequestGate.running() != 0) {
+                assertTrue("END never waited for the request", System.nanoTime() < deadline);
+                Thread.sleep(1);
+            }
+            JobGate.exit(JobGate.enter(new Object(), "quartz"));
+            RequestGate.exit(request);
+            request = null;
+            assertEquals(TAKEN, end.get(30, TimeUnit.SECONDS));
+        } finally {
+            if (request != null) {
+                RequestGate.exit(request);
+            }
+            ender.shutdownNow();
+        }
+        String payload = data.next();
+        assertNotNull(payload);
+        assertFalse("END did not reach its bound: " + payload, payload.contains("windowCut"));
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"quartz:java.lang.Object\"]}"));
+    }
+
+    @Test(timeout = 60000)
+    public void aJobThatStartsWhileEndReadsTheHitsIsNamed() throws Exception {
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        jacoco.onDump = () -> JobGate.exit(JobGate.enter(new Object(), "scheduled"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull(payload);
+        assertTrue(payload, payload.endsWith(",\"contaminated\":[\"scheduled:java.lang.Object\"]}"));
+    }
+
+    @Test(timeout = 60000)
+    public void eachCommandToJacocosTcpServerArrivesWholeWithNoNagleStall() throws Exception {
+        // Nagle held all but the command's first byte or two behind the
+        // tcpserver's delayed ACK. What this checks is that the whole command
+        // is there at the stand-in's first read; on loopback with Nagle off,
+        // a command written a byte at a time usually is too.
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        // JaCoCo's header (a block byte, two chars) and the dump command (a block byte, two booleans).
+        assertTrue(jacoco.firstReads.toString(), jacoco.firstReads.size() >= 2);
+        for (int got : jacoco.firstReads) {
+            assertEquals("each connection's first read got its whole command: " + jacoco.firstReads, 8, got);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void aStartAfterTheSdkRanAsAJavaagentDoesNotSayNoJobRunIsSeen() throws Exception {
+        List<ClassFileTransformer> added = new ArrayList<>();
+        Instrumentation premains = (Instrumentation) Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[] {Instrumentation.class}, (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "addTransformer":
+                            added.add((ClassFileTransformer) args[0]);
+                            return null;
+                        case "isRetransformClassesSupported":
+                            return Boolean.TRUE;
+                        default:
+                            throw new UnsupportedOperationException(method.getName());
+                    }
+                });
+        KeployDedupAgent.countRequests(premains, false);
+        assertEquals("premain added ServerEntries", 1, added.size());
+        // A stop() and a start() from the app's code (a context reload): premain's changes still count job runs.
+        startWithJacoco();
+        for (String line : logged) {
+            assertFalse(line, line.startsWith("Keploy dedup does not see the app's scheduled jobs' runs"));
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void startedWithNoInstrumentationItSaysNoJobRunIsSeen() throws Exception {
+        startWithJacoco();
+        assertTrue(logged.toString(), logged.contains("Keploy dedup does not see the app's scheduled jobs' runs:"
+                + " keploy-sdk.jar was not started as a -javaagent, so a test a Quartz job or a Spring @Scheduled"
+                + " method ran in is not marked contaminated in its record"));
+    }
+
+    @Test(timeout = 60000)
+    public void theBuildTableGoesOnlyWhenKeployAsksForIt() throws Exception {
+        assumeNoMinHeapEnv();
+        // The index is the java-dedup sample's classes, so the table is the Go encoder's golden for them.
+        File classes = new File(dir, "classes");
+        for (BuildTable.ClassFile f : BuildTableTest.javaDedup()) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        startWithJacoco();
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        int asked = BuildTable.requests();
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull("the END's coverage reached the data socket", payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+        // Commands are handled one at a time, so once END is answered all START and END asked for is asked.
+        // An older Keploy never sends TABLE: it never gets a frame.
+        assertEquals("START and END never ask for the table", asked, BuildTable.requests());
+        assertNull("no table frame without TABLE", data.poll());
+
+        assertEquals("answered at once; the table goes on its own thread", TAKEN, send("TABLE"));
+        assertEquals(asked + 1, BuildTable.requests());
+        String frame = data.next();
+        assertNotNull("the TABLE's frame reached the data socket", frame);
+        assertTrue(frame, frame.startsWith("KTB1"));
+        int header = frame.indexOf("{\"v\":1,");
+        int body = frame.indexOf('\n', header) + 1;
+        assertTrue(frame, header > 0 && body > header);
+        byte[] golden = BuildTableTest.resource("java-dedup.table.ndjson");
+        String build = new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim();
+        assertEquals("{\"v\":1,\"part\":\"table\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
+                + "\"records\":5,\"sha256\":\"" + sha256(golden) + "\"}\n", frame.substring(header, body));
+        assertEquals(new String(golden, StandardCharsets.UTF_8), frame.substring(body));
+        // The probe map follows the table, as its own stream with the same build.
+        String probes = data.next();
+        assertNotNull("the probe map followed the table", probes);
+        byte[] map = BuildTableTest.resource("java-dedup.probes.ndjson");
+        header = probes.indexOf("{\"v\":1,");
+        body = probes.indexOf('\n', header) + 1;
+        assertEquals("{\"v\":1,\"part\":\"probes\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
+                + "\"records\":5,\"sha256\":\"" + sha256(map) + "\"}\n", probes.substring(header, body));
+        assertEquals(new String(map, StandardCharsets.UTF_8), probes.substring(body));
+        assertNull("nothing more", data.payloads.poll(1, TimeUnit.SECONDS));
+    }
+
+    @Test(timeout = 60000)
+    public void aTableAskedWhenTheHeapIsShortIsDeclinedWithLowHeapAndSendsNothing() throws Exception {
+        assumeNoMinHeapEnv();
+        File classes = new File(dir, "classes");
+        for (BuildTable.ClassFile f : BuildTableTest.javaDedup()) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        long needed = Long.MAX_VALUE >> 20;
+        System.setProperty(BuildTable.MIN_HEAP_PROPERTY, String.valueOf(needed));
+        try {
+            startWithJacoco();
+            data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+            int asked = BuildTable.requests();
+            assertEquals(TAKEN, send("START test-set-0/test-1"));
+            String reply = send("TABLE");
+            assertTrue(reply, reply.matches("IGNORED proto=2 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
+                    + needed + "\n"));
+            assertEquals("no send started", asked, BuildTable.requests());
+            assertNull("no table frame", data.payloads.poll(2, TimeUnit.SECONDS));
+            assertEquals("the control server goes on", TAKEN, send("END test-set-0/test-1"));
+        } finally {
+            System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void theIndexRecordAndTheTableNameOneBuild() throws Exception {
+        assumeNoMinHeapEnv();
+        // Keploy finds the table under the build the INDEX record named. The index is the java-dedup sample's
+        // classes and one file no class reader reads: both builds take every class the index holds.
+        File classes = new File(dir, "classes");
+        List<BuildTable.ClassFile> files = new ArrayList<>(BuildTableTest.javaDedup());
+        files.add(new BuildTable.ClassFile("com/acme/Junk", "not a class".getBytes(StandardCharsets.UTF_8)));
+        TreeSet<String> ids = new TreeSet<>();
+        for (BuildTable.ClassFile f : files) {
+            File out = new File(classes, f.name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), f.bytes);
+            ids.add(String.format("%016x", CRC64.classId(f.bytes)));
+        }
+        // Keploy's codecoverage.JavaBuildID: the table format, the analyzer's JaCoCo release, then
+        // the ids as 16 hex, sorted (as hex: unsigned), joined by newlines.
+        String build = "jv1-" + sha256(("keploy-java-table 1\njacoco " + IndexReportTest.jacocoCore() + "\n"
+                + String.join("\n", ids)).getBytes(StandardCharsets.UTF_8)).substring(0, 32);
+        assertNotEquals("the file no class reader reads is in the build",
+                new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim(), build);
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
+        String index = data.indexes.poll(30, TimeUnit.SECONDS);
+        assertNotNull("the INDEX record came once the data socket was bound", index);
+        assertTrue(index, index.contains("\"classes\":" + files.size() + ","));
+        assertEquals(index, build, field(index, "build"));
+
+        assertEquals(TAKEN, send("TABLE"));
+        boolean tableDone = false;
+        boolean probesDone = false;
+        while (!tableDone || !probesDone) {
+            String frame = data.next();
+            assertNotNull("the table and the probe map each reached their last frame", frame);
+            int at = frame.indexOf("{\"v\":1,");
+            assertTrue(frame, frame.startsWith("KTB1") && at > 0);
+            String header = frame.substring(at, frame.indexOf('\n', at));
+            assertEquals(header, build, field(header, "build"));
+            boolean last = header.contains("\"last\":true");
+            if (header.contains("\"part\":\"table\"")) {
+                tableDone |= last;
+            } else {
+                assertTrue(header, header.contains("\"part\":\"probes\""));
+                probesDone |= last;
+            }
+        }
+        assertNull("nothing more", data.payloads.poll(1, TimeUnit.SECONDS));
+    }
+
+    @Test(timeout = 300000)
+    public void startAndEndAreAnsweredWhileTheTableIsAnalyzed() throws Exception {
+        assumeNoMinHeapEnv();
+        // Keploy sends TABLE after the first ACK and goes on with its tests: the table's analysis runs on its own
+        // thread, so no START or END waits for it. The index is a generated app large enough that its analysis
+        // outlasts many START/END pairs.
+        File classes = new File(dir, "classes");
+        int n = 5000;
+        for (int i = 0; i < n; i++) {
+            String name = BuildTableBudgetTest.name(i);
+            File out = new File(classes, name + ".class");
+            assertTrue(out.getParentFile().isDirectory() || out.getParentFile().mkdirs());
+            Files.write(out.toPath(), BuildTableBudgetTest.gen(name, i, BuildTableBudgetTest.BRANCHES));
+        }
+        System.setProperty(CLASS_DIRS_PROPERTY, classes.getPath());
+        data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
+        assertNotNull("the INDEX record (the index is read)", data.indexes.poll(60, TimeUnit.SECONDS));
+        assertEquals(TAKEN, send("START test-set-0/test-0"));
+        assertEquals(TAKEN, send("END test-set-0/test-0"));
+        assertNotNull(data.next());
+
+        long t0 = System.nanoTime();
+        assertEquals(TAKEN, send("TABLE"));
+        long tableAck = System.nanoTime() - t0;
+        boolean tableDone = false;
+        boolean probesDone = false;
+        int during = 0;
+        long worst = 0;
+        for (int k = 1; !tableDone || !probesDone; k++) {
+            long s = System.nanoTime();
+            assertEquals(TAKEN, send("START test-set-0/test-" + k));
+            assertEquals(TAKEN, send("END test-set-0/test-" + k));
+            worst = Math.max(worst, System.nanoTime() - s);
+            boolean ended = false;
+            for (String p; (p = data.payloads.poll(ended ? 0 : 30, TimeUnit.SECONDS)) != null; ) {
+                if (!p.startsWith("KTB1")) {
+                    assertTrue(p, p.contains("\"id\":\"test-set-0/test-" + k + "\""));
+                    ended = true;
+                    continue;
+                }
+                int at = p.indexOf("{\"v\":1,");
+                String header = p.substring(at, p.indexOf('\n', at));
+                boolean last = header.contains("\"last\":true");
+                tableDone |= last && header.contains("\"part\":\"table\"");
+                probesDone |= last && header.contains("\"part\":\"probes\"");
+            }
+            assertTrue("the END's coverage reached the data socket", ended);
+            if (!tableDone || !probesDone) {
+                during++;
+            }
+        }
+        long table = System.nanoTime() - t0;
+        System.out.printf("START/END pairs answered while the table of %d classes was analyzed and sent: %d in %d ms;"
+                + " slowest pair %d ms; TABLE answered in %d ms%n", n, during, table / 1_000_000, worst / 1_000_000,
+                tableAck / 1_000_000);
+        assertTrue("START and END were answered while the table was analyzed: " + during + " pairs in "
+                + table / 1_000_000 + " ms", during >= 3);
+        // The bounds are generous (a pair takes about 0.1 s): they fail when a START/END or TABLE waits on a
+        // slow analysis. A fast runner can finish the analysis inside them; during >= 3 above is what fails
+        // when the control thread does the analysis itself.
+        assertTrue("TABLE itself was answered at once: " + tableAck / 1_000_000 + " ms",
+                tableAck < TimeUnit.SECONDS.toNanos(5));
+        assertTrue("no START/END pair waited on the analysis: the slowest took " + worst / 1_000_000 + " ms",
+                worst < TimeUnit.SECONDS.toNanos(5));
+    }
+
+    // field is the string value of name in one JSON object's text.
+    private static String field(String json, String name) {
+        String key = "\"" + name + "\":\"";
+        int at = json.indexOf(key);
+        assertTrue(json, at >= 0);
+        return json.substring(at + key.length(), json.indexOf('"', at + key.length()));
+    }
+
+    @Test(timeout = 60000)
+    public void aTableThatFailsToStartIsIgnoredAndTheServerGoesOn() throws Exception {
+        assumeNoMinHeapEnv();
+        startWithJacoco();
+        String dataPath = KeployDedupAgent.dataSocketPath;
+        data = new DataReceiver(dataPath);
+        KeployDedupAgent.dataSocketPath = null; // new File(null) throws on the control thread
+        assertEquals(IGNORED, send("TABLE"));
+        KeployDedupAgent.dataSocketPath = dataPath;
+        assertEquals(TAKEN, send("START test-set-0/test-1"));
+        assertEquals(TAKEN, send("END test-set-0/test-1"));
+        String payload = data.next();
+        assertNotNull("the END's coverage reached the data socket", payload);
+        assertTrue(payload, payload.contains("\"id\":\"test-set-0/test-1\""));
+    }
+
+    private static String sha256(byte[] b) throws NoSuchAlgorithmException {
+        StringBuilder hex = new StringBuilder();
+        for (byte x : MessageDigest.getInstance("SHA-256").digest(b)) {
+            hex.append(String.format("%02x", x));
+        }
+        return hex.toString();
     }
 
     @Test
@@ -603,6 +986,10 @@ public class ControlSocketTest {
                 try (Socket socket = server.accept()) {
                     socket.setSoTimeout(30000);
                     String payload = readAll(socket.getInputStream());
+                    if (payload.startsWith("KTB1")) {
+                        // A TABLE frame waits for OK before the next one goes.
+                        socket.getOutputStream().write("OK\n".getBytes(StandardCharsets.UTF_8));
+                    }
                     all.add(payload);
                     (payload.startsWith(INDEX_START) ? indexes : payloads).add(payload);
                 } catch (IOException e) {

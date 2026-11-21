@@ -71,6 +71,24 @@ public class DedupWireFormatTest {
     }
 
     @Test
+    public void theJobsThatRanInATestsWindowSitAfterWindowCutAndAreLeftOutWhenNone() {
+        Map<String, List<Integer>> probes = new LinkedHashMap<>();
+        probes.put("com/foo/Bar", Arrays.asList(0, 1));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"classMismatch\":[\"com/foo/Bar\"],\"windowCut\":true,"
+                + "\"contaminated\":[\"quartz:reports.nightly\",\"scheduled:com.foo.Jobs.send\"]}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.singletonList("com/foo/Bar"), true,
+                        Arrays.asList("quartz:reports.nightly", "scheduled:com.foo.Jobs.send")));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"contaminated\":[\"quartz:a.b\"]}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.singletonList("quartz:a.b")));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]}}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.<String>emptyList()));
+    }
+
+    @Test
     public void covPayloadWithNoCoverageSerializesEmptyMap() {
         String json = KeployDedupAgent.toDedupJson(
                 "test-set-0/empty", Collections.<String, List<Integer>>emptyMap());

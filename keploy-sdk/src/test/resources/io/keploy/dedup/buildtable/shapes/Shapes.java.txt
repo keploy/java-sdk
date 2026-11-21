@@ -1,0 +1,113 @@
+package io.keploy.shapes;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.util.function.IntUnaryOperator;
+
+/** Code shapes for the probe map's rows: each one is a JaCoCo probe, branch or filter case. */
+public class Shapes {
+    enum Color { RED, GREEN, BLUE }
+
+    static final class Res implements Closeable {
+        @Override
+        public void close() throws IOException {
+        }
+    }
+
+    private final Object lock = new Object();
+    private int total;
+
+    int both(int a, int b) {
+        if (a > 0 && b > 0) { return 1; }
+        return a > b ? 2 : 3;
+    }
+
+    int loop(int n) {
+        int s = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 3 == 0) {
+                continue;
+            }
+            s += i;
+        }
+        while (s > 100) {
+            s -= 7;
+            if (s == 50) {
+                break;
+            }
+        }
+        return s;
+    }
+
+    String table(int k) {
+        switch (k) {
+            case 1: return "one";
+            case 2:
+            case 3: return "few";
+            case 7: total++;
+            case 8: return "many";
+            default: return "other";
+        }
+    }
+
+    int strings(String s) {
+        switch (s) {
+            case "Aa": return 1;
+            case "BB": return 2;
+            case "c": return 3;
+            default: return 0;
+        }
+    }
+
+    int colors(Color c) {
+        switch (c) {
+            case RED: return 1;
+            case BLUE: return 3;
+            default: return 0;
+        }
+    }
+
+    int guarded(int x) {
+        try {
+            if (x < 0) {
+                throw new IllegalArgumentException("negative");
+            }
+            return x * 2;
+        } finally {
+            if (x == 3) { total++; }
+        }
+    }
+
+    int resources(int x) throws IOException {
+        try (Res r = new Res()) {
+            return x + 1;
+        }
+    }
+
+    int locked(int x) {
+        synchronized (lock) {
+            total += x;
+            return total;
+        }
+    }
+
+    int lambda(int x) {
+        IntUnaryOperator f = v -> v > 10 ? v - 10 : v + 10;
+        return f.applyAsInt(x);
+    }
+
+    int checked(int x) {
+        assert x != 13 : "thirteen";
+        int y = x; y++; if (y > 2) y--; return y;
+    }
+
+    int nested(boolean a, boolean b, boolean c) {
+        if (a) {
+            if (b || c) {
+                return 1;
+            }
+            return 2;
+        }
+        return c ? 3 : 4;
+    }
+}
