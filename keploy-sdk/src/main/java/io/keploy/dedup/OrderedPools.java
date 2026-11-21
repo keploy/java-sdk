@@ -32,7 +32,9 @@ import java.util.logging.Logger;
  * (a SimpleAsyncTaskExecutor, which starts a thread per task, or the
  * executor {@code @Async} calls with a Callable, which it never queues as
  * it is) has no queue that sees the task. Nothing thrown while reading a
- * pool reaches the app's call: that pool's tasks go as they are.
+ * pool or saying so in the log, by the app's own code too (an exception's
+ * {@code toString()}, a log Handler), reaches the app's call: that task
+ * goes as it is.
  */
 final class OrderedPools {
 
@@ -47,11 +49,18 @@ final class OrderedPools {
     // What POOL holds for a class with no public getThreadPoolExecutor().
     private static final Object NONE = new Object();
 
+    // The class whose getThreadPoolExecutor() throws IllegalStateException
+    // while its pool is not initialized, as its execute and submit do.
+    private static final String SPRING_POOL = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
+
     // A class's public getThreadPoolExecutor(), NONE when it has none, or
     // the String of what looking it up threw. getMethod resolves each type
     // the class's public methods name, so one that is missing (an optional
     // dependency) throws a NoClassDefFoundError: the app's own call must
-    // never see it.
+    // never see it. Only a LinkageError or a RuntimeException is kept, as
+    // the class's for good: anything else (out of stack or memory for now)
+    // leaves computeValue, so nothing is kept, that task goes as it is, and
+    // the next one looks the class up again.
     private static final ClassValue<Object> POOL = new ClassValue<Object>() {
         @Override
         protected Object computeValue(Class<?> type) {
@@ -59,7 +68,7 @@ final class OrderedPools {
                 return type.getMethod("getThreadPoolExecutor");
             } catch (NoSuchMethodException e) {
                 return NONE;
-            } catch (Throwable e) {
+            } catch (LinkageError | RuntimeException e) {
                 return e.toString();
             }
         }
@@ -73,8 +82,19 @@ final class OrderedPools {
 
     // orders says whether executor's pool may order its tasks by their
     // type; the first time it does for an executor's class, it says in the
-    // log that the tasks handed to that class are not counted.
+    // log that the tasks handed to that class are not counted. Whatever is
+    // thrown on the way, by the app's own code too (the toString() of its
+    // exception, a log Handler of its), stays here: the task goes as it is,
+    // which is always safe.
     static boolean orders(Object executor) {
+        try {
+            return read(executor);
+        } catch (Throwable e) {
+            return true;
+        }
+    }
+
+    private static boolean read(Object executor) {
         if (executor == null) {
             return false;
         }
@@ -92,9 +112,17 @@ final class OrderedPools {
             // Not a ThreadPoolExecutor, no queue, or not ours to call: the
             // task goes as it is, and whatever was thrown stays here.
             Throwable why = e instanceof InvocationTargetException ? e.getCause() : e;
-            if (e instanceof InvocationTargetException && why instanceof IllegalStateException) {
-                // Not initialized: the executor's own call throws the same
-                // and takes no task, so the log says nothing of its class.
+            if (why instanceof VirtualMachineError) {
+                // Out of stack or memory for now: that says nothing of the
+                // class, so the log says nothing, and the next task's pool
+                // is read again.
+                return true;
+            }
+            if (e instanceof InvocationTargetException && why instanceof IllegalStateException
+                    && SPRING_POOL.equals(((Method) pool).getDeclaringClass().getName())) {
+                // Spring's pool, not initialized: the executor's own call
+                // throws the same and takes no task, so the log says
+                // nothing of its class.
                 return true;
             }
             return uncounted(executor, "its pool's queue cannot be read (" + why + ")");
