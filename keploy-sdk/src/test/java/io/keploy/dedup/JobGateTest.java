@@ -56,7 +56,7 @@ public class JobGateTest {
     private static Runnable handOff(String group, String name, Runnable task) {
         Object run = JobGate.enter(new QuartzShell(group, name), "quartz");
         try {
-            Runnable handed = RequestGate.hand(task);
+            Runnable handed = RequestGate.hand(null, task);
             assertNotSame("a task a job's run hands off is the job's", task, handed);
             return handed;
         } finally {
@@ -114,7 +114,7 @@ public class JobGateTest {
     @Test(timeout = 30000)
     public void whatAJobsTaskHandsOffIsTheJobsToo() throws Exception {
         AtomicReference<Runnable> inner = new AtomicReference<>();
-        Runnable outer = handOff("reports", "chain", () -> inner.set(RequestGate.hand(() -> { })));
+        Runnable outer = handOff("reports", "chain", () -> inner.set(RequestGate.hand(null, () -> { })));
         Thread thread = new Thread(outer, "listener");
         thread.start();
         thread.join(10000);
@@ -130,13 +130,13 @@ public class JobGateTest {
     public void aJobsTaskRunOnItsOwnThreadLeavesTheThreadInTheJobsRun() {
         Object run = enter(new QuartzShell("reports", "inline"), "quartz");
         // A caller-runs pool, or a sync executor, runs the task on the job's thread.
-        RequestGate.hand(() -> { }).run();
+        RequestGate.hand(null, () -> { }).run();
         assertEquals("back in the job's own run", "quartz:reports.inline", JobGate.running());
         // A job's run in a job's run (one calls the other's run()) gives the thread back the outer run too.
         JobGate.exit(JobGate.enter(new QuartzShell("reports", "nested"), "quartz"));
         assertEquals("back in the outer run", "quartz:reports.inline", JobGate.running());
         Runnable task = () -> { };
-        assertNotSame("what it hands off after is still the job's", task, RequestGate.hand(task));
+        assertNotSame("what it hands off after is still the job's", task, RequestGate.hand(null, task));
         JobGate.exit(run);
         assertNull(JobGate.running());
     }
@@ -147,9 +147,9 @@ public class JobGateTest {
         JobGate.open();
         Object run = enter(new QuartzShell("reports", "future"), "quartz");
         FutureTask<String> future = new FutureTask<>(() -> "done");
-        Runnable handed = RequestGate.hand(future);
+        Runnable handed = RequestGate.hand(null, future);
         Callable<String> call = () -> "called";
-        Callable<String> handedCall = RequestGate.hand(call);
+        Callable<String> handedCall = RequestGate.hand(null, call);
         JobGate.exit(run);
         assertTrue("a Future stays one", handed instanceof Future);
         assertNotSame(call, handedCall);
@@ -163,13 +163,38 @@ public class JobGateTest {
         assertEquals(Collections.singletonList("quartz:reports.future"), JobGate.close());
     }
 
+    @Test(timeout = 30000)
+    public void aJobsFutureAndCallableRunAsThatJobsRunWhereverTheyRun() throws Exception {
+        // A FutureTask a job hands off (SimpleAsyncTaskExecutor's submit
+        // builds one before doExecute) and a Callable (@Async's doSubmit)
+        // run after the job returned, in a later window, on another thread.
+        Object run = JobGate.enter(new QuartzShell("reports", "future"), "quartz");
+        FutureTask<String> future = new FutureTask<>(() -> "done");
+        Runnable handed = RequestGate.hand(null, future);
+        Callable<String> handedCall = RequestGate.hand(null, () -> "called");
+        JobGate.exit(run);
+        assertTrue("a Future stays one", handed instanceof Future);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            JobGate.open();
+            pool.submit(handed).get(10, TimeUnit.SECONDS);
+            assertEquals("done", future.get(10, TimeUnit.SECONDS));
+            assertEquals("the Future", Collections.singletonList("quartz:reports.future"), JobGate.close());
+            JobGate.open();
+            assertEquals("called", pool.submit(handedCall).get(10, TimeUnit.SECONDS));
+            assertEquals("the Callable", Collections.singletonList("quartz:reports.future"), JobGate.close());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     public void aTaskHandedOffOutsideAnyRunOrRequestIsTheTaskItself() {
         Runnable task = () -> { };
         Callable<String> call = () -> "x";
         try {
-            assertSame(task, RequestGate.hand(task));
-            assertSame(call, RequestGate.hand(call));
+            assertSame(task, RequestGate.hand(null, task));
+            assertSame(call, RequestGate.hand(null, call));
         } catch (RuntimeException e) {
             throw new AssertionError("hand threw off a job's run", e);
         }

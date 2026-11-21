@@ -32,7 +32,7 @@ public class RequestGateTest {
         // Each row exits a request on the thread that entered it, as a
         // server does: the test thread is left outside every window.
         Runnable task = () -> { };
-        assertSame(task, RequestGate.hand(task));
+        assertSame(task, RequestGate.hand(null, task));
     }
 
     @Test

@@ -21,5 +21,6 @@ public class DigestJobs {
         }
         Work.digest();
         Events.fromJob();
+        PriorityPool.fromJob();
     }
 }

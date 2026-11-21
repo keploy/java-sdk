@@ -29,8 +29,8 @@ import java.util.Set;
  * on an async multicaster, a task submitted to a ThreadPoolTaskExecutor,
  * an {@code @Async} method) counts as a run of that job, named the same,
  * from when the task starts until it returns or throws: RequestGate's
- * {@link RequestGate#hand(Runnable)} wraps it as the job's when the thread
- * handing it off is in the job's run, so a test whose window the task runs in is marked
+ * {@link RequestGate#hand(Object, Runnable)} wraps it as the job's when the
+ * thread handing it off is in the job's run, so a test whose window the task runs in is marked
  * with the job even when the job's own run ended before the test began.
  * What that task hands off counts the same way.
  *

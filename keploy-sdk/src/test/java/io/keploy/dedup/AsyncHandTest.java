@@ -15,16 +15,25 @@ import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.LinkedTransferQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -32,6 +41,9 @@ import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * The work a request hands to a Spring TaskExecutor counts in the request's
@@ -51,19 +63,23 @@ public class AsyncHandTest {
     private static volatile long lastLong;
     private static volatile String lastString;
     private static volatile boolean executorThrows;
+    // The pool the stand-ins' getThreadPoolExecutor() returns: one whose
+    // queue takes tasks in order unless a row sets another.
+    private static volatile ThreadPoolExecutor standInPool;
 
     @Before
     public void setUp() {
         RequestGate.open();
         lastTask = null;
         executorThrows = false;
+        standInPool = pool(new LinkedBlockingQueue<>());
     }
 
     @After
     public void tearDown() {
         // No row leaves its thread inside a window.
         Runnable task = () -> { };
-        assertSame("the test thread is outside every window", task, RequestGate.hand(task));
+        assertSame("the test thread is outside every window", task, RequestGate.hand(null, task));
     }
 
     @Test
@@ -72,15 +88,15 @@ public class AsyncHandTest {
         Runnable handed;
         AtomicReference<Runnable> nested = new AtomicReference<>();
         try {
-            handed = RequestGate.hand(() -> {
+            handed = RequestGate.hand(null, () -> {
                 if (nested.get() == null) {
-                    nested.set(RequestGate.hand(() -> { }));
+                    nested.set(RequestGate.hand(null, () -> { }));
                 }
             });
             assertEquals("the request and its task", 2, RequestGate.running());
-            assertSame("counted once", handed, RequestGate.hand(handed));
+            assertSame("counted once", handed, RequestGate.hand(null, handed));
             // No task: passed on for the executor to throw on, as before.
-            assertNull(RequestGate.hand((Runnable) null));
+            assertNull(RequestGate.hand(null, (Runnable) null));
             assertEquals(2, RequestGate.running());
         } finally {
             RequestGate.exit(request);
@@ -99,9 +115,9 @@ public class AsyncHandTest {
     public void aTaskHandedOffAThreadThatRunsNoRequestIsNotCounted() {
         Runnable task = () -> { };
         Callable<String> call = () -> "x";
-        assertSame(task, RequestGate.hand(task));
-        assertSame(call, RequestGate.hand(call));
-        assertNull(RequestGate.hand((Runnable) null));
+        assertSame(task, RequestGate.hand(null, task));
+        assertSame(call, RequestGate.hand(null, call));
+        assertNull(RequestGate.hand(null, (Runnable) null));
         assertEquals(0, RequestGate.running());
     }
 
@@ -132,22 +148,22 @@ public class AsyncHandTest {
             RankedCall call = new RankedCall();
             Object request = RequestGate.enter();
             try {
-                assertSame("a request's", last, RequestGate.hand(last));
-                assertSame("a request's", call, RequestGate.hand(call));
-                pool.execute(RequestGate.hand(last));
+                assertSame("a request's", last, RequestGate.hand(null, last));
+                assertSame("a request's", call, RequestGate.hand(null, call));
+                pool.execute(RequestGate.hand(null, last));
                 assertEquals("not counted: END does not wait for it", 1, RequestGate.running());
             } finally {
                 RequestGate.exit(request);
             }
             Object run = JobGate.enter(new Object(), "scheduled");
             try {
-                assertSame("a job's", first, RequestGate.hand(first));
-                assertSame("a job's", call, RequestGate.hand(call));
-                pool.execute(RequestGate.hand(first));
+                assertSame("a job's", first, RequestGate.hand(null, first));
+                assertSame("a job's", call, RequestGate.hand(null, call));
+                pool.execute(RequestGate.hand(null, first));
             } finally {
                 JobGate.exit(run);
             }
-            pool.execute(RequestGate.hand(second));
+            pool.execute(RequestGate.hand(null, second));
             free.countDown();
             pool.shutdown();
             assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
@@ -199,12 +215,12 @@ public class AsyncHandTest {
         Callable<String> value;
         Callable<String> throwing;
         try {
-            value = RequestGate.hand(() -> "x");
-            throwing = RequestGate.hand(() -> {
+            value = RequestGate.hand(null, () -> "x");
+            throwing = RequestGate.hand(null, () -> {
                 throw new IllegalStateException("thrown");
             });
-            assertSame(value, RequestGate.hand(value));
-            assertNull(RequestGate.hand((Callable<String>) null));
+            assertSame(value, RequestGate.hand(null, value));
+            assertNull(RequestGate.hand(null, (Callable<String>) null));
         } finally {
             RequestGate.exit(request);
         }
@@ -224,7 +240,7 @@ public class AsyncHandTest {
         Object request = RequestGate.enter();
         Runnable handed;
         try {
-            handed = RequestGate.hand((Runnable) () -> {
+            handed = RequestGate.hand(null, (Runnable) () -> {
                 throw new IllegalStateException("thrown");
             });
         } finally {
@@ -239,7 +255,7 @@ public class AsyncHandTest {
             } catch (Throwable t) {
                 thrown.set(t);
             }
-            after.set(RequestGate.hand(probe));
+            after.set(RequestGate.hand(null, probe));
         });
         pool.start();
         pool.join(10000);
@@ -253,7 +269,7 @@ public class AsyncHandTest {
         Object request = RequestGate.enter();
         try {
             Runnable task = () -> { };
-            Runnable handed = RequestGate.hand(task);
+            Runnable handed = RequestGate.hand(null, task);
             assertEquals(2, RequestGate.running());
             RequestGate.dropped(handed, task);
             assertEquals(1, RequestGate.running());
@@ -263,7 +279,7 @@ public class AsyncHandTest {
 
             // A task handed on, counted by the executor that took it first,
             // is that executor's to drop.
-            Runnable outer = RequestGate.hand(task);
+            Runnable outer = RequestGate.hand(null, task);
             assertEquals(2, RequestGate.running());
             RequestGate.dropped(outer, outer);
             RequestGate.dropped(task, task);
@@ -285,8 +301,8 @@ public class AsyncHandTest {
         Runnable handed;
         Runnable handedCancelled;
         try {
-            handed = RequestGate.hand(future);
-            handedCancelled = RequestGate.hand(cancelled);
+            handed = RequestGate.hand(null, future);
+            handedCancelled = RequestGate.hand(null, cancelled);
         } finally {
             RequestGate.exit(request);
         }
@@ -307,7 +323,7 @@ public class AsyncHandTest {
         assertEquals(1, RequestGate.running());
         handedCancelled.run();
         assertEquals(0, RequestGate.running());
-        assertFalse("a plain task is no Future", RequestGate.hand((Runnable) () -> { }) instanceof Future);
+        assertFalse("a plain task is no Future", RequestGate.hand(null, (Runnable) () -> { }) instanceof Future);
     }
 
     @Test
@@ -319,14 +335,14 @@ public class AsyncHandTest {
             Object inner = RequestGate.enter();
             RequestGate.exit(inner);
             assertEquals(0, RequestGate.running());
-            Runnable handed = RequestGate.hand(task);
+            Runnable handed = RequestGate.hand(null, task);
             assertNotSame("still inside the outer window", task, handed);
             assertEquals("counted in the outer window, not the new one", 0, RequestGate.running());
             handed.run();
         } finally {
             RequestGate.exit(outer);
         }
-        assertSame(task, RequestGate.hand(task));
+        assertSame(task, RequestGate.hand(null, task));
     }
 
     @Test
@@ -336,9 +352,9 @@ public class AsyncHandTest {
         Object request = RequestGate.enter();
         Runnable task = () -> { };
         try {
-            RequestGate.hand(task).run();
+            RequestGate.hand(null, task).run();
             assertEquals(1, RequestGate.running());
-            Runnable handed = RequestGate.hand(task);
+            Runnable handed = RequestGate.hand(null, task);
             assertNotSame("still inside the request's window", task, handed);
             handed.run();
             assertEquals(1, RequestGate.running());
@@ -355,7 +371,7 @@ public class AsyncHandTest {
         CountDownLatch go = new CountDownLatch(1);
         Runnable handed;
         try {
-            handed = RequestGate.hand(() -> {
+            handed = RequestGate.hand(null, () -> {
                 try {
                     go.await();
                 } catch (InterruptedException e) {
@@ -376,7 +392,7 @@ public class AsyncHandTest {
         request = RequestGate.enter();
         CountDownLatch go2 = new CountDownLatch(1);
         try {
-            handed = RequestGate.hand(() -> {
+            handed = RequestGate.hand(null, () -> {
                 try {
                     go2.await();
                 } catch (InterruptedException e) {
@@ -402,6 +418,330 @@ public class AsyncHandTest {
         assertTrue(System.nanoTime() - began < TimeUnit.SECONDS.toNanos(20));
         pool2.join(10000);
         releaser.join(10000);
+    }
+
+    @Test
+    public void aTaskForAPoolThatMayOrderItGoesAsItIsAndAnyOtherIsCounted() throws Exception {
+        // Each executor's method hands RequestGate the executor its task
+        // is for: its executor argument (@Async's doSubmit), else itself.
+        // A pool whose queue may order its tasks takes them as they are,
+        // in a request's window and in a job's run alike: wrapped, its
+        // Comparator threw ClassCastException in execute.
+        ThreadPoolExecutor ordered = pool(new PriorityBlockingQueue<>());
+        ThreadPoolExecutor inOrder = pool(new LinkedBlockingQueue<>());
+        for (String name : new String[] {SIMPLE, POOL, ASYNC}) {
+            Class<?> type = load(name, new ServerEntries().transform(getClass().getClassLoader(), name, null, null,
+                    executorStandIn(name, Opcodes.V1_8)));
+            Object executor = type.getDeclaredConstructor().newInstance();
+            Method runnable = type.getMethod(method(name), Runnable.class, long.class);
+            Method callable = type.getMethod(method(name), Callable.class);
+            Method forExecutor = type.getMethod(method(name), Callable.class, AsyncTaskExecutor.class, Class.class);
+            Method onStatic = type.getMethod(method(name), long.class, Runnable.class);
+            Runnable task = () -> { };
+            Callable<String> call = () -> "x";
+            for (boolean job : new boolean[] {false, true}) {
+                String label = name + (job ? " in a job's run" : " in a request's window");
+                RequestGate.open();
+                Object request = job ? JobGate.enter(new Object(), "scheduled") : RequestGate.enter();
+                try {
+                    standInPool = ordered;
+                    runnable.invoke(executor, task, 7L);
+                    assertSame(label + ": its own pool may order it", task, lastTask);
+                    callable.invoke(executor, call);
+                    assertSame(label + ": its own pool may order it", call, lastTask);
+                    forExecutor.invoke(executor, call, new Executor(inOrder), String.class);
+                    assertNotSame(label + ": the executor argument's pool takes it in order", call, lastTask);
+                    ((Callable<?>) lastTask).call();
+                    standInPool = inOrder;
+                    forExecutor.invoke(executor, call, new Executor(ordered), String.class);
+                    assertSame(label + ": the executor argument's pool may order it", call, lastTask);
+                    runnable.invoke(executor, task, 7L);
+                    assertNotSame(label + ": its own pool takes it in order", task, lastTask);
+                    ((Runnable) lastTask).run();
+                    callable.invoke(executor, call);
+                    assertNotSame(label + ": its own pool takes it in order", call, lastTask);
+                    ((Callable<?>) lastTask).call();
+                    onStatic.invoke(null, 7L, task);
+                    assertNotSame(label + ": a static method's task is for no pool", task, lastTask);
+                    ((Runnable) lastTask).run();
+                    assertEquals(label + ": only the request runs", job ? 0 : 1, RequestGate.running());
+                } finally {
+                    if (job) {
+                        JobGate.exit(request);
+                    } else {
+                        RequestGate.exit(request);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void aPoolMayOrderItsTasksUnlessItsQueueIsAJdkQueueInOrder() {
+        Logger logger = Logger.getLogger(KeployDedupAgent.class.getName());
+        List<String> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                logged.add(record.getLevel() + " " + record.getMessage());
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.addHandler(handler);
+        try {
+            assertFalse("no executor", OrderedPools.orders(null));
+            assertFalse("no pool", OrderedPools.orders(new Object()));
+            for (BlockingQueue<Runnable> queue : Arrays.<BlockingQueue<Runnable>>asList(new LinkedBlockingQueue<>(),
+                    new SynchronousQueue<>(), new ArrayBlockingQueue<>(1), new LinkedBlockingDeque<>(),
+                    new LinkedTransferQueue<>())) {
+                assertFalse(queue.getClass().getName(), OrderedPools.orders(new Executor(pool(queue))));
+            }
+            ThreadPoolTaskExecutor spring = new ThreadPoolTaskExecutor();
+            spring.initialize();
+            try {
+                assertFalse("Spring's own pool", OrderedPools.orders(spring));
+            } finally {
+                spring.shutdown();
+            }
+            assertEquals(logged.toString(), 0, logged.size());
+
+            assertTrue(OrderedPools.orders(new Priority(pool(new PriorityBlockingQueue<>()))));
+            assertTrue("said once", OrderedPools.orders(new Priority(pool(new PriorityBlockingQueue<>()))));
+            assertEquals(Collections.singletonList("INFO Keploy dedup does not count the tasks handed to "
+                    + Priority.class.getName() + ": its pool's queue, a java.util.concurrent.PriorityBlockingQueue,"
+                    + " may order its tasks by their own type, so each reaches it as it is; a test's END does not"
+                    + " wait for one a request hands it, and one a scheduled job's run hands it marks no test"),
+                    logged);
+            logged.clear();
+            assertTrue("a subclass of a queue in order", OrderedPools.orders(
+                    new Subclassed(pool(new LinkedBlockingQueue<Runnable>() { }))));
+            assertTrue(logged.toString(), logged.size() == 1 && logged.get(0).contains(": its pool's queue, a "
+                    + AsyncHandTest.class.getName() + "$"));
+            logged.clear();
+            // Not initialized: its own call throws, and the log says
+            // nothing, so a class initialized later is not said uncounted.
+            assertTrue("not initialized", OrderedPools.orders(new Uninitialized()));
+            assertEquals(logged.toString(), 0, logged.size());
+            assertTrue("no pool", OrderedPools.orders(new NoPool()));
+            assertEquals(1, logged.size());
+            assertTrue(logged.get(0), logged.get(0).contains(NoPool.class.getName() + ": its pool's queue cannot be"
+                    + " read (java.lang.NullPointerException"));
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Test
+    public void nothingThrownReadingAPoolReachesTheAppsCall() throws Exception {
+        // Each executor's pool cannot be read: its class names a type that
+        // is missing (getMethod throws NoClassDefFoundError), its
+        // getThreadPoolExecutor() or its pool's getQueue() throws, or its
+        // queue is null. Its tasks go as they are, the log says so once,
+        // and the app's call sees nothing thrown.
+        Object[][] cases = {
+            {missingTypeExecutor(), "java.lang.NoClassDefFoundError: org/example/pools/Absent"},
+            {new PoolError(), "java.lang.NoClassDefFoundError: missing/Pool"},
+            {new QueueError(), "java.lang.NoClassDefFoundError: missing/Queue"},
+            {new QueueState(), "java.lang.IllegalStateException: closed"},
+            {new QueueNull(), "java.lang.NullPointerException"},
+        };
+        Logger logger = Logger.getLogger(KeployDedupAgent.class.getName());
+        List<String> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                logged.add(record.getLevel() + " " + record.getMessage());
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.addHandler(handler);
+        Object request = RequestGate.enter();
+        try {
+            for (Object[] each : cases) {
+                Object executor = each[0];
+                String label = executor.getClass().getName();
+                for (int i = 0; i < 2; i++) {
+                    Runnable task = () -> { };
+                    Callable<String> call = () -> "x";
+                    try {
+                        assertSame(label, task, RequestGate.hand(executor, task));
+                        assertSame(label, call, RequestGate.hand(executor, call));
+                    } catch (AssertionError e) {
+                        throw e;
+                    } catch (Throwable e) {
+                        throw new AssertionError(label + ": the app's call threw " + e, e);
+                    }
+                }
+                assertEquals(label + ": said once " + logged, 1, logged.size());
+                assertTrue(logged.get(0), logged.get(0).startsWith("INFO Keploy dedup does not count the tasks handed"
+                        + " to " + label + ": its pool's queue cannot be read (" + each[1]));
+                logged.clear();
+            }
+            assertEquals("only the request runs", 1, RequestGate.running());
+        } finally {
+            RequestGate.exit(request);
+            logger.removeHandler(handler);
+        }
+    }
+
+    // An executor whose class has a public getThreadPoolExecutor() and a
+    // public method that names a type no class loader has.
+    private static Object missingTypeExecutor() throws Exception {
+        String name = "org/example/pools/MissingType";
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name, null, "java/lang/Object", null);
+        MethodVisitor init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(0, 0);
+        init.visitEnd();
+        MethodVisitor pool = writer.visitMethod(Opcodes.ACC_PUBLIC, "getThreadPoolExecutor",
+                "()Ljava/util/concurrent/ThreadPoolExecutor;", null, null);
+        pool.visitCode();
+        pool.visitInsn(Opcodes.ACONST_NULL);
+        pool.visitInsn(Opcodes.ARETURN);
+        pool.visitMaxs(0, 0);
+        pool.visitEnd();
+        MethodVisitor use = writer.visitMethod(Opcodes.ACC_PUBLIC, "use", "(Lorg/example/pools/Absent;)V", null, null);
+        use.visitCode();
+        use.visitInsn(Opcodes.RETURN);
+        use.visitMaxs(0, 0);
+        use.visitEnd();
+        writer.visitEnd();
+        return load(name, writer.toByteArray()).getDeclaredConstructor().newInstance();
+    }
+
+    // A pool whose getQueue() throws what it is made with, or returns null.
+    private static final class Broken extends ThreadPoolExecutor {
+
+        private final RuntimeException runtime;
+        private final Error error;
+
+        Broken(RuntimeException runtime, Error error) {
+            super(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+            this.runtime = runtime;
+            this.error = error;
+        }
+
+        @Override
+        public BlockingQueue<Runnable> getQueue() {
+            if (runtime != null) {
+                throw runtime;
+            }
+            if (error != null) {
+                throw error;
+            }
+            return null;
+        }
+    }
+
+    public static final class PoolError extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        PoolError() {
+            super(null);
+        }
+
+        @Override
+        public ThreadPoolExecutor getThreadPoolExecutor() {
+            throw new NoClassDefFoundError("missing/Pool");
+        }
+    }
+
+    public static final class QueueError extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        QueueError() {
+            super(new Broken(null, new NoClassDefFoundError("missing/Queue")));
+        }
+    }
+
+    public static final class QueueState extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        QueueState() {
+            super(new Broken(new IllegalStateException("closed"), null));
+        }
+    }
+
+    public static final class QueueNull extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        QueueNull() {
+            super(new Broken(null, null));
+        }
+    }
+
+    private static ThreadPoolExecutor pool(BlockingQueue<Runnable> queue) {
+        return new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, queue);
+    }
+
+    // Executor is an executor whose pool is the one it is made with, as
+    // Spring's ThreadPoolTaskExecutor's.
+    public static class Executor extends SimpleAsyncTaskExecutor {
+
+        private static final long serialVersionUID = 1L;
+        private final ThreadPoolExecutor pool;
+
+        Executor(ThreadPoolExecutor pool) {
+            this.pool = pool;
+        }
+
+        public ThreadPoolExecutor getThreadPoolExecutor() {
+            return pool;
+        }
+    }
+
+    public static final class Priority extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        Priority(ThreadPoolExecutor pool) {
+            super(pool);
+        }
+    }
+
+    public static final class Subclassed extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        Subclassed(ThreadPoolExecutor pool) {
+            super(pool);
+        }
+    }
+
+    public static final class Uninitialized extends ThreadPoolTaskExecutor {
+
+        private static final long serialVersionUID = 1L;
+    }
+
+    public static final class NoPool extends Executor {
+
+        private static final long serialVersionUID = 1L;
+
+        NoPool() {
+            super(null);
+        }
     }
 
     @Test
@@ -537,14 +877,28 @@ public class AsyncHandTest {
         return "taken";
     }
 
+    public static Object tookForExecutor(Callable<?> task, AsyncTaskExecutor executor, Class<?> returns) {
+        return tookCallable(task);
+    }
+
+    public static void tookStatic(long timeout, Runnable task) {
+        tookRunnable(task, timeout);
+    }
+
+    public static ThreadPoolExecutor standInPool() {
+        return standInPool;
+    }
+
     public static Object tookString(String value) {
         lastString = value;
         return value;
     }
 
-    // executorStandIn is a class named as an executor's, with three
-    // methods of the name its entry counts: one handed a Runnable and a
-    // long, one a Callable, and one no task (left as it is).
+    // executorStandIn is a class named as an executor's, with methods of
+    // the name its entry counts: one handed a Runnable and a long, one a
+    // Callable, one no task (left as it is), one a Callable and the
+    // executor it is for, and a static one a long and a Runnable; and a
+    // getThreadPoolExecutor() that returns standInPool.
     static byte[] executorStandIn(String internalName, int version) {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         writer.visit(version, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, internalName, null, "java/lang/Object", null);
@@ -556,18 +910,24 @@ public class AsyncHandTest {
         init.visitMaxs(0, 0);
         init.visitEnd();
         String name = method(internalName);
-        forwards(writer, name, "(Ljava/lang/Runnable;J)V", "tookRunnable");
-        forwards(writer, name, "(Ljava/util/concurrent/Callable;)Ljava/lang/Object;", "tookCallable");
-        forwards(writer, name, "(Ljava/lang/String;)Ljava/lang/Object;", "tookString");
+        forwards(writer, Opcodes.ACC_PUBLIC, name, "(Ljava/lang/Runnable;J)V", "tookRunnable");
+        forwards(writer, Opcodes.ACC_PUBLIC, name, "(Ljava/util/concurrent/Callable;)Ljava/lang/Object;",
+                "tookCallable");
+        forwards(writer, Opcodes.ACC_PUBLIC, name, "(Ljava/lang/String;)Ljava/lang/Object;", "tookString");
+        forwards(writer, Opcodes.ACC_PUBLIC, name, "(Ljava/util/concurrent/Callable;"
+                + "Lorg/springframework/core/task/AsyncTaskExecutor;Ljava/lang/Class;)Ljava/lang/Object;",
+                "tookForExecutor");
+        forwards(writer, Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, name, "(JLjava/lang/Runnable;)V", "tookStatic");
+        forwards(writer, Opcodes.ACC_PUBLIC, "getThreadPoolExecutor", "()Ljava/util/concurrent/ThreadPoolExecutor;",
+                "standInPool");
         writer.visitEnd();
         return writer.toByteArray();
     }
 
-    private static void forwards(ClassWriter writer, String name, String descriptor, String target) {
-        MethodVisitor mv = writer.visitMethod(Opcodes.ACC_PUBLIC, name, descriptor, null,
-                new String[] {"java/lang/Exception"});
+    private static void forwards(ClassWriter writer, int access, String name, String descriptor, String target) {
+        MethodVisitor mv = writer.visitMethod(access, name, descriptor, null, new String[] {"java/lang/Exception"});
         mv.visitCode();
-        int slot = 1;
+        int slot = (access & Opcodes.ACC_STATIC) != 0 ? 0 : 1;
         for (Type arg : Type.getArgumentTypes(descriptor)) {
             mv.visitVarInsn(arg.getOpcode(Opcodes.ILOAD), slot);
             slot += arg.getSize();

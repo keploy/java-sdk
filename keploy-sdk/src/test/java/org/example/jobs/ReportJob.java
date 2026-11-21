@@ -13,6 +13,7 @@ public class ReportJob implements Job {
     public void execute(JobExecutionContext context) {
         Work.report();
         Events.fromJob();
+        PriorityPool.fromJob();
         ran.countDown();
     }
 }

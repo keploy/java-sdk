@@ -19,7 +19,10 @@ import java.nio.charset.StandardCharsets;
  * an event to an async multicaster and return (the listener held at its
  * start for the latter), "listener-block" and "listener-unblock" hold and
  * free its pool's thread, and "listener-done" lets the listener go on and
- * answers once it is done and its run is over. With "plain" as its argument
+ * answers once it is done and its run is over. "priority-quartz" and
+ * "priority-spring" have the job hand an app's priority pool its tasks
+ * (PriorityPool), and "priority-app" the app's own thread; each prints
+ * what came of it. With "plain" as its argument
  * it loads neither scheduler, and neither is on its class path: Schedulers,
  * which uses them, never loads.
  */

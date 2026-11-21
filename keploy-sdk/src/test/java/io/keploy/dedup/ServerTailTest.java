@@ -25,6 +25,7 @@ import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
+import org.example.jobs.PriorityPool;
 import org.example.servers.AsyncTail;
 import org.example.servers.HelloServlet;
 import org.example.servers.Retransformer;
@@ -334,6 +335,28 @@ public class ServerTailTest {
         assertFalse(result.cov, result.cov.contains("\"" + ASYNC_TAIL + "\""));
         assertTrue(result.cov, result.cov.endsWith(",\"windowCut\":true}"));
         assertTrue(result.log, result.log.contains("test-set-0/test-1's requests still ran 100 ms after its END"));
+    }
+
+    @Test
+    public void aRequestsTasksForAPriorityPoolGoAsTheyAre() throws Exception {
+        // Two requests hand an app's priority pool its tasks, which its
+        // queue's Comparator casts to the app's type: they go as they are,
+        // so execute does not throw and the queue's order is kept (each
+        // request answers "hello"), and the log says once that the pool's
+        // tasks are not counted. Wrapped, execute threw ClassCastException.
+        Fork fork = new Fork("tomcat", "2000", 0);
+        fork.queries.add("async=priority&sleep=0");
+        fork.queries.add("async=priority&sleep=0");
+        Result result = run(fork);
+        assertEquals(result.log, 2, result.covs.size());
+        String said = "Keploy dedup does not count the tasks handed to " + PriorityPool.class.getName()
+                + "$Pool: its pool's queue, a java.util.concurrent.PriorityBlockingQueue, may order its tasks by"
+                + " their own type, so each reaches it as it is";
+        assertTrue(result.log, result.log.contains(said));
+        assertEquals(result.log, result.log.indexOf(said), result.log.lastIndexOf(said));
+        for (String cov : result.covs) {
+            assertFalse(cov, cov.contains("windowCut"));
+        }
     }
 
     @Test

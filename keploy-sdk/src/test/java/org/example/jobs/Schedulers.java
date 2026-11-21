@@ -85,6 +85,17 @@ final class Schedulers {
             case "listener-done":
                 Events.finish();
                 return;
+            case "priority-quartz":
+                PriorityPool.armed = true;
+                run("quartz");
+                return;
+            case "priority-spring":
+                PriorityPool.armed = true;
+                run("spring");
+                return;
+            case "priority-app":
+                PriorityPool.print("app");
+                return;
             case "spring-release":
                 CountDownLatch release = DigestJobs.release;
                 DigestJobs.release = null;
