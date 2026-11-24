@@ -1264,6 +1264,10 @@ public class InProcessScanTest {
         // The kind of each record ("index", "background", "test"), in the
         // order they came.
         final List<String> kinds = new CopyOnWriteArrayList<>();
+        // The build of the last INDEX report taken ("" before one), and the
+        // first test record whose build was not it.
+        private String indexBuild = "";
+        private volatile String buildMismatch;
 
         DataReceiver(String path) throws IOException {
             server = AFUNIXServerSocket.newInstance();
@@ -1299,10 +1303,15 @@ public class InProcessScanTest {
                         background.add(payload);
                     } else if (payload.startsWith("{\"kind\":\"index\",")) {
                         kinds.add("index");
+                        indexBuild = RecordBuilds.indexBuild(payload);
                         index.add(payload);
                     } else {
                         kinds.add("test");
-                        payloads.add(payload);
+                        // Its build is the INDEX's before it (RecordBuilds).
+                        if (buildMismatch == null) {
+                            buildMismatch = RecordBuilds.mismatch(payload, indexBuild);
+                        }
+                        payloads.add(RecordBuilds.checked(payload, indexBuild));
                     }
                 } catch (IOException e) {
                     // Closed.
@@ -1311,7 +1320,9 @@ public class InProcessScanTest {
         }
 
         String next() throws InterruptedException {
-            return payloads.poll(30, TimeUnit.SECONDS);
+            String p = payloads.poll(30, TimeUnit.SECONDS);
+            RecordBuilds.failIfMismatched(buildMismatch);
+            return p;
         }
 
         String nextBackground() throws InterruptedException {
@@ -1321,6 +1332,7 @@ public class InProcessScanTest {
         @Override
         public void close() throws IOException {
             server.close();
+            RecordBuilds.failIfMismatched(buildMismatch);
         }
     }
 }

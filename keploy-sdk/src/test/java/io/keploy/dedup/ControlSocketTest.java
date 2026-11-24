@@ -361,6 +361,9 @@ public class ControlSocketTest {
         assertTrue(frame, header > 0 && body > header);
         byte[] golden = BuildTableTest.resource("java-dedup.table.ndjson");
         String build = new String(BuildTableTest.resource("java-dedup.build"), StandardCharsets.UTF_8).trim();
+        // The test's record named the INDEX's build (RecordBuilds), which is the table's: keploy holds a
+        // record of another build partial.
+        assertEquals("the record's build is the table's", build, data.indexBuild);
         assertEquals("{\"v\":1,\"part\":\"table\",\"build\":\"" + build + "\",\"seq\":0,\"last\":true,"
                 + "\"records\":5,\"sha256\":\"" + sha256(golden) + "\"}\n", frame.substring(header, body));
         assertEquals(new String(golden, StandardCharsets.UTF_8), frame.substring(body));
@@ -972,6 +975,10 @@ public class ControlSocketTest {
         final BlockingQueue<String> payloads = new LinkedBlockingQueue<>();
         final BlockingQueue<String> indexes = new LinkedBlockingQueue<>();
         final BlockingQueue<String> all = new LinkedBlockingQueue<>();
+        // The build of the last INDEX report taken ("" before one), and the
+        // first test record whose build was not it.
+        private volatile String indexBuild = "";
+        private volatile String buildMismatch;
 
         DataReceiver(String path) throws IOException {
             server = AFUNIXServerSocket.newInstance();
@@ -990,8 +997,18 @@ public class ControlSocketTest {
                         // A TABLE frame waits for OK before the next one goes.
                         socket.getOutputStream().write("OK\n".getBytes(StandardCharsets.UTF_8));
                     }
+                    if (payload.startsWith(INDEX_START)) {
+                        indexBuild = RecordBuilds.indexBuild(payload);
+                        indexes.add(payload);
+                    } else {
+                        // A test record's build is the INDEX's before it (RecordBuilds).
+                        if (buildMismatch == null) {
+                            buildMismatch = RecordBuilds.mismatch(payload, indexBuild);
+                        }
+                        payloads.add(RecordBuilds.checked(payload, indexBuild));
+                    }
+                    // After the build check: a row that reads all sees a record checked.
                     all.add(payload);
-                    (payload.startsWith(INDEX_START) ? indexes : payloads).add(payload);
                 } catch (IOException e) {
                     // Closed.
                 }
@@ -1001,17 +1018,22 @@ public class ControlSocketTest {
         // next waits for the next payload. The SDK sends it before it answers
         // the END, so it is there, or on its way, once the END is answered.
         String next() throws InterruptedException {
-            return payloads.poll(30, TimeUnit.SECONDS);
+            String p = payloads.poll(30, TimeUnit.SECONDS);
+            RecordBuilds.failIfMismatched(buildMismatch);
+            return p;
         }
 
         // poll returns a payload already sent, or null.
         String poll() throws InterruptedException {
-            return payloads.poll(200, TimeUnit.MILLISECONDS);
+            String p = payloads.poll(200, TimeUnit.MILLISECONDS);
+            RecordBuilds.failIfMismatched(buildMismatch);
+            return p;
         }
 
         @Override
         public void close() throws IOException {
             server.close();
+            RecordBuilds.failIfMismatched(buildMismatch);
         }
     }
 }

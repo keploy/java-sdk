@@ -57,6 +57,31 @@ public class DedupWireFormatTest {
                 KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList()));
     }
 
+    // The build of the index the JVM measures with goes last, so Keploy holds
+    // a test whose build is not the run's build table's as partial; it is
+    // left out when there is none, so the record is as before.
+    @Test
+    public void theIndexBuildGoesLastAndIsLeftOutWhenNone() {
+        Map<String, List<Integer>> probes = new LinkedHashMap<>();
+        probes.put("com/foo/Bar", Arrays.asList(0, 1));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"build\":\"jv1-0123456789abcdef0123456789abcdef\"}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.<String>emptyList(), "jv1-0123456789abcdef0123456789abcdef"));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]}}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.<String>emptyList(), null));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]}}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.<String>emptyList(), ""));
+        // With every other field set, the build is still the last.
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"classMismatch\":[\"com/foo/Bar\"],\"windowCut\":true,\"contaminated\":[\"quartz:com.foo.Job\"],"
+                + "\"build\":\"jv1-0123456789abcdef0123456789abcdef\"}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.singletonList("com/foo/Bar"), true,
+                        Collections.singletonList("quartz:com.foo.Job"), "jv1-0123456789abcdef0123456789abcdef"));
+    }
+
     @Test
     public void aCutEndsFlagSitsAfterClassMismatchAndIsLeftOutWhenFalse() {
         Map<String, List<Integer>> probes = new LinkedHashMap<>();

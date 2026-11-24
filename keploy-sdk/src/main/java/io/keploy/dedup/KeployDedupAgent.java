@@ -92,8 +92,13 @@ public final class KeployDedupAgent {
 
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
             boolean windowCut, List<String> contaminated) {
+        return toDedupJson(id, probesByClass, classMismatch, windowCut, contaminated, null);
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
+            boolean windowCut, List<String> contaminated, String build) {
         return GSON.toJson(new DedupPayload(id,
-                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated)));
+                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated), build));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -2582,14 +2587,26 @@ public final class KeployDedupAgent {
         }
 
         // publish sends the test's coverage, after the INDEX report when the
-        // receiver does not have it yet: the report's time counts in "send".
+        // receiver does not have it yet: the report's time counts in "json"
+        // on the first END (indexBuild reads it), and in "send" after.
         private void publish(String testId, TestCoverage coverage, Phases phases) throws IOException {
-            byte[] payload = GSON.toJson(new DedupPayload(testId, coverage))
+            byte[] payload = GSON.toJson(new DedupPayload(testId, coverage, indexBuild()))
                     .getBytes(StandardCharsets.UTF_8);
             phases.mark("json");
             sendIndex();
             send(payload);
             phases.mark("send");
+        }
+
+        // indexBuild is the build id of the index this publisher measures
+        // with, or null when it has none (or its report cannot be read).
+        private String indexBuild() {
+            try {
+                IndexReport report = index == null ? null : index.report();
+                return report == null ? null : report.build;
+            } catch (Throwable t) {
+                return null;
+            }
         }
 
         // send writes payload on a connection of its own to the data socket:
@@ -2625,6 +2642,13 @@ public final class KeployDedupAgent {
     // "scheduled:<class>.<method>", at most 8, then "+N" for N more. Their
     // hits are in executedLinesByFile with the test's own. Left out when
     // none ran in it, as classMismatch.
+    //
+    // build is the build id of the index this JVM measures with (its INDEX
+    // report's): Keploy holds a test whose build is not the run's build
+    // table's as partial (the app's classes differ between the run's JVMs,
+    // and the probes name another build's classes). It tells JVMs apart
+    // only: a class redefined inside one JVM is classMismatch's. Left out
+    // when the JVM has no index build.
     private static final class DedupPayload {
 
         private final String id;
@@ -2633,13 +2657,19 @@ public final class KeployDedupAgent {
         private final List<String> classMismatch;
         private final Boolean windowCut;
         private final List<String> contaminated;
+        private final String build;
 
         private DedupPayload(String id, TestCoverage coverage) {
+            this(id, coverage, null);
+        }
+
+        private DedupPayload(String id, TestCoverage coverage, String build) {
             this.id = id;
             this.executedLinesByFile = coverage.probesByClass;
             this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
             this.windowCut = coverage.windowCut ? Boolean.TRUE : null;
             this.contaminated = coverage.contaminated.isEmpty() ? null : coverage.contaminated;
+            this.build = build == null || build.isEmpty() ? null : build;
         }
     }
 

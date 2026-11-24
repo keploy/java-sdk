@@ -241,6 +241,10 @@ public class PhasesTest {
 
         private final AFUNIXServerSocket server;
         private final BlockingQueue<String> payloads = new LinkedBlockingQueue<>();
+        // The build of the last INDEX report taken ("" before one), and the
+        // first test record whose build was not it.
+        private String indexBuild = "";
+        private volatile String buildMismatch;
 
         DataReceiver(String path) throws IOException {
             server = AFUNIXServerSocket.newInstance();
@@ -256,8 +260,14 @@ public class PhasesTest {
                     socket.setSoTimeout(30000);
                     String payload = new String(readAll(socket.getInputStream()), StandardCharsets.UTF_8);
                     // The INDEX report (ControlSocketTest's rows) is not a test's coverage.
-                    if (!payload.startsWith("{\"kind\":\"index\",")) {
-                        payloads.add(payload);
+                    if (payload.startsWith("{\"kind\":\"index\",")) {
+                        indexBuild = RecordBuilds.indexBuild(payload);
+                    } else {
+                        // A test record's build is the INDEX's before it (RecordBuilds).
+                        if (buildMismatch == null) {
+                            buildMismatch = RecordBuilds.mismatch(payload, indexBuild);
+                        }
+                        payloads.add(RecordBuilds.checked(payload, indexBuild));
                     }
                 } catch (IOException e) {
                     // Closed.
@@ -267,12 +277,15 @@ public class PhasesTest {
 
         // next waits for the next payload: the SDK sends it before it answers the END.
         String next() throws InterruptedException {
-            return payloads.poll(30, TimeUnit.SECONDS);
+            String p = payloads.poll(30, TimeUnit.SECONDS);
+            RecordBuilds.failIfMismatched(buildMismatch);
+            return p;
         }
 
         @Override
         public void close() throws IOException {
             server.close();
+            RecordBuilds.failIfMismatched(buildMismatch);
         }
     }
 }
