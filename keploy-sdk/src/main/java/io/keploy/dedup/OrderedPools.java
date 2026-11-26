@@ -31,23 +31,27 @@ import java.util.logging.Logger;
  * <p>A pool whose queue is a PriorityBlockingQueue, or any queue with a
  * Comparator of the app's, casts each task it compares to the app's own type
  * and throws on a task in RequestGate's wrapper. A custom ThreadPoolExecutor
- * subclass that overrides {@code beforeExecute}/{@code afterExecute} (or
- * {@code decorateTask} on ScheduledThreadPoolExecutor) may likewise cast the
- * task. A pool configured with {@link ThreadPoolExecutor.DiscardPolicy} or
- * {@link ThreadPoolExecutor.DiscardOldestPolicy} can drop a task without
- * throwing, which would otherwise leave a request window open until END times
- * out.
+ * subclass that overrides {@code beforeExecute}, {@code afterExecute},
+ * {@code newTaskFor}, {@code execute}, {@code submit}, or {@code decorateTask}
+ * may likewise inspect or cast the task. Only pools with exact
+ * {@link ThreadPoolExecutor.AbortPolicy} are wrapped: any other rejection
+ * handler (including {@code DiscardPolicy}, {@code DiscardOldestPolicy},
+ * {@code CallerRunsPolicy} which silently drops after shutdown, or custom
+ * handlers) may silently drop or cast tasks.
  *
- * <p>Exact {@link ScheduledThreadPoolExecutor} instances are safe for
- * immediate {@code execute}/{@code submit} calls (unless configured with a
- * discard policy) because they always wrap each task in their own
- * {@code ScheduledFutureTask} before enqueueing into {@code DelayedWorkQueue}.
- * Spring's {@code ConcurrentTaskExecutor} and {@code ThreadPoolTaskScheduler}
- * are inspected through their public delegate accessors; an opaque delegate
- * whose queue cannot be verified is left unwrapped. Nothing thrown while
- * reading a pool or saying so in the log, by the app's own code too (an
- * exception's {@code toString()}, a log Handler), reaches the app's call: that
- * task goes as it is.
+ * <p>Exact {@link ScheduledThreadPoolExecutor} instances (and Spring's own
+ * internal {@code ThreadPoolTaskExecutor$} / {@code ThreadPoolTaskScheduler$}
+ * subclasses) are safe for immediate {@code execute}/{@code submit} calls
+ * because they wrap each task in their own {@code ScheduledFutureTask} or
+ * track lifecycle state without casting the caller's task. Spring's
+ * {@code ConcurrentTaskExecutor} and {@code ThreadPoolTaskScheduler} are
+ * inspected through their public delegate accessors (recognizing JDK 8-20
+ * {@code FinalizableDelegatedExecutorService} and JDK 21+
+ * {@code AutoShutdownDelegatedExecutorService}); an opaque delegate whose
+ * queue cannot be verified is left unwrapped. Nothing thrown while reading a
+ * pool or saying so in the log, by the app's own code too (an exception's
+ * {@code toString()}, a log Handler), reaches the app's call: that task goes
+ * as it is.
  */
 final class OrderedPools {
 
@@ -271,9 +275,7 @@ final class OrderedPools {
         }
         try {
             RejectedExecutionHandler handler = pool.getRejectedExecutionHandler();
-            if (handler == null
-                    || (handler.getClass() != ThreadPoolExecutor.AbortPolicy.class
-                            && handler.getClass() != ThreadPoolExecutor.CallerRunsPolicy.class)) {
+            if (handler == null || handler.getClass() != ThreadPoolExecutor.AbortPolicy.class) {
                 String handlerName = handler == null ? "null" : handler.getClass().getName();
                 return uncounted(reportedOwner, "its rejected execution handler, a "
                         + handlerName + ", may silently discard or inspect tasks");

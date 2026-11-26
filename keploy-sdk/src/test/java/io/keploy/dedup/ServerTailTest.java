@@ -296,7 +296,7 @@ public class ServerTailTest {
     // Spring, then one for each poller named: each hand-off's work lands in
     // its test, and no poller's is waited for.
     private void assertSpringHandOffs(Fork fork, String... pollers) throws Exception {
-        String[] counted = {"event", "pool", "execute", "listenable", "async", "completable", "throttled"};
+        String[] counted = {"event", "pool", "execute", "listenable", "async", "completable", "throttled", "scheduler"};
         for (String how : counted) {
             fork.queries.add("async=" + how + "&sleep=500");
         }
@@ -321,6 +321,7 @@ public class ServerTailTest {
         }
         for (String executor : new String[] {"org.springframework.core.task.SimpleAsyncTaskExecutor",
             "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor",
+            "org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler",
             "org.springframework.aop.interceptor.AsyncExecutionAspectSupport"}) {
             assertTrue(result.log, result.log.contains("Keploy dedup counts Spring's async tasks (" + executor
                     + "): a test's END waits for the tasks its requests hand off to finish"));

@@ -9,19 +9,27 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.CodeSource;
+import java.security.ProtectionDomain;
+import java.security.cert.Certificate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -31,6 +39,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RunnableFuture;
@@ -43,7 +52,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.jar.Attributes;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+import java.util.zip.ZipEntry;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -51,6 +65,7 @@ import org.junit.rules.TemporaryFolder;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.ModuleVisitor;
 import org.objectweb.asm.Opcodes;
 import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -208,12 +223,15 @@ public class HonestProtocolAndAsyncTest {
             assertEquals(KeployDedupAgent.buildHelloFrame(false, true, true, false, true, true, true, true),
                     initialHello);
 
+            // Early BACKGROUND + ACK_ID sent BEFORE JaCoCo starts must still take effect once started.
+            send(out, "ACK_ID");
+            send(out, "BACKGROUND");
+
             // Now external JaCoCo's premain finishes and Tomcat's CoyoteAdapter loads.
             DeferredRtLoader.agent = realAgent;
             ServerEntries.restoreCounted(Collections.singleton("Tomcat"));
 
             // Next START must succeed via in-process ProbeScan (NOT latched off!) and emit updated HELLO.
-            send(out, "ACK_ID");
             send(out, "START ts/test-1");
             String updatedHello = in.readLine();
             assertEquals("HELLO must refresh once server and JaCoCo are live",
@@ -226,6 +244,14 @@ public class HonestProtocolAndAsyncTest {
             String cov = in.readLine();
             assertEquals("COV {\"id\":\"ts/test-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]}}", cov);
             assertEquals("ACK ts/test-1", in.readLine());
+
+            // Early BACKGROUND opt-in must emit a BACKGROUND frame on START test-2 after JaCoCo started.
+            probes[0] = true;
+            send(out, "START ts/test-2");
+            assertEquals("ACK ts/test-2", in.readLine());
+            String bg = in.readLine();
+            assertTrue("early BACKGROUND opt-in must take effect once JaCoCo starts, got: " + bg,
+                    bg != null && bg.startsWith("BACKGROUND ") && bg.contains("\"com/acme/Shop\":[0]"));
         } finally {
             DeferredRtLoader.agent = null;
         }
@@ -780,6 +806,8 @@ public class HonestProtocolAndAsyncTest {
         };
         ThreadPoolExecutor customDropHandlerPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(1), (r, e) -> { /* custom log-and-drop */ });
+        ThreadPoolExecutor callerRunsPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(1), new ThreadPoolExecutor.CallerRunsPolicy());
         // 4. Exact ScheduledThreadPoolExecutor & Spring ThreadPoolTaskScheduler ARE safe.
         ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
         ThreadPoolTaskScheduler springScheduler = new ThreadPoolTaskScheduler();
@@ -800,6 +828,8 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(OrderedPools.orders(customHookPool));
             assertTrue("newTaskFor override must be skipped", OrderedPools.orders(customNewTaskForPool));
             assertTrue("custom RejectedExecutionHandler must be skipped", OrderedPools.orders(customDropHandlerPool));
+            assertTrue("CallerRunsPolicy silently drops after shutdown so must be skipped",
+                    OrderedPools.orders(callerRunsPool));
             assertFalse("exact ScheduledThreadPoolExecutor is safe", OrderedPools.orders(stpe));
             assertFalse("Spring ThreadPoolTaskScheduler is safe", OrderedPools.orders(springScheduler));
             assertTrue("ConcurrentTaskExecutor wrapping priority pool must not wrap",
@@ -856,6 +886,7 @@ public class HonestProtocolAndAsyncTest {
             customHookPool.shutdownNow();
             customNewTaskForPool.shutdownNow();
             customDropHandlerPool.shutdownNow();
+            callerRunsPool.shutdownNow();
             stpe.shutdownNow();
             springScheduler.shutdown();
             normalPool.shutdownNow();
@@ -867,20 +898,51 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void selfResubmittingChainStartedFromJobExpiresAtOriginalDeadline() throws Exception {
-        JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(80);
+    public void firstHopQueueWaitDoesNotEatBudgetWhileChainedSelfResubmissionExpiresAtHop1Deadline()
+            throws Exception {
+        JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(120);
         ExecutorService pool = Executors.newSingleThreadExecutor();
-        AtomicInteger hops = new AtomicInteger();
-        AtomicBoolean sawAttributed = new AtomicBoolean();
-        CountDownLatch expiredHopSeen = new CountDownLatch(1);
-        AtomicBoolean keepLooping = new AtomicBoolean(true);
         try {
+            // 1. First-hop task waits in queue LONGER than handedJobMaxNanos:
+            //    its budget must start when it begins running, not at hand-off time.
+            CountDownLatch blockerStart = new CountDownLatch(1);
+            CountDownLatch blockerRel = new CountDownLatch(1);
+            pool.execute(latchTask(blockerStart, blockerRel));
+            assertTrue(blockerStart.await(10, TimeUnit.SECONDS));
+
+            AtomicReference<String> firstHopRunning = new AtomicReference<>();
+            CountDownLatch firstHopDone = new CountDownLatch(1);
+            Object job = JobGate.enter(new Object(), "scheduled");
+            try {
+                RequestGate.execute(pool, () -> {
+                    firstHopRunning.set(JobGate.running());
+                    firstHopDone.countDown();
+                });
+            } finally {
+                JobGate.exit(job);
+            }
+            // Wait longer than handedJobMaxNanos while task sits in the queue.
+            Thread.sleep(160);
+            JobGate.open();
+            blockerRel.countDown();
+            assertTrue(firstHopDone.await(10, TimeUnit.SECONDS));
+            assertNotNull("first hop must still be attributed after long queue wait", firstHopRunning.get());
+            assertEquals("first hop marks window contaminated when it runs", 1, JobGate.close().size());
+
+            // 2. Chained self-resubmitting loop starts its budget at hop 1 and MUST expire at hop 1's deadline.
+            JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(200);
+            AtomicInteger hops = new AtomicInteger();
+            CountDownLatch hop1Attributed = new CountDownLatch(1);
+            CountDownLatch expiredHopSeen = new CountDownLatch(1);
+            AtomicBoolean keepLooping = new AtomicBoolean(true);
             Runnable[] self = new Runnable[1];
             self[0] = () -> {
                 int hop = hops.incrementAndGet();
                 String current = JobGate.running();
                 if (current != null) {
-                    sawAttributed.set(true);
+                    if (hop == 1) {
+                        hop1Attributed.countDown();
+                    }
                 } else if (hop > 1) {
                     expiredHopSeen.countDown();
                     keepLooping.set(false);
@@ -888,7 +950,7 @@ public class HonestProtocolAndAsyncTest {
                 }
                 if (keepLooping.get()) {
                     try {
-                        Thread.sleep(25);
+                        Thread.sleep(40);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         return;
@@ -896,23 +958,189 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.execute(pool, self[0]);
                 }
             };
-            Object job = JobGate.enter(new Object(), "scheduled");
+            Object job2 = JobGate.enter(new Object(), "scheduled");
             try {
                 RequestGate.execute(pool, self[0]);
             } finally {
-                JobGate.exit(job);
+                JobGate.exit(job2);
             }
-            assertTrue("chained self-resubmitting job task must expire at original deadline, hops=" + hops.get(),
+            assertTrue("hop 1 must be attributed", hop1Attributed.await(10, TimeUnit.SECONDS));
+            assertTrue("chained self-resubmitting job task must expire at hop 1 deadline, hops=" + hops.get(),
                     expiredHopSeen.await(10, TimeUnit.SECONDS));
-            assertTrue("earlier hops within deadline were attributed", sawAttributed.get());
             assertTrue("multiple hops executed before expiry", hops.get() >= 2);
             JobGate.open();
             assertEquals("no contamination after chain deadline expires",
                     Collections.<String>emptyList(), JobGate.close());
         } finally {
-            keepLooping.set(false);
             pool.shutdownNow();
         }
+    }
+
+    @Test(timeout = 60000)
+    public void trackingStructuresStayBoundedWithoutEndAndBehindLongRunningTasks() throws Exception {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        CountDownLatch sseStarted = new CountDownLatch(1);
+        CountDownLatch sseStop = new CountDownLatch(1);
+        try {
+            // Start 1 long-running task (simulating an SSE stream) on the pool inside a request window.
+            RequestGate.open();
+            Object req = RequestGate.enter();
+            try {
+                RequestGate.execute(pool, latchTask(sseStarted, sseStop));
+                assertTrue(sseStarted.await(10, TimeUnit.SECONDS));
+
+                // Now execute & submit 200 short tasks on the SAME pool without calling END!
+                for (int i = 0; i < 200; i++) {
+                    Future<Integer> f = RequestGate.submit(pool, () -> 1);
+                    assertEquals(Integer.valueOf(1), f.get(10, TimeUnit.SECONDS));
+                    CountDownLatch done = new CountDownLatch(1);
+                    RequestGate.execute(pool, done::countDown);
+                    assertTrue(done.await(10, TimeUnit.SECONDS));
+                }
+
+                // All 400 finished tasks must have self-removed immediately even behind the live SSE task.
+                Field byExecField = RequestGate.class.getDeclaredField("PENDING_BY_EXECUTOR");
+                byExecField.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Map<Executor, Set<?>> byExec = (Map<Executor, Set<?>>) byExecField.get(null);
+                int execAfterCompleted;
+                synchronized (byExec) {
+                    Set<?> set = byExec.get(pool);
+                    execAfterCompleted = set == null ? 0 : set.size();
+                }
+                assertEquals("all 400 finished tasks must self-remove immediately behind live SSE task",
+                        1, execAfterCompleted);
+
+                // Also submit & cancel 100 futures without calling END (exercises periodic sweep).
+                CountDownLatch holdStart = new CountDownLatch(1);
+                CountDownLatch holdRel = new CountDownLatch(1);
+                pool.execute(latchTask(holdStart, holdRel));
+                assertTrue(holdStart.await(10, TimeUnit.SECONDS));
+                for (int i = 0; i < 100; i++) {
+                    Future<?> cf = RequestGate.submit(pool, () -> { });
+                    assertTrue(cf.cancel(false));
+                }
+                holdRel.countDown();
+            } finally {
+                RequestGate.exit(req);
+            }
+
+            // Inspect current Window's futures map & PENDING_BY_EXECUTOR before END sweep:
+            // periodic sweep (stride 64) must keep both bounded even without END.
+            Field byExecField = RequestGate.class.getDeclaredField("PENDING_BY_EXECUTOR");
+            byExecField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<Executor, Set<?>> byExec = (Map<Executor, Set<?>>) byExecField.get(null);
+            Field currentField = RequestGate.class.getDeclaredField("current");
+            currentField.setAccessible(true);
+            Object currentWindow = currentField.get(null);
+            Field futuresField = currentWindow.getClass().getDeclaredField("futures");
+            futuresField.setAccessible(true);
+            Map<?, ?> futuresMap = (Map<?, ?>) futuresField.get(currentWindow);
+            int beforeSweepSize = futuresMap == null ? 0 : futuresMap.size();
+            assertTrue("window futures map must stay bounded without END, was " + beforeSweepSize,
+                    beforeSweepSize < 64);
+
+            // Once running() sweeps the remaining cancelled futures, only the 1 live SSE task remains.
+            assertEquals("only the 1 live SSE task remains counted", 1, RequestGate.running());
+            assertEquals("all cancelled futures swept from window map", 0, futuresMap.size());
+            int execTrackedSize;
+            synchronized (byExec) {
+                Set<?> set = byExec.get(pool);
+                execTrackedSize = set == null ? 0 : set.size();
+            }
+            assertEquals("only the 1 live SSE task remains in PENDING_BY_EXECUTOR", 1, execTrackedSize);
+
+            // Spring executor submit() futures cancelled before running must also release window permits (N7).
+            String schedClass = "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler";
+            byte[] schedWrapped = new ServerEntries(true).transform(
+                    getClass().getClassLoader(), schedClass, null, null, generateSpringSubmitStandIn(schedClass));
+            assertNotNull(schedWrapped);
+            Class<?> loadedSched = new ByteLoader(getClass().getClassLoader())
+                    .define(schedClass.replace('/', '.'), schedWrapped);
+            Object schedInstance = loadedSched.getDeclaredConstructor().newInstance();
+            RequestGate.open();
+            Object reqSpring = RequestGate.enter();
+            Future<?> springFuture;
+            try {
+                springFuture = (Future<?>) loadedSched.getMethod("submit", Runnable.class)
+                        .invoke(schedInstance, (Runnable) () -> { });
+            } finally {
+                RequestGate.exit(reqSpring);
+            }
+            assertEquals(1, RequestGate.running());
+            assertTrue(springFuture.cancel(false));
+            assertEquals("cancelled Spring submit() future must release window permit", 0, RequestGate.running());
+        } finally {
+            sseStop.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void namedModuleClassViaClassDirsIsSkippedAndDoesNotThrowIllegalAccessError() throws Exception {
+        String spec = System.getProperty("java.specification.version");
+        Assume.assumeTrue("JPMS named modules require Java 9+",
+                !spec.startsWith("1.") && Integer.parseInt(spec) >= 9);
+
+        // 1. In-process check: boot-layer unreadable module locations must be populated and blocked.
+        Set<String> unreadable = ServerEntries.unreadableModuleLocations();
+        assertFalse("Java 9+ boot layer must have unreadable named module locations", unreadable.isEmpty());
+        String anyBootLocation = unreadable.iterator().next();
+        if (anyBootLocation.startsWith("jrt:") || anyBootLocation.startsWith("file:")) {
+            ProtectionDomain blockedPd = new ProtectionDomain(
+                    new CodeSource(URI.create(anyBootLocation).toURL(), (Certificate[]) null), null);
+            assertFalse("canAccessGate must reject unreadable named module location",
+                    ServerEntries.canAccessGate(getClass().getClassLoader(), blockedPd));
+        }
+
+        // 2. End-to-end forked JVM check: run a real modular jar on --module-path with -javaagent:sdk.jar
+        //    and KEPLOY_JAVA_CLASS_DIRS pointing to the modular jar. If ServerEntries rewrote the
+        //    Executor.execute call site inside the named module, the JVM would throw IllegalAccessError!
+        File modJar = tmp.newFile("modapp-" + System.nanoTime() + ".jar");
+        try (JarOutputStream jos = new JarOutputStream(new FileOutputStream(modJar))) {
+            jos.putNextEntry(new ZipEntry("module-info.class"));
+            jos.write(generateModuleInfo("com.example.modapp"));
+            jos.closeEntry();
+            jos.putNextEntry(new ZipEntry("com/example/modapp/ModCaller.class"));
+            jos.write(generateModularExecutorMain("com/example/modapp/ModCaller"));
+            jos.closeEntry();
+        }
+        File sdkJar = tmp.newFile("keploy-sdk-mod-" + System.nanoTime() + ".jar");
+        Manifest manifest = new Manifest();
+        manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        manifest.getMainAttributes().putValue("Premain-Class", KeployDedupAgent.class.getName());
+        manifest.getMainAttributes().putValue("Can-Retransform-Classes", "true");
+        try (JarOutputStream jos = new JarOutputStream(new FileOutputStream(sdkJar), manifest)) {
+            jos.putNextEntry(new ZipEntry("META-INF/keploy-test"));
+            jos.closeEntry();
+        }
+
+        List<String> cmd = new ArrayList<>();
+        cmd.add(new File(System.getProperty("java.home"), "bin/java").getPath());
+        cmd.add("-javaagent:" + sdkJar.getPath());
+        cmd.add("-cp");
+        cmd.add(System.getProperty("java.class.path"));
+        cmd.add("--module-path");
+        cmd.add(modJar.getPath());
+        cmd.add("-m");
+        cmd.add("com.example.modapp/com.example.modapp.ModCaller");
+
+        File outFile = tmp.newFile("modapp-out.log");
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(outFile);
+        Map<String, String> env = pb.environment();
+        env.keySet().removeIf(k -> k.startsWith("KEPLOY_") || k.equals("JAVA_TOOL_OPTIONS")
+                || k.equals("JDK_JAVA_OPTIONS") || k.equals("_JAVA_OPTIONS"));
+        env.put("KEPLOY_JAVA_CLASS_DIRS", modJar.getPath());
+        env.put("KEPLOY_COVERAGE_ENDPOINT", "127.0.0.1:1");
+        env.put("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED", "true");
+        Process proc = pb.start();
+        assertTrue("modular JVM timed out", proc.waitFor(30, TimeUnit.SECONDS));
+        String output = new String(Files.readAllBytes(outFile.toPath()), StandardCharsets.UTF_8);
+        assertEquals("modular JVM must exit 0 without IllegalAccessError: " + output, 0, proc.exitValue());
+        assertTrue("expected MOD_OK in output: " + output, output.contains("MOD_OK"));
+        assertFalse("must not throw IllegalAccessError: " + output, output.contains("IllegalAccessError"));
     }
 
     @Test(timeout = 60000)
@@ -1368,6 +1596,82 @@ public class HonestProtocolAndAsyncTest {
         init.visitInsn(Opcodes.RETURN);
         init.visitMaxs(1, 1);
         init.visitEnd();
+    }
+
+    public static Future<?> makePendingFuture(Runnable task) {
+        return new FutureTask<Void>(task, null);
+    }
+
+    private static byte[] generateSpringSubmitStandIn(String className) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "submit",
+                "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC,
+                HonestProtocolAndAsyncTest.class.getName().replace('.', '/'),
+                "makePendingFuture", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(1, 2);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateModuleInfo(String moduleName) {
+        ClassWriter cw = new ClassWriter(0);
+        cw.visit(Opcodes.V9, Opcodes.ACC_MODULE, "module-info", null, null, null);
+        ModuleVisitor mv = cw.visitModule(moduleName, 0, null);
+        mv.visitRequire("java.base", Opcodes.ACC_MANDATED, null);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    // Generates a modular main class implementing Executor & Runnable whose
+    // main() calls INVOKEINTERFACE Executor.execute(Runnable)V and prints MOD_OK.
+    private static byte[] generateModularExecutorMain(String className) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V9, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object",
+                new String[] {"java/util/concurrent/Executor", "java/lang/Runnable"});
+        emitDefaultCtor(cw);
+
+        MethodVisitor exec = cw.visitMethod(Opcodes.ACC_PUBLIC, "execute", "(Ljava/lang/Runnable;)V", null, null);
+        exec.visitCode();
+        exec.visitVarInsn(Opcodes.ALOAD, 1);
+        exec.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/lang/Runnable", "run", "()V", true);
+        exec.visitInsn(Opcodes.RETURN);
+        exec.visitMaxs(1, 2);
+        exec.visitEnd();
+
+        MethodVisitor run = cw.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null);
+        run.visitCode();
+        run.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/System", "out", "Ljava/io/PrintStream;");
+        run.visitLdcInsn("MOD_OK");
+        run.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/io/PrintStream", "println", "(Ljava/lang/String;)V", false);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(2, 1);
+        run.visitEnd();
+
+        MethodVisitor main = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "main",
+                "([Ljava/lang/String;)V", null, null);
+        main.visitCode();
+        main.visitTypeInsn(Opcodes.NEW, className);
+        main.visitInsn(Opcodes.DUP);
+        main.visitMethodInsn(Opcodes.INVOKESPECIAL, className, "<init>", "()V", false);
+        main.visitVarInsn(Opcodes.ASTORE, 1);
+        main.visitVarInsn(Opcodes.ALOAD, 1);
+        main.visitVarInsn(Opcodes.ALOAD, 1);
+        main.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/concurrent/Executor", "execute",
+                "(Ljava/lang/Runnable;)V", true);
+        main.visitInsn(Opcodes.RETURN);
+        main.visitMaxs(2, 2);
+        main.visitEnd();
+
+        cw.visitEnd();
+        return cw.toByteArray();
     }
 
     private static final class MyAppTask implements Runnable {

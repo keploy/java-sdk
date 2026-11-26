@@ -2,13 +2,13 @@ package io.keploy.dedup;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -88,15 +88,19 @@ public final class RequestGate {
     // its pending permit without wrapping the returned Future.
     private static final Map<Object, Hand> PENDING_BY_FUTURE = new WeakHashMap<>();
 
-    // Weak associations from an Executor to its pending Hand instances, so
-    // shutdownNow() releases every queued task's pending permit regardless of
-    // whether the pool wrapped it in a FutureTask or ScheduledFutureTask.
-    private static final Map<Executor, ConcurrentLinkedQueue<WeakReference<Hand>>> PENDING_BY_EXECUTOR =
-            new WeakHashMap<>();
+    // Weak associations from an Executor to its active Hand instances (stored
+    // in a ConcurrentHashMap-backed set whose entries self-remove on release),
+    // so shutdownNow() releases every queued task's pending permit without
+    // retaining finished tasks behind long-running tasks.
+    private static final Map<Executor, Set<Hand>> PENDING_BY_EXECUTOR = new WeakHashMap<>();
 
     // Bounded poll slice in await() only when the window has tracked submit()
     // futures that could be cancelled externally without running.
     private static final long FUTURE_SWEEP_INTERVAL_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
+    // Sweep cancelled/done futures in Window.track() every N inserts so
+    // windows that never receive an END cannot grow unboundedly on cancelled
+    // futures.
+    private static final int FUTURE_SWEEP_STRIDE = 64;
 
     private RequestGate() {
     }
@@ -491,32 +495,24 @@ public final class RequestGate {
             return;
         }
         Hand hand = (Hand) handed;
-        if (hand.window == null) {
+        if (hand.window == null || hand.isReleased()) {
             return;
         }
         try {
-            ConcurrentLinkedQueue<WeakReference<Hand>> queue;
+            Set<Hand> set;
             synchronized (PENDING_BY_EXECUTOR) {
-                queue = PENDING_BY_EXECUTOR.get(executor);
-                if (queue == null) {
-                    queue = new ConcurrentLinkedQueue<>();
-                    PENDING_BY_EXECUTOR.put(executor, queue);
+                set = PENDING_BY_EXECUTOR.get(executor);
+                if (set == null) {
+                    set = ConcurrentHashMap.newKeySet();
+                    PENDING_BY_EXECUTOR.put(executor, set);
                 }
             }
-            // Amortized O(1) prune of finished/collected entries from head.
-            for (int i = 0; i < 8; i++) {
-                WeakReference<Hand> head = queue.peek();
-                if (head == null) {
-                    break;
-                }
-                Hand h = head.get();
-                if (h == null || h.isReleased()) {
-                    queue.poll();
-                } else {
-                    break;
-                }
+            set.add(hand);
+            hand.executorSet = set;
+            if (hand.isReleased()) {
+                hand.executorSet = null;
+                set.remove(hand);
             }
-            queue.add(new WeakReference<>(hand));
         } catch (Throwable ignored) {
             // Never let a broken Executor.hashCode/equals affect app execution.
         }
@@ -526,22 +522,37 @@ public final class RequestGate {
         if (executor == null) {
             return;
         }
-        ConcurrentLinkedQueue<WeakReference<Hand>> queue = null;
+        Set<Hand> set;
         try {
             synchronized (PENDING_BY_EXECUTOR) {
-                queue = PENDING_BY_EXECUTOR.remove(executor);
+                set = PENDING_BY_EXECUTOR.remove(executor);
             }
         } catch (Throwable ignored) {
             return;
         }
-        if (queue == null) {
+        if (set == null) {
             return;
         }
-        for (WeakReference<Hand> ref; (ref = queue.poll()) != null; ) {
-            Hand hand = ref.get();
-            if (hand != null) {
-                hand.releaseIfPending();
-            }
+        for (Hand hand : set) {
+            hand.releaseIfPending();
+        }
+        set.clear();
+    }
+
+    /**
+     * Records a Future returned by a Spring executor's submit method so that if
+     * the caller cancels or completes it before it runs, the request window
+     * releases its permit without waiting for END to time out.
+     *
+     * @param result return value from the executor method
+     * @param handed what hand returned
+     * @param task original task passed to hand
+     */
+    public static void submitted(Object result, Object handed, Object task) {
+        if (result instanceof CompletableFuture) {
+            attachCompletionRelease((CompletableFuture<?>) result, handed, task);
+        } else if (result instanceof Future) {
+            trackSubmitted((Future<?>) result, handed, task);
         }
     }
 
@@ -550,14 +561,18 @@ public final class RequestGate {
             return;
         }
         Hand hand = (Hand) handed;
-        if (hand.window == null) {
+        if (hand.window == null || hand.isReleased()) {
             return;
         }
         if (future.isCancelled() || future.isDone()) {
             hand.releaseIfPending();
             return;
         }
-        hand.window.track(future, hand);
+        hand.window.track(hand, future);
+        if (hand.isReleased()) {
+            hand.window.untrack(hand);
+            return;
+        }
         try {
             synchronized (PENDING_BY_FUTURE) {
                 PENDING_BY_FUTURE.put(future, hand);
@@ -662,57 +677,61 @@ public final class RequestGate {
         }
     }
 
-    private static final class PendingFuture {
-
-        private final WeakReference<Future<?>> future;
-        private final Hand hand;
-
-        private PendingFuture(Future<?> future, Hand hand) {
-            this.future = new WeakReference<Future<?>>(future);
-            this.hand = hand;
-        }
-    }
-
     private static final class Window {
 
         private final AtomicInteger running = new AtomicInteger();
         private volatile Thread waiter;
-        private volatile ConcurrentLinkedQueue<PendingFuture> futures;
+        // Pending submitted tasks keyed by Hand (self-removed on release in
+        // O(1), plus periodically swept on track() for cancelled futures so
+        // windows without an END cannot grow unboundedly).
+        private volatile ConcurrentHashMap<Hand, WeakReference<Future<?>>> futures;
+        private final AtomicInteger insertsSinceSweep = new AtomicInteger();
 
-        private void track(Future<?> future, Hand hand) {
-            ConcurrentLinkedQueue<PendingFuture> q = futures;
-            if (q == null) {
+        private void track(Hand hand, Future<?> future) {
+            ConcurrentHashMap<Hand, WeakReference<Future<?>>> map = futures;
+            if (map == null) {
                 synchronized (this) {
-                    q = futures;
-                    if (q == null) {
-                        q = new ConcurrentLinkedQueue<>();
-                        futures = q;
+                    map = futures;
+                    if (map == null) {
+                        map = new ConcurrentHashMap<>();
+                        futures = map;
                     }
                 }
             }
-            q.add(new PendingFuture(future, hand));
+            map.put(hand, new WeakReference<Future<?>>(future));
+            if (insertsSinceSweep.incrementAndGet() >= FUTURE_SWEEP_STRIDE) {
+                insertsSinceSweep.set(0);
+                sweepCancelledFutures();
+            }
+        }
+
+        private void untrack(Hand hand) {
+            ConcurrentHashMap<Hand, WeakReference<Future<?>>> map = futures;
+            if (map != null) {
+                map.remove(hand);
+            }
         }
 
         private boolean hasPendingFutures() {
-            ConcurrentLinkedQueue<PendingFuture> q = futures;
-            return q != null && !q.isEmpty();
+            ConcurrentHashMap<Hand, WeakReference<Future<?>>> map = futures;
+            return map != null && !map.isEmpty();
         }
 
         private void sweepCancelledFutures() {
-            ConcurrentLinkedQueue<PendingFuture> q = futures;
-            if (q == null || q.isEmpty()) {
+            ConcurrentHashMap<Hand, WeakReference<Future<?>>> map = futures;
+            if (map == null || map.isEmpty()) {
                 return;
             }
-            for (Iterator<PendingFuture> it = q.iterator(); it.hasNext(); ) {
-                PendingFuture pf = it.next();
-                if (pf.hand.isReleased()) {
-                    it.remove();
+            for (Map.Entry<Hand, WeakReference<Future<?>>> entry : map.entrySet()) {
+                Hand hand = entry.getKey();
+                if (hand.isReleased()) {
+                    map.remove(hand, entry.getValue());
                     continue;
                 }
-                Future<?> f = pf.future.get();
+                Future<?> f = entry.getValue().get();
                 if (f == null || f.isCancelled() || f.isDone()) {
-                    pf.hand.releaseIfPending();
-                    it.remove();
+                    hand.releaseIfPending();
+                    map.remove(hand, entry.getValue());
                 }
             }
         }
@@ -750,6 +769,8 @@ public final class RequestGate {
         final Window window;
         // The job attribution whose run handed it off, when window is null.
         final JobGate.Attribution job;
+        // Per-executor tracking set for O(1) self-removal on release.
+        volatile Set<Hand> executorSet;
         private volatile int state;
 
         Hand(Window window, JobGate.Attribution job) {
@@ -761,10 +782,20 @@ public final class RequestGate {
             return state == STATE_DONE;
         }
 
+        private void finishRelease() {
+            window.untrack(this);
+            Set<Hand> set = executorSet;
+            if (set != null) {
+                executorSet = null;
+                set.remove(this);
+            }
+            done(window);
+        }
+
         // release marks this task done unconditionally (on exit).
         final void release() {
             if (window != null && STATE.getAndSet(this, STATE_DONE) != STATE_DONE) {
-                done(window);
+                finishRelease();
             }
         }
 
@@ -774,7 +805,7 @@ public final class RequestGate {
         // window stays open while app code is still executing.
         final void releaseIfPending() {
             if (window != null && STATE.compareAndSet(this, STATE_PENDING, STATE_DONE)) {
-                done(window);
+                finishRelease();
             }
         }
 

@@ -122,6 +122,12 @@ public final class AsyncWork {
             case "throttled":
                 THROTTLED.execute(() -> sleepThenTail(millis));
                 break;
+            case "scheduler":
+                SCHEDULER.submit((Callable<Object>) () -> {
+                    sleepThenTail(millis);
+                    return null;
+                });
+                break;
             case "scheduled":
                 fire(FIRE, millis);
                 break;

@@ -1074,13 +1074,15 @@ public final class KeployDedupAgent {
      * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
      * but inverts the roles — here the SDK is the client. Wire protocol:
      * <pre>
-     *   SDK -&gt; collector (on connect): "HELLO {&lt;dynamic capabilities json&gt;}"
+     *   SDK -&gt; collector (on connect and whenever live capabilities change):
+     *                      "HELLO {&lt;dynamic capabilities json&gt;}"
      *   collector -&gt; SDK : "ACK_ID" | "BACKGROUND" | "NOP [&lt;token&gt;]" | "START &lt;id&gt;" | "END &lt;id&gt;"
-     *   SDK -&gt; collector : "ACK [id]" [+ "BACKGROUND &lt;compact-json&gt;"]
+     *   SDK -&gt; collector : ["HELLO {&lt;updated capabilities json&gt;}"] + "ACK [id]" [+ "BACKGROUND &lt;compact-json&gt;"]
      *                                                      (after a START cleared the counters;
      *                                                      BACKGROUND follows ACK so START is
      *                                                      never delayed by index reporting)
-     *                      "COV &lt;compact-json&gt;" + "ACK [id]" (after an END read the test's hits)
+     *                      ["HELLO {&lt;updated capabilities json&gt;}"] + "COV &lt;compact-json&gt;" + "ACK [id]"
+     *                                                      (after an END read the test's hits)
      *                      "IGNORED &lt;id&gt;" + "ACK [id]"    (after a START that could not
      *                                                      clear them, an END with no START,
      *                                                      or an END whose hits could not
@@ -1235,9 +1237,13 @@ public final class KeployDedupAgent {
                     }
                     if (BACKGROUND_COMMAND.equals(trimmed)) {
                         synchronized (testCaseLock) {
-                            if (collector.probeScan() != null) {
-                                backgroundRequested = true;
-                            } else {
+                            // Always honor BACKGROUND opt-in: frames are only
+                            // emitted when cleared is non-empty (which requires
+                            // a live ProbeScan), so an early BACKGROUND sent
+                            // before external JaCoCo starts still takes effect
+                            // once JaCoCo is ready.
+                            backgroundRequested = true;
+                            if (collector.probeScan() == null && !collector.isJacocoPendingStart()) {
                                 log(Level.INFO, "Keploy dedup: BACKGROUND is not taken on TCP: JaCoCo's probes are"
                                         + " not read in place (KEPLOY_JAVA_SCAN off, JaCoCo over TCP, or the scan"
                                         + " failed), so the hits between two tests are not seen", null);
@@ -1553,6 +1559,10 @@ public final class KeployDedupAgent {
         private ProbeScan probeScan;
         private boolean probeScanLookedUp;
 
+        private synchronized boolean isJacocoPendingStart() {
+            return !probeScanLookedUp && !isScanTurnedOff() && jacocoClient.lookupInProcessAgent().notStartedYet;
+        }
+
         private synchronized ProbeScan probeScan() {
             if (!probeScanLookedUp) {
                 if (isScanTurnedOff()) {
@@ -1561,7 +1571,7 @@ public final class KeployDedupAgent {
                             + " and reset, and no BACKGROUND record is sent", null);
                     return null;
                 }
-                JacocoClient.AgentLookup lookup = jacocoClient.lookupRuntimeAgent();
+                JacocoClient.AgentLookup lookup = jacocoClient.lookupInProcessAgent();
                 if (lookup.notStartedYet) {
                     // External JaCoCo is on the classpath (e.g. attached after
                     // keploy-sdk) but its premain has not run yet: do not latch
@@ -1570,7 +1580,7 @@ public final class KeployDedupAgent {
                     return null;
                 }
                 probeScanLookedUp = true;
-                Object agent = lookup.agent;
+                Object agent = lookup.inProcess == null ? null : lookup.inProcess.agent;
                 if (agent != null) {
                     try {
                         probeScan = ProbeScan.locate(agent);
@@ -2112,79 +2122,55 @@ public final class KeployDedupAgent {
         }
 
         private static final class AgentLookup {
-            final Object agent;
+            static final AgentLookup UNAVAILABLE = new AgentLookup(null, false);
+            static final AgentLookup NOT_STARTED = new AgentLookup(null, true);
+
+            final InProcessAgent inProcess;
             final boolean notStartedYet;
 
-            AgentLookup(Object agent, boolean notStartedYet) {
-                this.agent = agent;
+            AgentLookup(InProcessAgent inProcess, boolean notStartedYet) {
+                this.inProcess = inProcess;
                 this.notStartedYet = notStartedYet;
             }
         }
 
-        // lookupRuntimeAgent returns JaCoCo's in-process agent object, or
-        // notStartedYet=true when RT is present on the classpath but its
-        // premain has not started the agent yet (avoiding a permanent latch).
-        private AgentLookup lookupRuntimeAgent() {
+        // Single shared lookup for JaCoCo's in-process agent: returns
+        // NOT_STARTED without latching inProcessUnavailable when RT is on the
+        // classpath but its premain has not started the agent yet.
+        private AgentLookup lookupInProcessAgent() {
             if (inProcessUnavailable) {
-                return new AgentLookup(null, false);
+                return AgentLookup.UNAVAILABLE;
             }
             InProcessAgent cached = inProcessAgent;
             if (cached != null) {
-                return new AgentLookup(cached.agent, false);
+                return new AgentLookup(cached, false);
             }
             synchronized (this) {
                 if (inProcessUnavailable) {
-                    return new AgentLookup(null, false);
+                    return AgentLookup.UNAVAILABLE;
                 }
                 if (inProcessAgent != null) {
-                    return new AgentLookup(inProcessAgent.agent, false);
+                    return new AgentLookup(inProcessAgent, false);
                 }
                 try {
                     inProcessAgent = InProcessAgent.locate();
-                    return new AgentLookup(inProcessAgent.agent, false);
+                    return new AgentLookup(inProcessAgent, false);
                 } catch (AgentNotStartedException e) {
                     log(Level.FINE, "JaCoCo in-process agent is not started yet; will retry", e);
-                    return new AgentLookup(null, true);
+                    return AgentLookup.NOT_STARTED;
                 } catch (Throwable t) {
                     inProcessUnavailable = true;
                     log(Level.FINE,
                             "JaCoCo in-process agent unavailable, will use TCP fallback at "
                                     + host + ":" + port,
                             t);
-                    return new AgentLookup(null, false);
+                    return AgentLookup.UNAVAILABLE;
                 }
             }
         }
 
         private InProcessAgent inProcessAgent() {
-            if (inProcessUnavailable) {
-                return null;
-            }
-            InProcessAgent cached = inProcessAgent;
-            if (cached != null) {
-                return cached;
-            }
-            synchronized (this) {
-                if (inProcessUnavailable) {
-                    return null;
-                }
-                if (inProcessAgent != null) {
-                    return inProcessAgent;
-                }
-                try {
-                    inProcessAgent = InProcessAgent.locate();
-                } catch (AgentNotStartedException e) {
-                    log(Level.FINE, "JaCoCo in-process agent is not started yet; will retry", e);
-                    return null;
-                } catch (Throwable t) {
-                    inProcessUnavailable = true;
-                    log(Level.FINE,
-                            "JaCoCo in-process agent unavailable, will use TCP fallback at "
-                                    + host + ":" + port,
-                            t);
-                }
-                return inProcessAgent;
-            }
+            return lookupInProcessAgent().inProcess;
         }
 
         private byte[] dumpOverTcp(boolean dump, boolean reset) throws IOException {

@@ -1,5 +1,6 @@
 package io.keploy.dedup;
 
+import java.io.File;
 import java.lang.instrument.ClassFileTransformer;
 import java.net.URI;
 import java.net.URL;
@@ -164,11 +165,11 @@ final class ServerEntries implements ClassFileTransformer {
     // Per-loader cache for seesGate(loader) to avoid repeated Class.forName
     // calls and ClassNotFoundExceptions during startup class loading.
     private static final Map<ClassLoader, Boolean> SEES_GATE = new WeakHashMap<>();
-    // On Java 9+, code-source locations of boot-layer named modules that do
-    // not read RequestGate's unnamed module: rewriting classes inside those
-    // named modules would throw IllegalAccessError at call sites. Empty on
-    // Java 8 or when no unreadable named modules exist.
-    private static final Set<URI> UNREADABLE_MODULE_LOCATIONS = findUnreadableModuleLocations();
+    // On Java 9+, normalized code-source locations of boot-layer named modules
+    // that do not read RequestGate's unnamed module: rewriting classes inside
+    // those named modules would throw IllegalAccessError at call sites. Empty
+    // on Java 8 or when no unreadable named modules exist.
+    private static final Set<String> UNREADABLE_MODULE_LOCATIONS = findUnreadableModuleLocations();
 
     // Constant-pool class owners targeted by wrapExecutorCalls. If none of
     // these appear in a class's constant pool, ASM rewriting is skipped.
@@ -486,7 +487,7 @@ final class ServerEntries implements ClassFileTransformer {
     // the class does not live in a named module that cannot read RequestGate's
     // unnamed module (which would otherwise throw IllegalAccessError on
     // rewritten call sites when KEPLOY_JAVA_CLASS_DIRS overrides indexing).
-    private static boolean canAccessGate(ClassLoader loader, ProtectionDomain protectionDomain) {
+    static boolean canAccessGate(ClassLoader loader, ProtectionDomain protectionDomain) {
         if (!seesGate(loader)) {
             return false;
         }
@@ -495,7 +496,8 @@ final class ServerEntries implements ClassFileTransformer {
             URL location = cs == null ? null : cs.getLocation();
             if (location != null) {
                 try {
-                    if (UNREADABLE_MODULE_LOCATIONS.contains(location.toURI())) {
+                    String normalized = normalizeLocation(location.toURI());
+                    if (normalized != null && UNREADABLE_MODULE_LOCATIONS.contains(normalized)) {
                         return false;
                     }
                 } catch (Throwable ignored) {
@@ -505,8 +507,28 @@ final class ServerEntries implements ClassFileTransformer {
         return true;
     }
 
-    @SuppressWarnings("unchecked")
-    private static Set<URI> findUnreadableModuleLocations() {
+    static Set<String> unreadableModuleLocations() {
+        return UNREADABLE_MODULE_LOCATIONS;
+    }
+
+    private static String normalizeLocation(URI uri) {
+        if (uri == null) {
+            return null;
+        }
+        if ("file".equalsIgnoreCase(uri.getScheme())) {
+            try {
+                return new File(uri).getCanonicalPath();
+            } catch (Throwable ignored) {
+                try {
+                    return new File(uri).getAbsolutePath();
+                } catch (Throwable ignored2) {
+                }
+            }
+        }
+        return uri.normalize().toString();
+    }
+
+    private static Set<String> findUnreadableModuleLocations() {
         try {
             java.lang.reflect.Method getModule = Class.class.getMethod("getModule");
             Object gateModule = getModule.invoke(RequestGate.class);
@@ -522,7 +544,7 @@ final class ServerEntries implements ClassFileTransformer {
             Set<?> modules = (Set<?>) layerClass.getMethod("modules").invoke(bootLayer);
             Object config = layerClass.getMethod("configuration").invoke(bootLayer);
             java.lang.reflect.Method findModule = config.getClass().getMethod("findModule", String.class);
-            Set<URI> unreadable = new HashSet<>();
+            Set<String> unreadable = new HashSet<>();
             for (Object mod : modules) {
                 if (!Boolean.TRUE.equals(isNamed.invoke(mod))) {
                     continue;
@@ -543,12 +565,15 @@ final class ServerEntries implements ClassFileTransformer {
                             && Boolean.TRUE.equals(optLoc.getClass().getMethod("isPresent").invoke(optLoc))) {
                         Object uri = optLoc.getClass().getMethod("get").invoke(optLoc);
                         if (uri instanceof URI) {
-                            unreadable.add((URI) uri);
+                            String normalized = normalizeLocation((URI) uri);
+                            if (normalized != null) {
+                                unreadable.add(normalized);
+                            }
                         }
                     }
                 }
             }
-            return unreadable.isEmpty() ? Collections.<URI>emptySet() : Collections.unmodifiableSet(unreadable);
+            return unreadable.isEmpty() ? Collections.<String>emptySet() : Collections.unmodifiableSet(unreadable);
         } catch (Throwable t) {
             // Java 8 (no Module/ModuleLayer) or restricted reflection.
             return Collections.emptySet();
@@ -1036,6 +1061,15 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitMethodInsn(isStatic ? Opcodes.INVOKESTATIC : Opcodes.INVOKESPECIAL, owner,
                     renamedPrefix + method.name, method.descriptor, false);
             mv.visitLabel(end);
+            if (returns.getSort() == Type.OBJECT) {
+                // Track returned Future / CompletableFuture so cancellation
+                // before the task starts releases the request window permit.
+                mv.visitInsn(Opcodes.DUP);
+                mv.visitVarInsn(Opcodes.ALOAD, handed);
+                mv.visitVarInsn(Opcodes.ALOAD, taskSlot);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "submitted",
+                        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", false);
+            }
             mv.visitInsn(returns.getOpcode(Opcodes.IRETURN));
 
             mv.visitLabel(thrown);
@@ -1048,7 +1082,7 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "dropped", "(Ljava/lang/Object;Ljava/lang/Object;)V",
                     false);
             mv.visitInsn(Opcodes.ATHROW);
-            mv.visitMaxs(Math.max(Math.max(slot, returns.getSize()), 3), handed + 1);
+            mv.visitMaxs(Math.max(Math.max(slot, returns.getSize() + 3), 4), handed + 1);
             mv.visitEnd();
         }
 
