@@ -1,5 +1,7 @@
 package io.keploy.dedup;
 
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
@@ -88,11 +90,13 @@ public final class RequestGate {
     // its pending permit without wrapping the returned Future.
     private static final Map<Object, Hand> PENDING_BY_FUTURE = new WeakHashMap<>();
 
-    // Weak associations from an Executor to its active Hand instances (stored
-    // in a ConcurrentHashMap-backed set whose entries self-remove on release),
-    // so shutdownNow() releases every queued task's pending permit without
-    // retaining finished tasks behind long-running tasks.
-    private static final Map<Executor, Set<Hand>> PENDING_BY_EXECUTOR = new WeakHashMap<>();
+    // Weak associations from an Executor to weak tokens of its active Hand
+    // instances (stored in a ConcurrentHashMap-backed set whose tokens
+    // self-remove in O(1) on release, and dead tokens from cancelled/abandoned
+    // tasks are drained via DEAD_HANDS), so shutdownNow() releases every queued
+    // task's pending permit without retaining abandoned tasks or pinning pools.
+    private static final Map<Executor, Set<HandRef>> PENDING_BY_EXECUTOR = new WeakHashMap<>();
+    private static final ReferenceQueue<Hand> DEAD_HANDS = new ReferenceQueue<>();
 
     // Bounded poll slice in await() only when the window has tracked submit()
     // futures that could be cancelled externally without running.
@@ -490,7 +494,15 @@ public final class RequestGate {
         return unwrapped != null ? unwrapped : pending;
     }
 
+    private static void drainDeadHands() {
+        for (Reference<? extends Hand> ref; (ref = DEAD_HANDS.poll()) != null; ) {
+            HandRef hr = (HandRef) ref;
+            hr.set.remove(hr);
+        }
+    }
+
     private static void registerForExecutor(Executor executor, Object handed, Object task) {
+        drainDeadHands();
         if (executor == null || handed == task || !(handed instanceof Hand)) {
             return;
         }
@@ -499,7 +511,7 @@ public final class RequestGate {
             return;
         }
         try {
-            Set<Hand> set;
+            Set<HandRef> set;
             synchronized (PENDING_BY_EXECUTOR) {
                 set = PENDING_BY_EXECUTOR.get(executor);
                 if (set == null) {
@@ -507,11 +519,12 @@ public final class RequestGate {
                     PENDING_BY_EXECUTOR.put(executor, set);
                 }
             }
-            set.add(hand);
-            hand.executorSet = set;
+            HandRef ref = new HandRef(hand, DEAD_HANDS, set);
+            set.add(ref);
+            hand.executorRef = ref;
             if (hand.isReleased()) {
-                hand.executorSet = null;
-                set.remove(hand);
+                hand.executorRef = null;
+                set.remove(ref);
             }
         } catch (Throwable ignored) {
             // Never let a broken Executor.hashCode/equals affect app execution.
@@ -519,10 +532,11 @@ public final class RequestGate {
     }
 
     private static void releaseAllPendingForExecutor(Executor executor) {
+        drainDeadHands();
         if (executor == null) {
             return;
         }
-        Set<Hand> set;
+        Set<HandRef> set;
         try {
             synchronized (PENDING_BY_EXECUTOR) {
                 set = PENDING_BY_EXECUTOR.remove(executor);
@@ -533,8 +547,11 @@ public final class RequestGate {
         if (set == null) {
             return;
         }
-        for (Hand hand : set) {
-            hand.releaseIfPending();
+        for (HandRef ref : set) {
+            Hand hand = ref.get();
+            if (hand != null) {
+                hand.releaseIfPending();
+            }
         }
         set.clear();
     }
@@ -556,6 +573,17 @@ public final class RequestGate {
         }
     }
 
+    private static boolean isFutureTerminated(Future<?> future) {
+        if (future == null) {
+            return true;
+        }
+        try {
+            return future.isCancelled() || future.isDone();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private static void trackSubmitted(Future<?> future, Object handed, Object task) {
         if (future == null || handed == task || !(handed instanceof Hand)) {
             return;
@@ -564,7 +592,7 @@ public final class RequestGate {
         if (hand.window == null || hand.isReleased()) {
             return;
         }
-        if (future.isCancelled() || future.isDone()) {
+        if (isFutureTerminated(future)) {
             hand.releaseIfPending();
             return;
         }
@@ -729,7 +757,7 @@ public final class RequestGate {
                     continue;
                 }
                 Future<?> f = entry.getValue().get();
-                if (f == null || f.isCancelled() || f.isDone()) {
+                if (isFutureTerminated(f)) {
                     hand.releaseIfPending();
                     map.remove(hand, entry.getValue());
                 }
@@ -747,6 +775,16 @@ public final class RequestGate {
         private Nested(Window window, Window outer) {
             this.window = window;
             this.outer = outer;
+        }
+    }
+
+    private static final class HandRef extends WeakReference<Hand> {
+
+        private final Set<HandRef> set;
+
+        private HandRef(Hand referent, ReferenceQueue<Hand> queue, Set<HandRef> set) {
+            super(referent, queue);
+            this.set = set;
         }
     }
 
@@ -769,8 +807,8 @@ public final class RequestGate {
         final Window window;
         // The job attribution whose run handed it off, when window is null.
         final JobGate.Attribution job;
-        // Per-executor tracking set for O(1) self-removal on release.
-        volatile Set<Hand> executorSet;
+        // Weak token in per-executor tracking set for O(1) self-removal on release.
+        volatile HandRef executorRef;
         private volatile int state;
 
         Hand(Window window, JobGate.Attribution job) {
@@ -784,10 +822,10 @@ public final class RequestGate {
 
         private void finishRelease() {
             window.untrack(this);
-            Set<Hand> set = executorSet;
-            if (set != null) {
-                executorSet = null;
-                set.remove(this);
+            HandRef ref = executorRef;
+            if (ref != null) {
+                executorRef = null;
+                ref.set.remove(ref);
             }
             done(window);
         }

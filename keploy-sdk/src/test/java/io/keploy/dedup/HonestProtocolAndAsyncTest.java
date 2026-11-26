@@ -999,15 +999,23 @@ public class HonestProtocolAndAsyncTest {
                     assertTrue(done.await(10, TimeUnit.SECONDS));
                 }
 
-                // All 400 finished tasks must have self-removed immediately even behind the live SSE task.
+                // All 400 finished tasks must self-remove promptly even behind the live SSE task.
+                // Poll briefly because done::countDown runs inside Handed.run() just before finally exit().
                 Field byExecField = RequestGate.class.getDeclaredField("PENDING_BY_EXECUTOR");
                 byExecField.setAccessible(true);
                 @SuppressWarnings("unchecked")
                 Map<Executor, Set<?>> byExec = (Map<Executor, Set<?>>) byExecField.get(null);
-                int execAfterCompleted;
-                synchronized (byExec) {
-                    Set<?> set = byExec.get(pool);
-                    execAfterCompleted = set == null ? 0 : set.size();
+                int execAfterCompleted = -1;
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (System.nanoTime() < deadline) {
+                    synchronized (byExec) {
+                        Set<?> set = byExec.get(pool);
+                        execAfterCompleted = set == null ? 0 : set.size();
+                    }
+                    if (execAfterCompleted == 1) {
+                        break;
+                    }
+                    Thread.sleep(1);
                 }
                 assertEquals("all 400 finished tasks must self-remove immediately behind live SSE task",
                         1, execAfterCompleted);
@@ -1039,8 +1047,8 @@ public class HonestProtocolAndAsyncTest {
             futuresField.setAccessible(true);
             Map<?, ?> futuresMap = (Map<?, ?>) futuresField.get(currentWindow);
             int beforeSweepSize = futuresMap == null ? 0 : futuresMap.size();
-            assertTrue("window futures map must stay bounded without END, was " + beforeSweepSize,
-                    beforeSweepSize < 64);
+            assertTrue("window futures map must stay bounded by sweep stride (64) without END, was " + beforeSweepSize,
+                    beforeSweepSize <= 64);
 
             // Once running() sweeps the remaining cancelled futures, only the 1 live SSE task remains.
             assertEquals("only the 1 live SSE task remains counted", 1, RequestGate.running());
@@ -1088,12 +1096,13 @@ public class HonestProtocolAndAsyncTest {
         Set<String> unreadable = ServerEntries.unreadableModuleLocations();
         assertFalse("Java 9+ boot layer must have unreadable named module locations", unreadable.isEmpty());
         String anyBootLocation = unreadable.iterator().next();
-        if (anyBootLocation.startsWith("jrt:") || anyBootLocation.startsWith("file:")) {
-            ProtectionDomain blockedPd = new ProtectionDomain(
-                    new CodeSource(URI.create(anyBootLocation).toURL(), (Certificate[]) null), null);
-            assertFalse("canAccessGate must reject unreadable named module location",
-                    ServerEntries.canAccessGate(getClass().getClassLoader(), blockedPd));
-        }
+        java.net.URL blockedUrl = anyBootLocation.startsWith("jrt:")
+                ? URI.create(anyBootLocation).toURL()
+                : new File(anyBootLocation).toURI().toURL();
+        ProtectionDomain blockedPd = new ProtectionDomain(
+                new CodeSource(blockedUrl, (Certificate[]) null), null);
+        assertFalse("canAccessGate must reject unreadable named module location: " + anyBootLocation,
+                ServerEntries.canAccessGate(getClass().getClassLoader(), blockedPd));
 
         // 2. End-to-end forked JVM check: run a real modular jar on --module-path with -javaagent:sdk.jar
         //    and KEPLOY_JAVA_CLASS_DIRS pointing to the modular jar. If ServerEntries rewrote the
@@ -1139,6 +1148,10 @@ public class HonestProtocolAndAsyncTest {
         assertTrue("modular JVM timed out", proc.waitFor(30, TimeUnit.SECONDS));
         String output = new String(Files.readAllBytes(outFile.toPath()), StandardCharsets.UTF_8);
         assertEquals("modular JVM must exit 0 without IllegalAccessError: " + output, 0, proc.exitValue());
+        // Positive control: prove KEPLOY_JAVA_CLASS_DIRS actually indexed the modular class, so
+        // it was the named-module guard (not an empty index) that prevented rewriting.
+        assertTrue("expected modular jar class to be indexed: " + output,
+                output.contains("fingerprinting the app's 1 classes"));
         assertTrue("expected MOD_OK in output: " + output, output.contains("MOD_OK"));
         assertFalse("must not throw IllegalAccessError: " + output, output.contains("IllegalAccessError"));
     }
