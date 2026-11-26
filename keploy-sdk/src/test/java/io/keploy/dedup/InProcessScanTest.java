@@ -55,8 +55,8 @@ public class InProcessScanTest {
     private static final String[] PROPERTIES = {"keploy.java.dedup.diagnostics", "keploy.java.class.dirs",
             "keploy.jacoco.port", "keploy.coverage.endpoint", "keploy.java.dedup.warmup.disabled",
             "keploy.build.tag", "keploy.java.scan", "keploy.java.end.wait.ms"};
-    private static final String TAKEN = "ACK proto=2\n";
-    private static final String IGNORED = "IGNORED proto=2\n";
+    private static final String TAKEN = "ACK proto=3\n";
+    private static final String IGNORED = "IGNORED proto=3\n";
     private static final String SHOP = "com/acme/Shop";
     private static final String CART = "com/acme/Cart";
     // The JaCoCo ids of the bytes setUp writes for the two classes: the ids
@@ -416,7 +416,8 @@ public class InProcessScanTest {
             assertEquals(TAKEN, send("START test-set-0/test-4"));
             shop[3] = true;
             assertEquals(TAKEN, send("END test-set-0/test-4"));
-            assertEquals("{\"id\":\"test-set-0/test-4\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]}}",
+            assertEquals("{\"id\":\"test-set-0/test-4\",\"executedLinesByFile\":{\"" + SHOP + "\":[3]},"
+                    + "\"contaminated\":[\"tail:test-set-0/test-3\"]}",
                     data.next());
             assertNull(data.background.poll());
         }
@@ -1043,7 +1044,8 @@ public class InProcessScanTest {
             assertEquals(TAKEN, send("START test-set-0/test-2"));
             assertFalse("cleared", shop[2]);
             assertEquals(TAKEN, send("END test-set-0/test-2"));
-            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{}}", data.next());
+            assertEquals("{\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{},"
+                    + "\"contaminated\":[\"tail:test-set-0/test-1\"]}", data.next());
             // The windows after it count as usual.
             cart[1] = true;
             assertEquals(TAKEN, send("START test-set-0/test-3"));
@@ -1208,7 +1210,14 @@ public class InProcessScanTest {
             OutputStream out = socket.getOutputStream();
             out.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             out.flush();
-            return new String(readAll(socket.getInputStream()), StandardCharsets.UTF_8);
+            String reply = new String(readAll(socket.getInputStream()), StandardCharsets.UTF_8);
+            if (reply.startsWith("ACK proto=3 caps=") && reply.endsWith("\n")) {
+                String caps = reply.substring("ACK proto=3 caps=".length(), reply.length() - 1);
+                assertFalse("caps must contain no spaces: " + reply, caps.contains(" "));
+                assertTrue("reply must stay well under 1024 bytes: " + reply, reply.length() < 1024);
+                return TAKEN;
+            }
+            return reply;
         }
     }
 

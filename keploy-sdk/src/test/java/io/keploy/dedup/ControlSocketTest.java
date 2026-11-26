@@ -65,8 +65,10 @@ public class ControlSocketTest {
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
     private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
     private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
-    private static final String TAKEN = "ACK proto=2\n";
-    private static final String IGNORED = "IGNORED proto=2\n";
+    private static final String TAKEN =
+            "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
+            + "background=false,asyncExecutors=false,listenerContamination=false\n";
+    private static final String IGNORED = "IGNORED proto=3\n";
 
     private String savedControlPath;
     private String savedDataPath;
@@ -114,6 +116,8 @@ public class ControlSocketTest {
         // unless a row sets its own bound.
         System.setProperty(BuildTable.MIN_HEAP_PROPERTY, "0");
         KeployDedupAgent.transformerAdded = false;
+        KeployDedupAgent.executorCallSitesEnabled = false;
+        ServerEntries.setHookStatusForTests(false, false, false);
     }
 
     /** A TABLE row needs the heap check's env var unset: it would win over the property setUp sets. */
@@ -139,6 +143,8 @@ public class ControlSocketTest {
         System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
         System.clearProperty(END_WAIT_PROPERTY);
         KeployDedupAgent.transformerAdded = false;
+        KeployDedupAgent.executorCallSitesEnabled = false;
+        ServerEntries.setHookStatusForTests(false, false, false);
         if (jacoco != null) {
             jacoco.close();
         }
@@ -208,8 +214,8 @@ public class ControlSocketTest {
 
     @Test
     public void aJobRunningInATestsWindowIsNamedInItsRecordAndOneBetweenTestsIsNot() throws Exception {
-        startWithJacoco();
         data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
         // Running when the START opens the window, done before its END.
         Object running = JobGate.enter(new Object(), "quartz");
         try {
@@ -394,7 +400,7 @@ public class ControlSocketTest {
             int asked = BuildTable.requests();
             assertEquals(TAKEN, send("START test-set-0/test-1"));
             String reply = send("TABLE");
-            assertTrue(reply, reply.matches("IGNORED proto=2 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
+            assertTrue(reply, reply.matches("IGNORED proto=3 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
                     + needed + "\n"));
             assertEquals("no send started", asked, BuildTable.requests());
             assertNull("no table frame", data.payloads.poll(2, TimeUnit.SECONDS));

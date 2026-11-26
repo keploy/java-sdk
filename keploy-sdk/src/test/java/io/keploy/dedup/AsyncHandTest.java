@@ -498,7 +498,6 @@ public class AsyncHandTest {
         logger.addHandler(handler);
         try {
             assertFalse("no executor", OrderedPools.orders(null));
-            assertFalse("no pool", OrderedPools.orders(new Object()));
             for (BlockingQueue<Runnable> queue : Arrays.<BlockingQueue<Runnable>>asList(new LinkedBlockingQueue<>(),
                     new SynchronousQueue<>(), new ArrayBlockingQueue<>(1), new LinkedBlockingDeque<>(),
                     new LinkedTransferQueue<>())) {
@@ -512,6 +511,9 @@ public class AsyncHandTest {
                 spring.shutdown();
             }
             assertEquals(logged.toString(), 0, logged.size());
+
+            assertTrue("unknown object fails closed", OrderedPools.orders(new Object()));
+            logged.clear();
 
             assertTrue(OrderedPools.orders(new Priority(pool(new PriorityBlockingQueue<>()))));
             assertTrue("said once", OrderedPools.orders(new Priority(pool(new PriorityBlockingQueue<>()))));

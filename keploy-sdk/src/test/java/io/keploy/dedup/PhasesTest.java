@@ -49,7 +49,9 @@ public class PhasesTest {
     private static final String[] PROPERTIES = {"keploy.java.dedup.diagnostics", "keploy.java.class.dirs",
             "keploy.jacoco.port", "keploy.coverage.endpoint", "keploy.java.dedup.warmup.disabled",
             "keploy.build.tag"};
-    private static final String TAKEN = "ACK proto=2\n";
+    private static final String TAKEN =
+            "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
+            + "background=false,asyncExecutors=false,listenerContamination=false\n";
     private static final String MS = "\\d+\\.\\d\\d";
     // The one app class, and the probes a test ran in it.
     private static final String SHOP = "com/acme/Shop";

@@ -35,6 +35,8 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -50,6 +52,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -151,8 +154,12 @@ public final class KeployDedupAgent {
     // proto=2 says this SDK answers every command it reads, so Keploy can read
     // a close with no answer as a command not taken: on macOS a connection
     // closed with its command unread gives Keploy no error, only the close.
-    static final String UNIX_REPLY_TAKEN = "ACK proto=2";
-    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=2";
+    // Random UUID generated once per JVM startup (never changes on TCP
+    // reconnect; distinct across JVM restarts) so collectors can detect pod
+    // identity, restarts, and wrong-JVM routing.
+    static final String JVM_NONCE = UUID.randomUUID().toString();
+    static final String UNIX_REPLY_TAKEN = "ACK proto=3";
+    static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=3";
     // The unix control command a Keploy that reads BACKGROUND records sends
     // to get them: ACK when this SDK will send them to the receiver on the
     // data socket now, IGNORED when it sees no hits between tests (JaCoCo's
@@ -167,23 +174,217 @@ public final class KeployDedupAgent {
     // "NOP" -> "ACK". Does not touch activeTestId, lastEndedTestId, or probes.
     static final String NOP_COMMAND = "NOP";
     // Protocol version declared in the dynamic HELLO frame sent immediately on
-    // TCP connect. Each capability boolean is computed from live runtime state
-    // at connect time so collectors never act on false promises.
+    // TCP connect and on unix ACK proto=3 caps=... replies.
     static final int TCP_PROTOCOL_VERSION = 3;
 
-    static String buildHelloFrame(boolean windowCut, boolean contaminated, boolean classMismatch,
+    static String buildUnixCapsReply(boolean windowCut, boolean contaminated, boolean classMismatch,
+            boolean background, boolean asyncExecutors, boolean listenerContamination) {
+        return UNIX_REPLY_TAKEN
+                + " caps=windowCut=" + windowCut
+                + ",contaminated=" + contaminated
+                + ",classMismatch=" + classMismatch
+                + ",background=" + background
+                + ",asyncExecutors=" + asyncExecutors
+                + ",listenerContamination=" + listenerContamination;
+    }
+
+    static String buildHelloFrame(String sdkVersion, String podUid, String podName, String sessionId,
+            String jvmNonce, String buildId,
+            boolean windowCut, boolean contaminated, boolean classMismatch,
             boolean background, boolean ackId, boolean nopResync,
             boolean asyncExecutors, boolean listenerContamination) {
-        return "HELLO {\"proto\":" + TCP_PROTOCOL_VERSION
-                + ",\"windowCut\":" + windowCut
-                + ",\"contaminated\":" + contaminated
-                + ",\"classMismatch\":" + classMismatch
-                + ",\"background\":" + background
-                + ",\"ackId\":" + ackId
-                + ",\"nopResync\":" + nopResync
-                + ",\"asyncExecutors\":" + asyncExecutors
-                + ",\"listenerContamination\":" + listenerContamination
-                + "}";
+        return "HELLO " + GSON.toJson(new HelloPayload(
+                sdkVersion == null ? "" : sdkVersion,
+                podUid == null ? "" : podUid,
+                podName == null ? "" : podName,
+                sessionId == null ? "" : sessionId,
+                jvmNonce == null ? "" : jvmNonce,
+                buildId == null ? "" : buildId,
+                windowCut, contaminated, classMismatch, background, ackId, nopResync,
+                asyncExecutors, listenerContamination));
+    }
+
+    private static final class HelloPayload {
+        @SuppressWarnings("unused")
+        final int proto = TCP_PROTOCOL_VERSION;
+        @SuppressWarnings("unused")
+        final String sdkVersion;
+        @SuppressWarnings("unused")
+        final String podUid;
+        @SuppressWarnings("unused")
+        final String podName;
+        @SuppressWarnings("unused")
+        final String sessionId;
+        @SuppressWarnings("unused")
+        final String jvmNonce;
+        @SuppressWarnings("unused")
+        final String buildId;
+        @SuppressWarnings("unused")
+        final boolean windowCut;
+        @SuppressWarnings("unused")
+        final boolean contaminated;
+        @SuppressWarnings("unused")
+        final boolean classMismatch;
+        @SuppressWarnings("unused")
+        final boolean background;
+        @SuppressWarnings("unused")
+        final boolean ackId;
+        @SuppressWarnings("unused")
+        final boolean nopResync;
+        @SuppressWarnings("unused")
+        final boolean asyncExecutors;
+        @SuppressWarnings("unused")
+        final boolean listenerContamination;
+
+        HelloPayload(String sdkVersion, String podUid, String podName, String sessionId,
+                String jvmNonce, String buildId,
+                boolean windowCut, boolean contaminated, boolean classMismatch,
+                boolean background, boolean ackId, boolean nopResync,
+                boolean asyncExecutors, boolean listenerContamination) {
+            this.sdkVersion = sdkVersion;
+            this.podUid = podUid;
+            this.podName = podName;
+            this.sessionId = sessionId;
+            this.jvmNonce = jvmNonce;
+            this.buildId = buildId;
+            this.windowCut = windowCut;
+            this.contaminated = contaminated;
+            this.classMismatch = classMismatch;
+            this.background = background;
+            this.ackId = ackId;
+            this.nopResync = nopResync;
+            this.asyncExecutors = asyncExecutors;
+            this.listenerContamination = listenerContamination;
+        }
+    }
+
+    private static final class Capabilities {
+        final boolean windowCut;
+        final boolean contaminated;
+        final boolean classMismatch;
+        final boolean background;
+        final boolean asyncExecutors;
+        final boolean listenerContamination;
+
+        Capabilities(boolean windowCut, boolean contaminated, boolean classMismatch,
+                boolean background, boolean asyncExecutors, boolean listenerContamination) {
+            this.windowCut = windowCut;
+            this.contaminated = contaminated;
+            this.classMismatch = classMismatch;
+            this.background = background;
+            this.asyncExecutors = asyncExecutors;
+            this.listenerContamination = listenerContamination;
+        }
+
+        String toUnixAck() {
+            return buildUnixCapsReply(windowCut, contaminated, classMismatch, background,
+                    asyncExecutors, listenerContamination);
+        }
+
+        String toHelloFrame(String buildId) {
+            return buildHelloFrame(
+                    IndexReport.versionOf(IndexReport.class),
+                    envOrProperty("KEPLOY_DEDUP_POD_UID", "keploy.dedup.pod.uid", ""),
+                    envOrProperty("KEPLOY_DEDUP_POD_NAME", "keploy.dedup.pod.name", ""),
+                    envOrProperty("KEPLOY_DEDUP_SESSION_ID", "keploy.dedup.session.id", ""),
+                    JVM_NONCE,
+                    buildId,
+                    windowCut, contaminated, classMismatch, background, true, true,
+                    asyncExecutors, listenerContamination);
+        }
+    }
+
+    private static Capabilities computeCapabilities(CoverageCollector collector) {
+        boolean agentAttached = transformerAdded;
+        boolean endWaitActive = collector.endWaitMillis > 0;
+        // Base windowCut on ServerEntries being installed with endWait > 0
+        // (and no uncounted server / hook failure) rather than !countsNone(),
+        // so Jetty/Undertow cold-start pods honestly declare windowCut=true
+        // before their first request loads HttpChannel/Connectors. Runtime
+        // probes with enteredCount==0 still fail closed via "no-server-entry".
+        boolean serverEntriesInstalled = agentAttached && endWaitActive
+                && !ServerEntries.hasUncountedServer()
+                && !ServerEntries.hadServerHookFailure();
+        boolean windowCut = serverEntriesInstalled;
+        boolean contaminated = agentAttached;
+        boolean classMismatch = true;
+        boolean background = collector.probeScan() != null;
+        boolean appOnlyActive = collector.coverageIndex.entries == null
+                || collector.coverageIndex.appOnly;
+        boolean asyncExecutors = serverEntriesInstalled
+                && executorCallSitesEnabled
+                && !isAsyncCallSitesTurnedOff()
+                && appOnlyActive
+                && !ServerEntries.wasJpmsGuardTriggered()
+                && RequestGate.CF_DEPENDENT_TRACKING_ENABLED;
+        boolean listenerContamination = agentAttached && !ServerEntries.hadListenerHookFailure();
+        return new Capabilities(windowCut, contaminated, classMismatch, background,
+                asyncExecutors, listenerContamination);
+    }
+
+    static boolean isAsyncCallSitesTurnedOff() {
+        return "off".equalsIgnoreCase(envOrProperty("KEPLOY_JAVA_ASYNC_CALLSITES",
+                "keploy.java.async.callsites", ""));
+    }
+
+    // Merges RequestGate contaminations (tail, untracked-executor,
+    // untracked-async, armed-mid-flight), JobGate contaminations, and
+    // no-server-entry, deduplicated in order and capped at JobGate.NAMES with
+    // "+N" overflow.
+    static List<String> mergeContaminations(List<String> requestContams, List<String> jobContams,
+            boolean noServerEntry) {
+        if ((requestContams == null || requestContams.isEmpty())
+                && (jobContams == null || jobContams.isEmpty())
+                && !noServerEntry) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        int overflow = 0;
+        if (requestContams != null) {
+            for (String item : requestContams) {
+                overflow = addContaminationItem(merged, overflow, item);
+            }
+        }
+        if (jobContams != null) {
+            for (String item : jobContams) {
+                overflow = addContaminationItem(merged, overflow, item);
+            }
+        }
+        if (noServerEntry) {
+            merged.add("no-server-entry");
+        }
+        if (merged.size() <= JobGate.NAMES && overflow == 0) {
+            return new ArrayList<>(merged);
+        }
+        List<String> out = new ArrayList<>(JobGate.NAMES + 1);
+        int kept = 0;
+        for (String item : merged) {
+            if (kept < JobGate.NAMES) {
+                out.add(item);
+                kept++;
+            } else {
+                overflow++;
+            }
+        }
+        if (overflow > 0) {
+            out.add("+" + overflow);
+        }
+        return out;
+    }
+
+    private static int addContaminationItem(Set<String> merged, int overflow, String item) {
+        if (item == null || item.isEmpty()) {
+            return overflow;
+        }
+        if (item.startsWith("+")) {
+            try {
+                return overflow + Integer.parseInt(item.substring(1));
+            } catch (NumberFormatException ignored) {
+                // Treat as ordinary label.
+            }
+        }
+        merged.add(item);
+        return overflow;
     }
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
@@ -267,6 +468,10 @@ public final class KeployDedupAgent {
         }
 
         startedIndex = index;
+        // Start unarmed (complete no-op when Keploy is absent); armed as soon
+        // as a collector connects (TCP connect, live unix data socket, or first
+        // control command/START).
+        RequestGate.disarm();
         CoverageCollector collector = new CoverageCollector(
                 new JacocoClient(resolveHost(), resolvePort()), index, instrumentation);
 
@@ -339,8 +544,15 @@ public final class KeployDedupAgent {
             if (loadedEntries != null) {
                 if (index.appOnly && !loadedEntries.isEmpty()) {
                     Set<String> names = new HashSet<>(loadedEntries.size() * 2);
+                    boolean unreadableModuleHit = false;
                     for (ClassEntry entry : loadedEntries) {
                         names.add(entry.className);
+                        if (!unreadableModuleHit && ServerEntries.isLocationInUnreadableModule(entry.location)) {
+                            unreadableModuleHit = true;
+                        }
+                    }
+                    if (unreadableModuleHit) {
+                        ServerEntries.markJpmsGuardTriggered();
                     }
                     appClasses = names;
                 }
@@ -393,9 +605,17 @@ public final class KeployDedupAgent {
     static void countRequests(Instrumentation instrumentation, boolean jacocoAttached,
             Set<String> appClasses, String appPackagePrefix) {
         boolean requests = endWaitMillis() != 0;
-        Set<String> allowed = appClasses == null ? Collections.<String>emptySet() : appClasses;
+        boolean asyncCallSitesOff = isAsyncCallSitesTurnedOff();
+        Set<String> allowed = asyncCallSitesOff || appClasses == null
+                ? Collections.<String>emptySet()
+                : appClasses;
+        String prefix = asyncCallSitesOff ? null : appPackagePrefix;
         boolean hasCallSiteRewrites = !allowed.isEmpty()
-                || (appPackagePrefix != null && !appPackagePrefix.isEmpty());
+                || (prefix != null && !prefix.isEmpty());
+        if (asyncCallSitesOff) {
+            log(Level.INFO, "Keploy dedup: KEPLOY_JAVA_ASYNC_CALLSITES is off, so JDK executor and"
+                    + " CompletableFuture call-site rewriting is disabled (asyncExecutors=false)", null);
+        }
         try {
             boolean retransformable = instrumentation.isRetransformClassesSupported();
             if (!retransformable && jacocoAttached) {
@@ -409,7 +629,7 @@ public final class KeployDedupAgent {
                         + " them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
                         null);
             }
-            instrumentation.addTransformer(new ServerEntries(requests, allowed, appPackagePrefix), retransformable);
+            instrumentation.addTransformer(new ServerEntries(requests, allowed, prefix), retransformable);
             transformerAdded = true;
             executorCallSitesEnabled = hasCallSiteRewrites;
         } catch (RuntimeException e) {
@@ -552,6 +772,7 @@ public final class KeployDedupAgent {
                         + " its socket is closed, and it stops once its command ends", null);
             }
         }
+        RequestGate.disarm();
         STARTED.set(false);
     }
 
@@ -826,6 +1047,10 @@ public final class KeployDedupAgent {
                 throw t;
             }
             serverSocket = socket;
+            // Arm immediately if Keploy's data receiver is already listening.
+            if (receiverKey(publisher.socketFile) != null) {
+                RequestGate.arm();
+            }
         }
 
         // run accepts commands until close(). Only this thread closes the
@@ -893,6 +1118,7 @@ public final class KeployDedupAgent {
                 if (line == null) {
                     return;
                 }
+                RequestGate.arm();
 
                 if (BuildTable.COMMAND.equals(line.trim())) { // the build table: ACK, then sent on its own thread
                     String reply; // or IGNORED, with reason=low_heap when the heap is short
@@ -904,6 +1130,9 @@ public final class KeployDedupAgent {
                                 },
                                 () -> BuildTable.files(index.entries(), e -> e.className, e -> e.bytes),
                                 new File(dataSocketPath));
+                        if (UNIX_REPLY_TAKEN.equals(reply)) {
+                            reply = unixReplyTaken();
+                        }
                     } catch (Throwable t) { // thrown past here, it would end the accept loop: IGNORED instead
                         log(Level.WARNING, "Keploy coverage: the build table was not started", t);
                         reply = UNIX_REPLY_IGNORED;
@@ -920,7 +1149,7 @@ public final class KeployDedupAgent {
                     log(Level.SEVERE, "Failed to run Java dedup coverage command: " + line.trim(), e);
                     taken = false;
                 }
-                writeReply(commandSocket.getOutputStream(), taken ? UNIX_REPLY_TAKEN : UNIX_REPLY_IGNORED);
+                writeReply(commandSocket.getOutputStream(), taken ? unixReplyTaken() : UNIX_REPLY_IGNORED);
             } catch (IOException e) {
                 log(Level.SEVERE, "Failed to handle Java dedup coverage command", e);
             }
@@ -952,12 +1181,17 @@ public final class KeployDedupAgent {
             }
         }
 
+        private String unixReplyTaken() {
+            return computeCapabilities(collector).toUnixAck();
+        }
+
         // run runs one parsed command under testCaseLock, and marks its steps.
         private boolean run(CoverageCommand command, Phases phases) {
             if (command.action == CommandAction.START) {
                 // Set only once the counters are cleared: counters not
                 // cleared hold the lines of the tests before this one, so
                 // this START is not taken and its END is ignored too.
+                String prevActive = activeTestId;
                 activeTestId = "";
                 String after = lastEndedTestId;
                 lastEndedTestId = null;
@@ -966,7 +1200,7 @@ public final class KeployDedupAgent {
                 collector.warmup();
                 phases.mark("warmup");
                 List<ProbeScan.Hit> cleared = new ArrayList<>();
-                if (!collector.begin(phases, cleared)) {
+                if (!collector.begin(command.testId, prevActive, phases, cleared)) {
                     return false;
                 }
                 activeTestId = command.testId;
@@ -995,10 +1229,16 @@ public final class KeployDedupAgent {
             }
 
             try {
-                boolean cut = !collector.awaitRequests(command.testId, phases);
+                RequestGate.WindowOutcome outcome = collector.awaitRequests(command.testId, phases);
+                boolean cut = !outcome.drained;
                 // The job window closes once the hits are read: a job that
                 // started while they were read may be in them.
-                TestCoverage coverage = collector.capture(phases).ended(cut, JobGate.close());
+                TestCoverage raw = collector.capture(phases);
+                List<String> jobContams = JobGate.close();
+                boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
+                        && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0 && jobContams.isEmpty();
+                TestCoverage coverage = raw.ended(cut,
+                        mergeContaminations(outcome.contaminations, jobContams, noServerEntry));
                 if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
@@ -1138,12 +1378,7 @@ public final class KeployDedupAgent {
         }
 
         private String helloFrame() {
-            boolean agentAttached = transformerAdded;
-            boolean windowCut = agentAttached && collector.endWaitMillis > 0 && !ServerEntries.countsNone();
-            boolean background = collector.probeScan() != null;
-            boolean asyncExecutors = agentAttached && executorCallSitesEnabled;
-            return buildHelloFrame(windowCut, agentAttached, true, background, true, true,
-                    asyncExecutors, agentAttached);
+            return computeCapabilities(collector).toHelloFrame(collector.helloBuildId());
         }
 
         private void maybeSendUpdatedHello(OutputStream out) throws IOException {
@@ -1196,6 +1431,8 @@ public final class KeployDedupAgent {
             }
             socket = open;
             connectFailureLogged = false;
+            // Collector connected: arm runtime request/executor/job tracking.
+            RequestGate.arm();
             // Fresh connection (possibly a new proxy replica after a drop): re-arm
             // the one-time zip send so the collector on the other end gets the
             // class bytecode. MinIO first-write-wins makes the re-store idempotent.
@@ -1241,8 +1478,11 @@ public final class KeployDedupAgent {
                             // emitted when cleared is non-empty (which requires
                             // a live ProbeScan), so an early BACKGROUND sent
                             // before external JaCoCo starts still takes effect
-                            // once JaCoCo is ready.
+                            // once JaCoCo is ready. Precompute coverageIndex.report()
+                            // off the TCP command thread so the first BACKGROUND
+                            // frame never blocks an incoming END.
                             backgroundRequested = true;
+                            collector.coverageIndex.precomputeReportAsync();
                             if (collector.probeScan() == null && !collector.isJacocoPendingStart()) {
                                 log(Level.INFO, "Keploy dedup: BACKGROUND is not taken on TCP: JaCoCo's probes are"
                                         + " not read in place (KEPLOY_JAVA_SCAN off, JaCoCo over TCP, or the scan"
@@ -1284,6 +1524,7 @@ public final class KeployDedupAgent {
                     // counters are cleared: counters not cleared hold the lines
                     // of the tests before this one, so this START is not taken
                     // and its END is ignored too.
+                    String prevActive = activeTestId;
                     activeTestId = "";
                     String after = lastEndedTestId;
                     lastEndedTestId = null;
@@ -1294,7 +1535,7 @@ public final class KeployDedupAgent {
                         // one-time <clinit> lines aren't charged to the first test.
                         collector.warmup();
                         phases.mark("warmup");
-                        reset = collector.begin(phases, cleared);
+                        reset = collector.begin(command.testId, prevActive, phases, cleared);
                     } catch (RuntimeException e) {
                         // Not taken, and the connection goes on: thrown past
                         // here, it ended this thread, and no later command
@@ -1346,8 +1587,15 @@ public final class KeployDedupAgent {
                     TestCoverage coverage;
                     boolean cut;
                     try {
-                        cut = !collector.awaitRequests(command.testId, phases);
-                        coverage = collector.capture(phases).ended(cut, JobGate.close());
+                        RequestGate.WindowOutcome outcome = collector.awaitRequests(command.testId, phases);
+                        cut = !outcome.drained;
+                        TestCoverage raw = collector.capture(phases);
+                        List<String> jobContams = JobGate.close();
+                        boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
+                                && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0
+                                && jobContams.isEmpty();
+                        coverage = raw.ended(cut,
+                                mergeContaminations(outcome.contaminations, jobContams, noServerEntry));
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
@@ -1402,8 +1650,16 @@ public final class KeployDedupAgent {
             String frame;
             int classes;
             try {
+                // Never block the TCP command thread synchronously loading/hashing
+                // a large app index: if report() is not ready yet for a large
+                // index, precompute off-thread and count this window in lost.
+                IndexReport report = collector.coverageIndex.reportForBackground();
+                if (report == null) {
+                    backgroundLost++;
+                    return;
+                }
                 BackgroundRecord record = new BackgroundRecord(
-                        collector.coverageIndex.report().build, after, before,
+                        report.build, after, before,
                         collector.backgroundProbes(cleared));
                 if (backgroundLost > 0) {
                     record.lost = backgroundLost;
@@ -1604,21 +1860,87 @@ public final class KeployDedupAgent {
                     cause);
         }
 
+        private volatile String cachedHelloBuildId;
+
+        // Stable, non-empty, deterministic build/class-index identity for TCP
+        // HELLO frames. Uses the cached IndexReport buildId if already computed
+        // (or fast in-memory when <= 4096 entries are already loaded), else
+        // hashes build tag + class dirs + launch command + classpath metadata +
+        // sdkVersion without blocking connect on full-jar scanning.
+        private String helloBuildId() {
+            String id = cachedHelloBuildId;
+            if (id != null) {
+                return id;
+            }
+            IndexReport ready = coverageIndex.cachedReport();
+            if (ready != null && ready.build != null && !ready.build.isEmpty()) {
+                id = ready.build;
+            } else {
+                List<ClassEntry> loaded = coverageIndex.entries;
+                if (loaded != null && !loaded.isEmpty() && loaded.size() <= 4096) {
+                    String b = coverageIndex.report().build;
+                    if (b != null && !b.isEmpty()) {
+                        id = b;
+                    }
+                }
+            }
+            if (id == null || id.isEmpty()) {
+                id = computeFastDeterministicBuildId();
+            }
+            cachedHelloBuildId = id;
+            return id;
+        }
+
+        private String computeFastDeterministicBuildId() {
+            try {
+                MessageDigest md = MessageDigest.getInstance("SHA-256");
+                updateDigest(md, "keploy-hello-build-v1\n");
+                updateDigest(md, envOrProperty("KEPLOY_BUILD_TAG", "keploy.build.tag", ""));
+                updateDigest(md, "\n");
+                updateDigest(md, envOrProperty("KEPLOY_JAVA_CLASS_DIRS", "keploy.java.class.dirs", ""));
+                updateDigest(md, "\n");
+                updateDigest(md, System.getProperty("sun.java.command", ""));
+                updateDigest(md, "\n");
+                updateDigest(md, IndexReport.versionOf(IndexReport.class));
+                updateDigest(md, "\n");
+                String cp = System.getProperty("java.class.path", "");
+                if (!cp.isEmpty()) {
+                    String[] parts = cp.split(Pattern.quote(File.pathSeparator));
+                    int limit = Math.min(parts.length, 64);
+                    for (int i = 0; i < limit; i++) {
+                        String part = parts[i];
+                        updateDigest(md, part);
+                        File f = new File(part);
+                        if (f.isFile()) {
+                            updateDigest(md, ":" + f.length() + ":" + f.lastModified());
+                        }
+                        updateDigest(md, "\n");
+                    }
+                }
+                return "jvh-" + IndexReport.hex(md.digest()).substring(0, 32);
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        private static void updateDigest(MessageDigest md, String s) {
+            if (s != null && !s.isEmpty()) {
+                md.update(s.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+
         // begin clears what the app's classes ran since the last test ended,
         // so that none of it is charged to the next test, and says whether
-        // it did. With the scan, that is one pass over the app's classes, and
-        // what it clears is background (a scheduled job, a health check):
-        // added to cleared, counted in the diagnostics, never in a test's
-        // hits. Without it, or when the pass fails (in any way: a START only
-        // has to clear), JaCoCo resets every class, and cleared stays empty.
-        private boolean begin(Phases phases, List<ProbeScan.Hit> cleared) {
+        // it did.
+        private boolean begin(String testId, String prevActiveTestId, Phases phases, List<ProbeScan.Hit> cleared) {
             // A job running now, or that starts before END reads the hits,
             // runs in this test's window: opened before the clear, as what
             // a job ran before is cleared only once it has ended.
             JobGate.open();
             // This test's requests come in from now on; END waits for them
-            // alone.
-            RequestGate.open();
+            // alone. Any cut/lingering prior window marks this window
+            // contaminated ("tail:<prevTestId>") until drained.
+            RequestGate.open(testId, prevActiveTestId);
             ProbeScan scan = probeScan();
             if (scan != null) {
                 try {
@@ -1638,27 +1960,24 @@ public final class KeployDedupAgent {
             return reset;
         }
 
-        // awaitRequests waits, for at most endWaitMillis, until the requests
-        // that came in since this test's START are done, and says whether
-        // they are: a server writes a response before the request is done
-        // (a filter's code after the chain, a request log), so Keploy can
-        // send END while the test's own code still runs. False, the END is
-        // cut: what still runs lands after it.
-        private boolean awaitRequests(String testId, Phases phases) {
+        // awaitRequests closes the current RequestGate window, waits for at
+        // most endWaitMillis when endWaitMillis > 0, and returns the window's
+        // drain status, request entry count, and collected contaminations.
+        private RequestGate.WindowOutcome awaitRequests(String testId, Phases phases) {
             if (ServerEntries.countsNone() && NOT_COUNTED_LOGGED.compareAndSet(false, true)) {
                 log(Level.INFO, notCounted(endWaitMillis, ServerEntries.uncounted()), null);
             }
-            if (endWaitMillis == 0 || RequestGate.running() <= 0) {
-                return true;
+            RequestGate.WindowOutcome outcome = RequestGate.awaitWindow(
+                    TimeUnit.MILLISECONDS.toNanos(endWaitMillis), endWaitMillis > 0);
+            if (outcome.waited) {
+                phases.mark("requests");
             }
-            boolean done = RequestGate.await(TimeUnit.MILLISECONDS.toNanos(endWaitMillis));
-            phases.mark("requests");
-            if (!done) {
+            if (!outcome.drained) {
                 log(Level.WARNING, "Keploy dedup: " + testId + "'s requests still ran " + endWaitMillis
                         + " ms after its END, so its record says windowCut and a Keploy that reads it does not"
                         + " judge the test: what they ran after that is not in it (KEPLOY_JAVA_END_WAIT_MS sets the wait)", null);
             }
-            return done;
+            return outcome;
         }
 
         // describe says how many classes and probes hits holds, and names a few classes.
@@ -2387,6 +2706,50 @@ public final class KeployDedupAgent {
         private volatile String includes = "";
         private volatile String jacocoVersion = "";
         private volatile IndexReport report;
+        private final AtomicBoolean reportPrecomputeStarted = new AtomicBoolean(false);
+
+        private IndexReport cachedReport() {
+            return report;
+        }
+
+        private void precomputeReportAsync() {
+            if (report != null || !reportPrecomputeStarted.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                Thread t = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            report();
+                        } catch (Throwable ignored) {
+                            // Never let background precomputation fail the JVM.
+                        }
+                    }
+                }, "keploy-index-report");
+                t.setDaemon(true);
+                t.start();
+            } catch (Throwable ignored) {
+                reportPrecomputeStarted.set(false);
+            }
+        }
+
+        // reportForBackground returns the cached IndexReport immediately when
+        // ready, computes inline for small already-loaded indexes (<= 256
+        // classes), or triggers background precomputation and returns null so
+        // the TCP command thread never stalls on a large app's index hashing.
+        private IndexReport reportForBackground() {
+            IndexReport cached = report;
+            if (cached != null) {
+                return cached;
+            }
+            List<ClassEntry> loaded = entries;
+            if (loaded != null && loaded.size() <= 256) {
+                return report();
+            }
+            precomputeReportAsync();
+            return null;
+        }
 
         // report is the INDEX report of this index: computed once, on the
         // first call, from entries() (so it reads the index if nothing has).

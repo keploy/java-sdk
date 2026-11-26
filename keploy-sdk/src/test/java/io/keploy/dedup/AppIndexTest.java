@@ -413,13 +413,15 @@ public class AppIndexTest {
         assertTrue(KeployDedupAgent.start());
         // Answered after the send at the bind: the worker runs it before its
         // first accept.
-        assertEquals("IGNORED proto=2\n", send("END test-set-0/test-0"));
+        assertEquals("IGNORED proto=3\n", send("END test-set-0/test-0"));
         assertNotLogged("fingerprint");
     }
 
     private void startAndSendStart() throws IOException {
         assertTrue(KeployDedupAgent.start());
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+        String reply = send("START test-set-0/test-1");
+        assertTrue("expected ACK proto=3 caps=..., got: " + reply,
+                reply.startsWith("ACK proto=3 caps=") && reply.endsWith("\n"));
     }
 
     // assertIndex checks the INDEX report of the index the agent started on.

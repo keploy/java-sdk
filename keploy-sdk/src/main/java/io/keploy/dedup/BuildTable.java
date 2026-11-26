@@ -187,7 +187,7 @@ final class BuildTable {
 
     /**
      * answer is the control socket's reply to Keploy's TABLE command. When the heap has less free than the
-     * table needs ({@link #lowHeap}) the analysis is skipped and the reply is {@code IGNORED proto=2
+     * table needs ({@link #lowHeap}) the analysis is skipped and the reply is {@code IGNORED proto=3
      * reason=low_heap heap_free_mb=F heap_needed_mb=N}, with a WARNING in the app's log; else it is
      * {@link #request}'s ACK or IGNORED. The heap is read once, here, when Keploy asks: a send that runs after
      * another one was checked when it was asked. The bound takes loaded, the class count of the index when it

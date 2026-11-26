@@ -1,5 +1,6 @@
 package io.keploy.dedup;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -22,36 +23,41 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * OrderedPools says whether an executor's pool may order the tasks it is
- * handed by their type, inspect/cast tasks in overridden lifecycle hooks,
- * silently discard tasks without throwing, or wrap an opaque delegate whose
- * queue cannot be inspected — so that a task handed to it must reach it as it
- * is.
+ * OrderedPools enforces a fail-closed allow-list of executors whose task
+ * handling is positively verified not to cast, serialize, deduplicate,
+ * reorder-by-type, or silently discard tasks handed to them.
  *
- * <p>A pool whose queue is a PriorityBlockingQueue, or any queue with a
- * Comparator of the app's, casts each task it compares to the app's own type
- * and throws on a task in RequestGate's wrapper. A custom ThreadPoolExecutor
- * subclass that overrides {@code beforeExecute}, {@code afterExecute},
- * {@code newTaskFor}, {@code execute}, {@code submit}, or {@code decorateTask}
- * may likewise inspect or cast the task. Only pools with exact
- * {@link ThreadPoolExecutor.AbortPolicy} are wrapped: any other rejection
- * handler (including {@code DiscardPolicy}, {@code DiscardOldestPolicy},
- * {@code CallerRunsPolicy} which silently drops after shutdown, or custom
- * handlers) may silently drop or cast tasks.
+ * <p>Only positively verified safe executors are wrapped:
+ * <ul>
+ *   <li>Exact {@link ThreadPoolExecutor} with exact
+ *       {@link ThreadPoolExecutor.AbortPolicy} and an exact {@code IN_ORDER}
+ *       JDK queue ({@link LinkedBlockingQueue}, {@link SynchronousQueue},
+ *       {@link ArrayBlockingQueue}, {@link LinkedBlockingDeque},
+ *       {@link LinkedTransferQueue}).</li>
+ *   <li>Exact {@link ScheduledThreadPoolExecutor} with exact
+ *       {@link ThreadPoolExecutor.AbortPolicy}.</li>
+ *   <li>Exact {@link ForkJoinPool}.</li>
+ *   <li>Exact JDK {@code FinalizableDelegatedExecutorService} /
+ *       {@code AutoShutdownDelegatedExecutorService} (constructed only by
+ *       {@code Executors.newSingleThreadExecutor}), and JDK
+ *       {@code DelegatedExecutorService} / {@code DelegatedScheduledExecutorService}
+ *       only when their underlying delegate can be reflectively read and
+ *       verified through to an allow-listed pool.</li>
+ *   <li>Exact JDK 21+ {@code java.util.concurrent.ThreadPerTaskExecutor}.</li>
+ *   <li>Known Spring executor types ({@code SimpleAsyncTaskExecutor},
+ *       {@code ThreadPoolTaskExecutor}, {@code ThreadPoolTaskScheduler},
+ *       {@code ConcurrentTaskExecutor}, and Spring's own anonymous inner
+ *       {@code ThreadPoolTaskExecutor$} / {@code ThreadPoolTaskScheduler$}
+ *       subclasses) verified through to an allow-listed inner pool.</li>
+ * </ul>
  *
- * <p>Exact {@link ScheduledThreadPoolExecutor} instances (and Spring's own
- * internal {@code ThreadPoolTaskExecutor$} / {@code ThreadPoolTaskScheduler$}
- * subclasses) are safe for immediate {@code execute}/{@code submit} calls
- * because they wrap each task in their own {@code ScheduledFutureTask} or
- * track lifecycle state without casting the caller's task. Spring's
- * {@code ConcurrentTaskExecutor} and {@code ThreadPoolTaskScheduler} are
- * inspected through their public delegate accessors (recognizing JDK 8-20
- * {@code FinalizableDelegatedExecutorService} and JDK 21+
- * {@code AutoShutdownDelegatedExecutorService}); an opaque delegate whose
- * queue cannot be verified is left unwrapped. Nothing thrown while reading a
- * pool or saying so in the log, by the app's own code too (an exception's
- * {@code toString()}, a log Handler), reaches the app's call: that task goes
- * as it is.
+ * <p>Any unknown or unclassified executor (e.g., Hazelcast
+ * {@code IExecutorService}, Ignite, Redisson, striped/keyed executors, custom
+ * {@code ExecutorService} or {@code ThreadPoolExecutor} subclasses, priority
+ * queues, non-{@code AbortPolicy} handlers, coalescing executors) fails CLOSED:
+ * {@link #orders(Object)} returns {@code true}, the app's task reaches the
+ * executor untouched, and {@link RequestGate} marks the current test window
+ * contaminated ({@code untracked-executor:<class>}).
  */
 final class OrderedPools {
 
@@ -72,6 +78,8 @@ final class OrderedPools {
     private static final String SPRING_POOL = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
     private static final String SPRING_SCHEDULER = "org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler";
     private static final String SPRING_SIMPLE_ASYNC = "org.springframework.core.task.SimpleAsyncTaskExecutor";
+    private static final String SPRING_TASK_EXECUTOR_ADAPTER =
+            "org.springframework.core.task.support.TaskExecutorAdapter";
     private static final String JDK_FINALIZABLE_DELEGATED =
             "java.util.concurrent.Executors$FinalizableDelegatedExecutorService";
     private static final String JDK_AUTO_SHUTDOWN_DELEGATED =
@@ -80,6 +88,14 @@ final class OrderedPools {
             "java.util.concurrent.Executors$DelegatedScheduledExecutorService";
     private static final String JDK_DELEGATED =
             "java.util.concurrent.Executors$DelegatedExecutorService";
+    private static final String JDK_THREAD_PER_TASK =
+            "java.util.concurrent.ThreadPerTaskExecutor";
+
+    // Cached reflective handle to Executors$DelegatedExecutorService.e when
+    // accessible (Java 8, or Java 9+ with --add-opens). Null when inaccessible,
+    // in which case DelegatedExecutorService / DelegatedScheduledExecutorService
+    // fail closed.
+    private static final Field DELEGATED_INNER_FIELD = findDelegatedInnerField();
 
     // A class's public getThreadPoolExecutor(), NONE when it has none, or
     // the String of what looking it up threw. getMethod resolves each type
@@ -92,6 +108,26 @@ final class OrderedPools {
     private static final ClassValue<Object> POOL = methodLookup("getThreadPoolExecutor");
     private static final ClassValue<Object> SCHEDULED_POOL = methodLookup("getScheduledThreadPoolExecutor");
     private static final ClassValue<Object> CONCURRENT_EXECUTOR = methodLookup("getConcurrentExecutor");
+    // Spring's TaskExecutorAdapter (used by @Async's AsyncExecutionInterceptor
+    // to wrap plain JDK ExecutorServices) stores its delegate in a private
+    // concurrentExecutor field with no public getter.
+    private static final ClassValue<Object> ADAPTER_FIELD = new ClassValue<Object>() {
+        @Override
+        protected Object computeValue(Class<?> type) {
+            for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+                if (SPRING_TASK_EXECUTOR_ADAPTER.equals(c.getName())) {
+                    try {
+                        Field f = c.getDeclaredField("concurrentExecutor");
+                        f.setAccessible(true);
+                        return f;
+                    } catch (Throwable e) {
+                        return e.toString();
+                    }
+                }
+            }
+            return NONE;
+        }
+    };
 
     // Whether a ThreadPoolExecutor subclass overrides beforeExecute,
     // afterExecute, newTaskFor, execute, submit, or (for
@@ -137,6 +173,17 @@ final class OrderedPools {
     private OrderedPools() {
     }
 
+    private static Field findDelegatedInnerField() {
+        try {
+            Class<?> cls = Class.forName(JDK_DELEGATED);
+            Field f = cls.getDeclaredField("e");
+            f.setAccessible(true);
+            return f;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static ClassValue<Object> methodLookup(final String methodName) {
         return new ClassValue<Object>() {
             @Override
@@ -164,16 +211,14 @@ final class OrderedPools {
         }
     }
 
-    // orders says whether executor's pool may order its tasks by their
-    // type (or override task hooks, silently discard tasks, or wrap an opaque
-    // delegate); the first time it does for an executor's class, it says in
-    // the log that the tasks handed to that class are not counted. Whatever is
-    // thrown on the way, by the app's own code too (the toString() of its
-    // exception, a log Handler of its), stays here: the task goes as it is,
-    // which is always safe.
+    // orders returns true (do NOT wrap) unless executor is positively verified
+    // on the safe allow-list. The first time an executor class is rejected, it
+    // logs once at INFO. Whatever is thrown on the way (including an
+    // exception's toString() or a throwing log Handler) stays here: the task
+    // goes untouched, which is always app-safe.
     static boolean orders(Object executor) {
         try {
-            return read(executor, 0, false);
+            return read(executor, 0, true);
         } catch (Throwable e) {
             return true;
         }
@@ -181,45 +226,92 @@ final class OrderedPools {
 
     private static boolean read(Object executor, int depth, boolean requireVerified) {
         if (executor == null) {
-            return requireVerified;
+            // Top-level null is passed only for default commonPool (1-arg
+            // CompletableFuture.runAsync/supplyAsync) and static Spring
+            // helpers; a null delegate at depth > 0 always fails closed.
+            return depth > 0;
         }
         if (depth > MAX_DELEGATE_DEPTH) {
             return uncounted(executor, "its delegate executor chain is too deep to inspect");
         }
+        Class<?> cls = executor.getClass();
         if (executor instanceof ThreadPoolExecutor) {
             return checkThreadPool((ThreadPoolExecutor) executor, executor);
         }
-        if (executor instanceof ForkJoinPool) {
+        if (cls == ForkJoinPool.class) {
             return false;
         }
-        String className = executor.getClass().getName();
+        String className = cls.getName();
         if (JDK_FINALIZABLE_DELEGATED.equals(className)
                 || JDK_AUTO_SHUTDOWN_DELEGATED.equals(className)
-                || JDK_DELEGATED_SCHEDULED.equals(className)) {
+                || JDK_THREAD_PER_TASK.equals(className)) {
             return false;
         }
-        if (JDK_DELEGATED.equals(className)) {
-            return uncounted(executor, "its wrapped ExecutorService cannot be inspected for queue ordering");
+        if (JDK_DELEGATED.equals(className) || JDK_DELEGATED_SCHEDULED.equals(className)) {
+            return readDelegated(executor, depth);
         }
-        Object pool = POOL.get(executor.getClass());
+        Object pool = POOL.get(cls);
         if (pool != NONE) {
             return readViaPoolMethod(executor, pool, SPRING_POOL);
         }
         if (SPRING_SIMPLE_ASYNC.equals(className)) {
             return false;
         }
-        Object scheduled = SCHEDULED_POOL.get(executor.getClass());
+        Object scheduled = SCHEDULED_POOL.get(cls);
         if (scheduled != NONE) {
             return readViaPoolMethod(executor, scheduled, SPRING_SCHEDULER);
         }
-        Object concurrent = CONCURRENT_EXECUTOR.get(executor.getClass());
+        Object concurrent = CONCURRENT_EXECUTOR.get(cls);
         if (concurrent != NONE) {
             return readViaConcurrentExecutor(executor, concurrent, depth);
         }
+        Object adapterField = ADAPTER_FIELD.get(cls);
+        if (adapterField != NONE) {
+            return readViaAdapterField(executor, adapterField, depth);
+        }
         if (requireVerified) {
-            return uncounted(executor, "its delegate executor cannot be inspected for queue ordering");
+            return uncounted(executor, "its executor class is not on the verified safe allow-list");
         }
         return false;
+    }
+
+    private static boolean readViaAdapterField(Object executor, Object fieldOrError, int depth) {
+        if (fieldOrError instanceof String) {
+            return uncounted(executor, "its delegate executor cannot be read (" + fieldOrError + ")");
+        }
+        Object delegate;
+        try {
+            delegate = ((Field) fieldOrError).get(executor);
+        } catch (Throwable e) {
+            if (e instanceof VirtualMachineError) {
+                return true;
+            }
+            return uncounted(executor, "its delegate executor cannot be read (" + e + ")");
+        }
+        if (delegate == null || delegate == executor) {
+            return uncounted(executor, "its delegate executor cannot be inspected");
+        }
+        return read(delegate, depth + 1, true);
+    }
+
+    private static boolean readDelegated(Object executor, int depth) {
+        Field f = DELEGATED_INNER_FIELD;
+        if (f == null) {
+            return uncounted(executor, "its wrapped ExecutorService cannot be inspected for queue ordering");
+        }
+        Object inner;
+        try {
+            inner = f.get(executor);
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError) {
+                return true;
+            }
+            return uncounted(executor, "its wrapped ExecutorService cannot be read (" + t + ")");
+        }
+        if (inner == null || inner == executor) {
+            return uncounted(executor, "its wrapped ExecutorService cannot be inspected");
+        }
+        return read(inner, depth + 1, true);
     }
 
     private static boolean readViaPoolMethod(Object executor, Object methodOrError, String springClass) {
@@ -268,9 +360,18 @@ final class OrderedPools {
         return read(delegate, depth + 1, true);
     }
 
+    private static boolean isAllowedThreadPoolClass(Class<?> cls) {
+        if (cls == ThreadPoolExecutor.class || cls == ScheduledThreadPoolExecutor.class) {
+            return true;
+        }
+        String name = cls.getName();
+        return name.startsWith(SPRING_POOL + "$") || name.startsWith(SPRING_SCHEDULER + "$");
+    }
+
     private static boolean checkThreadPool(ThreadPoolExecutor pool, Object reportedOwner) {
-        if (Boolean.TRUE.equals(OVERRIDES_TASK_HOOKS.get(pool.getClass()))) {
-            return uncounted(reportedOwner, "its pool (" + pool.getClass().getName()
+        Class<?> poolClass = pool.getClass();
+        if (Boolean.TRUE.equals(OVERRIDES_TASK_HOOKS.get(poolClass))) {
+            return uncounted(reportedOwner, "its pool (" + poolClass.getName()
                     + ") overrides task hooks that may inspect or cast the task");
         }
         try {
@@ -286,9 +387,9 @@ final class OrderedPools {
             }
             return uncounted(reportedOwner, "its pool's rejected execution handler cannot be read (" + e + ")");
         }
-        if (pool.getClass() == ScheduledThreadPoolExecutor.class
+        if (poolClass == ScheduledThreadPoolExecutor.class
                 || (pool instanceof ScheduledThreadPoolExecutor
-                        && pool.getClass().getName().startsWith(SPRING_SCHEDULER + "$"))) {
+                        && poolClass.getName().startsWith(SPRING_SCHEDULER + "$"))) {
             // Exact ScheduledThreadPoolExecutor (and Spring's own
             // ThreadPoolTaskScheduler internal subclass) always wraps
             // execute/submit tasks in its own ScheduledFutureTask before
@@ -305,12 +406,16 @@ final class OrderedPools {
             }
             return uncounted(reportedOwner, "its pool's queue cannot be read (" + e + ")");
         }
+        if (!isAllowedThreadPoolClass(poolClass)) {
+            if (pool instanceof ScheduledThreadPoolExecutor) {
+                return uncounted(reportedOwner, "it is a ScheduledThreadPoolExecutor subclass ("
+                        + poolClass.getName() + ") whose task handling cannot be assumed safe");
+            }
+            return uncounted(reportedOwner, "it is a ThreadPoolExecutor subclass ("
+                    + poolClass.getName() + ") whose task handling cannot be assumed safe");
+        }
         if (IN_ORDER.contains(queue)) {
             return false;
-        }
-        if (pool instanceof ScheduledThreadPoolExecutor) {
-            return uncounted(reportedOwner, "it is a ScheduledThreadPoolExecutor subclass ("
-                    + pool.getClass().getName() + ") whose task handling cannot be assumed safe");
         }
         return uncounted(reportedOwner, "its pool's queue, a " + queue.getName()
                 + ", may order its tasks by their own type");

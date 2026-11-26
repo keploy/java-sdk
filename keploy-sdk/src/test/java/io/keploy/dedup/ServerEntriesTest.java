@@ -97,6 +97,7 @@ public class ServerEntriesTest {
 
     @After
     public void tearDown() {
+        ServerEntries.setHookStatusForTests(false, false, false);
         Logger.getLogger(KeployDedupAgent.class.getName()).removeHandler(handler);
     }
 
