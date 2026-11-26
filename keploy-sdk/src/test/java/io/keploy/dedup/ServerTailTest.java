@@ -516,17 +516,21 @@ public class ServerTailTest {
                     OutputStream out = sdk.getOutputStream();
                     BufferedReader in = new BufferedReader(
                             new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                    String hello = in.readLine();
+                    assertTrue("expected HELLO frame on connect, got " + hello,
+                            hello != null && hello.startsWith("HELLO "));
                     for (int test = 1; test <= tests; test++) {
-                        send(out, "START test-set-0/test-" + test);
-                        assertEquals("ACK", in.readLine());
+                        String fullId = "test-set-0/test-" + test;
+                        send(out, "START " + fullId);
+                        assertEquals("ACK " + fullId, in.readLine());
                         String query = fork.queries.isEmpty() ? "tail=" + tailMillis : fork.queries.get(test - 1);
                         assertEquals("hello", get(port, "/hello?" + query));
-                        send(out, "END test-set-0/test-" + test);
+                        send(out, "END " + fullId);
                         String cov = in.readLine();
                         assertTrue(cov, cov != null && cov.startsWith("COV "));
                         result.covs.add(cov.substring("COV ".length()));
                         String line;
-                        while (!(line = in.readLine()).equals("ACK")) {
+                        while (!(line = in.readLine()).equals("ACK " + fullId)) {
                             assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
                         }
                     }

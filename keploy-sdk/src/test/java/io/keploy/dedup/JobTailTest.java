@@ -297,6 +297,9 @@ public class JobTailTest {
                 sdk.setSoTimeout(60000);
                 sdkOut = sdk.getOutputStream();
                 sdkIn = new BufferedReader(new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                String hello = sdkIn.readLine();
+                assertTrue("expected HELLO frame on connect, got " + hello,
+                        hello != null && hello.startsWith("HELLO "));
                 commands = new Socket(InetAddress.getLoopbackAddress(), port);
                 commands.setSoTimeout(60000);
                 commandOut = commands.getOutputStream();
@@ -311,20 +314,21 @@ public class JobTailTest {
         // test runs one test that fires these jobs between its START and its
         // END, and returns its record.
         String test(String id, String... jobs) throws IOException {
-            send(sdkOut, "START test-set-0/" + id);
-            assertEquals("ACK", sdkIn.readLine());
+            String fullId = "test-set-0/" + id;
+            send(sdkOut, "START " + fullId);
+            assertEquals("ACK " + fullId, sdkIn.readLine());
             for (String job : jobs) {
                 command(job);
             }
-            send(sdkOut, "END test-set-0/" + id);
+            send(sdkOut, "END " + fullId);
             String cov = sdkIn.readLine();
             assertTrue(cov, cov != null && cov.startsWith("COV "));
             String line;
-            while (!(line = sdkIn.readLine()).equals("ACK")) {
+            while (!(line = sdkIn.readLine()).equals("ACK " + fullId)) {
                 assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
             }
             cov = cov.substring("COV ".length());
-            assertTrue(cov, cov.contains("\"id\":\"test-set-0/" + id + "\""));
+            assertTrue(cov, cov.contains("\"id\":\"" + fullId + "\""));
             return cov;
         }
 

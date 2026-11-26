@@ -1,7 +1,10 @@
 package io.keploy.dedup;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.TimeUnit;
@@ -9,6 +12,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.Supplier;
 
 /**
  * RequestGate counts the requests the app's server is running, so that a
@@ -155,6 +159,123 @@ public final class RequestGate {
             window.running.incrementAndGet();
         }
         return handed;
+    }
+
+    /**
+     * Counts a {@link Supplier} handed to {@link CompletableFuture#supplyAsync}
+     * on a request or job thread until it completes.
+     *
+     * @param executor the executor the supplier is for, or null
+     * @param supplier the supplier handed off
+     * @param <T> what the supplier returns
+     * @return what runs instead
+     */
+    public static <T> Supplier<T> handSupplier(Object executor, Supplier<T> supplier) {
+        if (supplier == null || supplier instanceof HandedSupplier || supplier instanceof Comparable) {
+            return supplier;
+        }
+        Window window = INSIDE.get();
+        String job = window == null ? JobGate.running() : null;
+        if ((window == null && job == null) || OrderedPools.orders(executor)) {
+            return supplier;
+        }
+        HandedSupplier<T> handed = new HandedSupplier<>(window, job, supplier);
+        if (window != null) {
+            window.running.incrementAndGet();
+        }
+        return handed;
+    }
+
+    /**
+     * Call-site wrapper for {@link Executor#execute(Runnable)}: propagates the
+     * current request window (or job run) across standard JDK executors whose
+     * classes live in the bootstrap loader.
+     */
+    public static void execute(Executor executor, Runnable task) {
+        Runnable handed = hand(executor, task);
+        try {
+            executor.execute(handed);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link ExecutorService#submit(Runnable)}. */
+    public static Future<?> submit(ExecutorService executor, Runnable task) {
+        Runnable handed = hand(executor, task);
+        try {
+            return executor.submit(handed);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link ExecutorService#submit(Runnable, Object)}. */
+    public static <T> Future<T> submit(ExecutorService executor, Runnable task, T result) {
+        Runnable handed = hand(executor, task);
+        try {
+            return executor.submit(handed, result);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link ExecutorService#submit(Callable)}. */
+    public static <T> Future<T> submit(ExecutorService executor, Callable<T> task) {
+        Callable<T> handed = hand(executor, task);
+        try {
+            return executor.submit(handed);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link CompletableFuture#runAsync(Runnable)}. */
+    public static CompletableFuture<Void> runAsync(Runnable task) {
+        Runnable handed = hand(null, task);
+        try {
+            return CompletableFuture.runAsync(handed);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link CompletableFuture#runAsync(Runnable, Executor)}. */
+    public static CompletableFuture<Void> runAsync(Runnable task, Executor executor) {
+        Runnable handed = hand(executor, task);
+        try {
+            return CompletableFuture.runAsync(handed, executor);
+        } catch (Throwable t) {
+            dropped(handed, task);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link CompletableFuture#supplyAsync(Supplier)}. */
+    public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier) {
+        Supplier<T> handed = handSupplier(null, supplier);
+        try {
+            return CompletableFuture.supplyAsync(handed);
+        } catch (Throwable t) {
+            dropped(handed, supplier);
+            throw t;
+        }
+    }
+
+    /** Call-site wrapper for {@link CompletableFuture#supplyAsync(Supplier, Executor)}. */
+    public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier, Executor executor) {
+        Supplier<T> handed = handSupplier(executor, supplier);
+        try {
+            return CompletableFuture.supplyAsync(handed, executor);
+        } catch (Throwable t) {
+            dropped(handed, supplier);
+            throw t;
+        }
     }
 
     /**
@@ -371,6 +492,31 @@ public final class RequestGate {
             Object outer = enter();
             try {
                 return task.call();
+            } finally {
+                exit(outer);
+            }
+        }
+
+        @Override
+        public String toString() {
+            return String.valueOf(task);
+        }
+    }
+
+    private static final class HandedSupplier<T> extends Hand implements Supplier<T> {
+
+        private final Supplier<T> task;
+
+        HandedSupplier(Window window, String job, Supplier<T> task) {
+            super(window, job);
+            this.task = task;
+        }
+
+        @Override
+        public T get() {
+            Object outer = enter();
+            try {
+                return task.get();
             } finally {
                 exit(outer);
             }

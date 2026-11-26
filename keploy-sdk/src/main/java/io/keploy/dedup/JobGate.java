@@ -178,13 +178,20 @@ public final class JobGate {
 
     // name is how a record names a job: "quartz:<group>.<name>" for a
     // Quartz job, "scheduled:<class>.<method>" for a Spring @Scheduled
-    // method, or the kind and the class running it when that cannot be read
+    // method, "kafka:<class>" / "listener:<class>" for a message listener,
+    // or the kind and the class running it when that cannot be read
     // (an unknown version, a class not laid out as expected): the run still
     // counts.
     static String name(Object job, String kind) {
         String name;
         try {
-            name = "quartz".equals(kind) ? quartzJob(job) : scheduledMethod(job);
+            if ("quartz".equals(kind)) {
+                name = quartzJob(job);
+            } else if ("scheduled".equals(kind)) {
+                name = scheduledMethod(job);
+            } else {
+                name = job == null ? "?" : job.getClass().getName();
+            }
         } catch (Throwable t) {
             name = job == null ? "?" : job.getClass().getName();
         }

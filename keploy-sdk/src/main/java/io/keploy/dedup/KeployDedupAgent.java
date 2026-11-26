@@ -155,6 +155,19 @@ public final class KeployDedupAgent {
     // probes not read in place) or no receiver is there. An older SDK
     // answers IGNORED too, as to any line that is no command.
     static final String BACKGROUND_COMMAND = "BACKGROUND";
+    // Resync barrier command over TCP: "NOP <token>" -> "ACK <token>". Does not
+    // touch activeTestId, lastEndedTestId, or JaCoCo counters.
+    static final String NOP_COMMAND = "NOP";
+    // Capability declaration sent immediately on TCP connect (proto=3): tells
+    // k8s-proxy this SDK emits honest windowCut/contaminated/classMismatch flags,
+    // supports TCP BACKGROUND, correlated ACK <id>, NOP resync, JDK executor
+    // handoffs, and listener contamination. Older SDKs send no HELLO line and
+    // are downgraded to soft-mark-only by k8s-proxy.
+    static final int TCP_PROTOCOL_VERSION = 3;
+    static final String HELLO_FRAME = "HELLO {\"proto\":" + TCP_PROTOCOL_VERSION
+            + ",\"windowCut\":true,\"contaminated\":true,\"classMismatch\":true"
+            + ",\"background\":true,\"ackId\":true,\"nopResync\":true"
+            + ",\"asyncExecutors\":true,\"listenerContamination\":true}";
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -1011,14 +1024,18 @@ public final class KeployDedupAgent {
      * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
      * but inverts the roles — here the SDK is the client. Wire protocol:
      * <pre>
-     *   collector -&gt; SDK : "START &lt;id&gt;" | "END &lt;id&gt;"
-     *   SDK -&gt; collector : "ACK"                        (after a START cleared the counters)
-     *                      "COV &lt;compact-json&gt;" + "ACK" (after an END read the test's hits)
-     *                      "IGNORED &lt;id&gt;" + "ACK"         (after a START that could not
-     *                                                     clear them, an END with no START,
-     *                                                     or an END whose hits could not
-     *                                                     be read)
+     *   collector -&gt; SDK : "BACKGROUND" | "START &lt;id&gt;" | "END &lt;id&gt;"
+     *   SDK -&gt; collector : ["BACKGROUND &lt;compact-json&gt;"] + "ACK &lt;id&gt;"
+     *                                                      (after a START cleared the counters)
+     *                      "COV &lt;compact-json&gt;" + "ACK &lt;id&gt;" (after an END read the test's hits)
+     *                      "IGNORED &lt;id&gt;" + "ACK &lt;id&gt;"    (after a START that could not
+     *                                                      clear them, an END with no START,
+     *                                                      or an END whose hits could not
+     *                                                      be read)
      * </pre>
+     * Echoing {@code &lt;id&gt;} on every {@code ACK} lets the collector correlate each
+     * barrier with the exact test it issued, so a late {@code ACK} for test N can
+     * never satisfy test N+1's barrier.
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
      */
@@ -1038,6 +1055,14 @@ public final class KeployDedupAgent {
         private final Object testCaseLock = new Object();
         private volatile Socket socket;
         private String activeTestId = "";
+        // Mirrors CommandServer: set once an END sent a non-cut COV, cleared by
+        // every START and every END until its record is sent, so what the next
+        // START clears ran strictly between two tests.
+        private String lastEndedTestId;
+        // Opt-in per TCP connection via "BACKGROUND" command so older collectors
+        // never receive unexpected BACKGROUND frames.
+        private boolean backgroundRequested;
+        private int backgroundLost;
         // Connect retries spin ~1/s until the collector is reachable; log the first
         // failure at INFO and the rest at FINE so we don't spam k8s app logs.
         private boolean connectFailureLogged = false;
@@ -1094,6 +1119,12 @@ public final class KeployDedupAgent {
             // the one-time zip send so the collector on the other end gets the
             // class bytecode. MinIO first-write-wins makes the re-store idempotent.
             collector.resetBytecodeSentForNewConnection();
+            synchronized (testCaseLock) {
+                activeTestId = "";
+                lastEndedTestId = null;
+                backgroundRequested = false;
+                backgroundLost = 0;
+            }
             log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
             try (Socket active = open;
                  BufferedReader reader = new BufferedReader(
@@ -1101,10 +1132,36 @@ public final class KeployDedupAgent {
                 // dispatch writes a reply's lines here and ack sends them in one
                 // write once the reply is whole.
                 OutputStream out = new BufferedOutputStream(active.getOutputStream(), REPLY_BUFFER_BYTES);
+                // Declare protocol + honesty capabilities immediately on connect.
+                // Older collectors ignore unrecognized lines; newer collectors gate
+                // removal eligibility on this declaration.
+                writeLine(out, HELLO_FRAME);
+                out.flush();
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
                     if (trimmed.isEmpty()) {
+                        continue;
+                    }
+                    if (BACKGROUND_COMMAND.equals(trimmed)) {
+                        synchronized (testCaseLock) {
+                            if (collector.probeScan() != null) {
+                                backgroundRequested = true;
+                            } else {
+                                log(Level.INFO, "Keploy dedup: BACKGROUND is not taken on TCP: JaCoCo's probes are"
+                                        + " not read in place (KEPLOY_JAVA_SCAN off, JaCoCo over TCP, or the scan"
+                                        + " failed), so the hits between two tests are not seen", null);
+                            }
+                        }
+                        continue;
+                    }
+                    if (trimmed.startsWith(NOP_COMMAND + " ")) {
+                        String token = trimmed.substring(NOP_COMMAND.length() + 1).trim();
+                        if (!token.isEmpty()) {
+                            synchronized (testCaseLock) {
+                                ack(out, token);
+                            }
+                        }
                         continue;
                     }
                     CoverageCommand command = CoverageCommand.parse(trimmed);
@@ -1131,13 +1188,16 @@ public final class KeployDedupAgent {
                     // of the tests before this one, so this START is not taken
                     // and its END is ignored too.
                     activeTestId = "";
+                    String after = lastEndedTestId;
+                    lastEndedTestId = null;
                     boolean reset;
+                    List<ProbeScan.Hit> cleared = new ArrayList<>();
                     try {
                         // Warm up app classes once before the first measured window so
                         // one-time <clinit> lines aren't charged to the first test.
                         collector.warmup();
                         phases.mark("warmup");
-                        reset = collector.begin(phases, new ArrayList<ProbeScan.Hit>());
+                        reset = collector.begin(phases, cleared);
                     } catch (RuntimeException e) {
                         // Not taken, and the connection goes on: thrown past
                         // here, it ended this thread, and no later command
@@ -1147,16 +1207,23 @@ public final class KeployDedupAgent {
                     }
                     if (reset) {
                         activeTestId = command.testId;
+                        if (after != null && !cleared.isEmpty() && backgroundRequested) {
+                            writeBackgroundFrame(out, after, command.testId, cleared);
+                        }
                     } else {
                         // Said before the ACK, as for an END not taken: the
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
-                    ack(out);
+                    ack(out, command.testId);
                     return;
                 }
 
                 if (command.action == CommandAction.END) {
+                    // Set again only once this END's non-cut COV is written:
+                    // after an END not taken or cut, what the next START clears
+                    // may hold this test's own hits.
+                    lastEndedTestId = null;
                     if (!command.testId.equals(activeTestId)) {
                         log(Level.SEVERE,
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -1167,7 +1234,7 @@ public final class KeployDedupAgent {
                         // follows, as it ends the collector's wait, and a collector
                         // that does not know this frame skips it.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        ack(out);
+                        ack(out, command.testId);
                         return;
                     }
 
@@ -1176,8 +1243,9 @@ public final class KeployDedupAgent {
                     // so exactly one COV must precede every ACK — a missing COV on an
                     // exception would shift the collector onto the next test's frames.
                     TestCoverage coverage;
+                    boolean cut;
                     try {
-                        boolean cut = !collector.awaitRequests(command.testId, phases);
+                        cut = !collector.awaitRequests(command.testId, phases);
                         coverage = collector.capture(phases).ended(cut, JobGate.close());
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
@@ -1185,7 +1253,7 @@ public final class KeployDedupAgent {
                         log(Level.SEVERE, "Failed to collect Java coverage for " + command.testId, e);
                         activeTestId = "";
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
-                        ack(out);
+                        ack(out, command.testId);
                         return;
                     }
                     if (coverage.probesByClass.isEmpty()) {
@@ -1203,6 +1271,7 @@ public final class KeployDedupAgent {
                         // reply that fits the buffer still leaves in one write,
                         // at the ACK.
                         writeLine(out, cov);
+                        lastEndedTestId = cut ? null : command.testId;
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building
@@ -1216,10 +1285,32 @@ public final class KeployDedupAgent {
                         log(Level.FINE, "Failed to send the COV or CLASSES frame for " + command.testId, e);
                     } finally {
                         activeTestId = "";
-                        ack(out);
+                        ack(out, command.testId);
                         phases.mark("send");
                     }
                 }
+            }
+        }
+
+        private void writeBackgroundFrame(OutputStream out, String after, String before,
+                List<ProbeScan.Hit> cleared) {
+            try {
+                BackgroundRecord record = new BackgroundRecord(
+                        collector.coverageIndex.report().build, after, before,
+                        collector.backgroundProbes(cleared));
+                if (backgroundLost > 0) {
+                    record.lost = backgroundLost;
+                }
+                writeLine(out, BACKGROUND_COMMAND + " " + GSON.toJson(record));
+                backgroundLost = 0;
+                if (diagnosticsEnabled()) {
+                    diagnostic("BACKGROUND frame sent over TCP: after=" + after + ", before=" + before
+                            + ", classes=" + record.executedLinesByFile.size());
+                }
+            } catch (Throwable t) {
+                backgroundLost++;
+                log(backgroundLost == 1 ? Level.WARNING : Level.FINE,
+                        "Keploy dedup: could not send BACKGROUND frame before " + before, t);
             }
         }
 
@@ -1229,8 +1320,8 @@ public final class KeployDedupAgent {
             out.write('\n');
         }
 
-        private static void ack(OutputStream out) throws IOException {
-            writeLine(out, "ACK");
+        private static void ack(OutputStream out, String testId) throws IOException {
+            writeLine(out, "ACK " + testId);
             out.flush();
         }
 

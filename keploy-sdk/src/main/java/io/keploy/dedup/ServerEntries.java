@@ -111,6 +111,17 @@ final class ServerEntries implements ClassFileTransformer {
         // ScheduledMethodRunnable, on the scheduler's threads.
         addJob("Quartz", "org/quartz/core/JobRunShell", "quartz", "run");
         addJob("Spring", "org/springframework/scheduling/support/ScheduledMethodRunnable", "scheduled", "run");
+        // Message listeners (F10 listener contamination): an inbound message
+        // delivered on a consumer thread during a test's window mixes the
+        // listener's probes into the test's record, so mark the test contaminated.
+        addJob("Kafka", "org/springframework/kafka/listener/KafkaMessageListenerContainer$ListenerConsumer",
+                "kafka", "invokeRecordListener", "invokeBatchListener", "invokeOnMessage");
+        addJob("Kafka", "org/springframework/kafka/listener/adapter/MessagingMessageListenerAdapter",
+                "kafka", "onMessage");
+        addJob("RabbitMQ", "org/springframework/amqp/rabbit/listener/AbstractMessageListenerContainer",
+                "listener", "doInvokeListener");
+        addJob("JMS", "org/springframework/jms/listener/AbstractMessageListenerContainer",
+                "listener", "doInvokeListener");
         // Spring's executors a request hands work to: SimpleAsyncTaskExecutor
         // (an async event multicaster's, and Spring's default for @Async)
         // starts each task in doExecute, whatever method it was handed in;
@@ -121,6 +132,10 @@ final class ServerEntries implements ClassFileTransformer {
         // that is, in doSubmit.
         addAsync("org/springframework/core/task/SimpleAsyncTaskExecutor", "doExecute");
         addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor", "execute", "submit",
+                "submitListenable");
+        addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler", "execute", "submit",
+                "submitListenable");
+        addAsync("org/springframework/scheduling/concurrent/ConcurrentTaskExecutor", "execute", "submit",
                 "submitListenable");
         addAsync("org/springframework/aop/interceptor/AsyncExecutionAspectSupport", "doSubmit");
     }
@@ -191,6 +206,13 @@ final class ServerEntries implements ClassFileTransformer {
             String uncounted = UNCOUNTED.get(className);
             if (uncounted != null) {
                 SEEN_UNCOUNTED.add(uncounted);
+            }
+            if (className != null && shouldRewriteExecutorCalls(className) && seesGate(loader)) {
+                try {
+                    return wrapExecutorCalls(classfileBuffer);
+                } catch (Throwable t) {
+                    LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
+                }
             }
             return null;
         }
@@ -326,6 +348,134 @@ final class ServerEntries implements ClassFileTransformer {
 
     private static byte[] wrap(byte[] classfile, Entry entry) {
         return wrap(classfile, entry.methods, entry.job, entry.async);
+    }
+
+    // shouldRewriteExecutorCalls filters out JDK, agent, server, and Spring
+    // executor internals so call-site wrapping targets application and library
+    // classes that submit async tasks to standard JDK Executor/ExecutorService/
+    // CompletableFuture APIs.
+    static boolean shouldRewriteExecutorCalls(String className) {
+        return !className.startsWith("java/")
+                && !className.startsWith("javax/")
+                && !className.startsWith("sun/")
+                && !className.startsWith("jdk/")
+                && !className.startsWith("com/sun/")
+                && !className.startsWith("io/keploy/")
+                && !className.startsWith("org/jacoco/")
+                && !className.startsWith("org/newsclub/")
+                && !className.startsWith("org/springframework/core/task/")
+                && !className.startsWith("org/springframework/scheduling/concurrent/")
+                && !className.startsWith("org/springframework/aop/interceptor/")
+                && !className.startsWith("org/apache/catalina/")
+                && !className.startsWith("org/eclipse/jetty/")
+                && !className.startsWith("io/undertow/")
+                && !className.startsWith("org/quartz/");
+    }
+
+    // wrapExecutorCalls redirects standard JDK executor hand-off call sites
+    // (Executor.execute, ExecutorService.submit, ThreadPoolExecutor.execute,
+    // AbstractExecutorService.submit, CompletableFuture.runAsync/supplyAsync)
+    // to RequestGate's identically-stacked static helpers so async tails count
+    // in the request's (or job's) window without touching bootstrap JDK classes.
+    // Returns null when the class contains no matching call sites.
+    static byte[] wrapExecutorCalls(byte[] classfile) {
+        ClassReader reader = new ClassReader(classfile);
+        if ((reader.getAccess() & Opcodes.ACC_INTERFACE) != 0) {
+            return null;
+        }
+        ClassWriter writer = new ClassWriter(reader, 0);
+        final boolean[] changed = {false};
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (mv == null) {
+                    return null;
+                }
+                return new MethodVisitor(Opcodes.ASM9, mv) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String mname, String desc,
+                            boolean isInterface) {
+                        if (opcode == Opcodes.INVOKEINTERFACE && "java/util/concurrent/Executor".equals(owner)
+                                && "execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
+                            changed[0] = true;
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "execute",
+                                    "(Ljava/util/concurrent/Executor;Ljava/lang/Runnable;)V", false);
+                            return;
+                        }
+                        if (opcode == Opcodes.INVOKEVIRTUAL
+                                && ("java/util/concurrent/ThreadPoolExecutor".equals(owner)
+                                        || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)
+                                        || "java/util/concurrent/ForkJoinPool".equals(owner))
+                                && "execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
+                            changed[0] = true;
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "execute",
+                                    "(Ljava/util/concurrent/Executor;Ljava/lang/Runnable;)V", false);
+                            return;
+                        }
+                        if ((opcode == Opcodes.INVOKEINTERFACE
+                                        && ("java/util/concurrent/ExecutorService".equals(owner)
+                                                || "java/util/concurrent/ScheduledExecutorService".equals(owner)))
+                                || (opcode == Opcodes.INVOKEVIRTUAL
+                                        && ("java/util/concurrent/AbstractExecutorService".equals(owner)
+                                                || "java/util/concurrent/ThreadPoolExecutor".equals(owner)
+                                                || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)
+                                                || "java/util/concurrent/ForkJoinPool".equals(owner)))) {
+                            if ("submit".equals(mname)) {
+                                if ("(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;".equals(desc)) {
+                                    changed[0] = true;
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "submit",
+                                            "(Ljava/util/concurrent/ExecutorService;Ljava/lang/Runnable;)"
+                                                    + "Ljava/util/concurrent/Future;",
+                                            false);
+                                    return;
+                                }
+                                if ("(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"
+                                        .equals(desc)) {
+                                    changed[0] = true;
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "submit",
+                                            "(Ljava/util/concurrent/ExecutorService;Ljava/lang/Runnable;"
+                                                    + "Ljava/lang/Object;)Ljava/util/concurrent/Future;",
+                                            false);
+                                    return;
+                                }
+                                if ("(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;".equals(desc)) {
+                                    changed[0] = true;
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "submit",
+                                            "(Ljava/util/concurrent/ExecutorService;Ljava/util/concurrent/Callable;)"
+                                                    + "Ljava/util/concurrent/Future;",
+                                            false);
+                                    return;
+                                }
+                            }
+                        }
+                        if (opcode == Opcodes.INVOKESTATIC
+                                && "java/util/concurrent/CompletableFuture".equals(owner)) {
+                            if ("runAsync".equals(mname)
+                                    && ("(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;".equals(desc)
+                                            || ("(Ljava/lang/Runnable;Ljava/util/concurrent/Executor;)"
+                                                    + "Ljava/util/concurrent/CompletableFuture;").equals(desc))) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "runAsync", desc, false);
+                                return;
+                            }
+                            if ("supplyAsync".equals(mname)
+                                    && ("(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;"
+                                                    .equals(desc)
+                                            || ("(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)"
+                                                    + "Ljava/util/concurrent/CompletableFuture;").equals(desc))) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "supplyAsync", desc, false);
+                                return;
+                            }
+                        }
+                        super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                    }
+                };
+            }
+        }, 0);
+        return changed[0] ? writer.toByteArray() : null;
     }
 
     // wrap with a job kind counts each method's run as a job's run of that

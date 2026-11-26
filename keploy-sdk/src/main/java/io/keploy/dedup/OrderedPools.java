@@ -98,6 +98,22 @@ final class OrderedPools {
         if (executor == null) {
             return false;
         }
+        if (executor instanceof ThreadPoolExecutor) {
+            Class<?> queue;
+            try {
+                queue = ((ThreadPoolExecutor) executor).getQueue().getClass();
+            } catch (Throwable e) {
+                if (e instanceof VirtualMachineError) {
+                    return true;
+                }
+                return uncounted(executor, "its pool's queue cannot be read (" + e + ")");
+            }
+            if (IN_ORDER.contains(queue)) {
+                return false;
+            }
+            return uncounted(executor, "its pool's queue, a " + queue.getName()
+                    + ", may order its tasks by their own type");
+        }
         Object pool = POOL.get(executor.getClass());
         if (pool == NONE) {
             return false;
