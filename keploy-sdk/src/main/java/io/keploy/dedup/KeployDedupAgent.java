@@ -42,6 +42,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -133,6 +134,9 @@ public final class KeployDedupAgent {
     // -javaagent's premain): once it has, its classes stay changed, and job
     // runs are seen, across a stop() and a start() with no instrumentation.
     static volatile boolean transformerAdded;
+    // Whether ServerEntries was installed with a non-empty app-only class
+    // allow-list for JDK executor call-site rewriting.
+    static volatile boolean executorCallSitesEnabled;
     // The answer to a command not taken (a START that could not clear the
     // counters, an END with no START for that test, as after a restart, an
     // END whose scan lost hits it had cleared): nothing is published
@@ -155,19 +159,32 @@ public final class KeployDedupAgent {
     // probes not read in place) or no receiver is there. An older SDK
     // answers IGNORED too, as to any line that is no command.
     static final String BACKGROUND_COMMAND = "BACKGROUND";
-    // Resync barrier command over TCP: "NOP <token>" -> "ACK <token>". Does not
-    // touch activeTestId, lastEndedTestId, or JaCoCo counters.
+    // Opt-in TCP command enabling correlated "ACK <testId>" replies. Without
+    // it, START/END/IGNORED keep bare "ACK" for older collectors that match
+    // line == "ACK". Fire-and-forget like BACKGROUND; reset on reconnect.
+    static final String ACK_ID_COMMAND = "ACK_ID";
+    // Resync barrier command over TCP: "NOP <token>" -> "ACK <token>", bare
+    // "NOP" -> "ACK". Does not touch activeTestId, lastEndedTestId, or probes.
     static final String NOP_COMMAND = "NOP";
-    // Capability declaration sent immediately on TCP connect (proto=3): tells
-    // k8s-proxy this SDK emits honest windowCut/contaminated/classMismatch flags,
-    // supports TCP BACKGROUND, correlated ACK <id>, NOP resync, JDK executor
-    // handoffs, and listener contamination. Older SDKs send no HELLO line and
-    // are downgraded to soft-mark-only by k8s-proxy.
+    // Protocol version declared in the dynamic HELLO frame sent immediately on
+    // TCP connect. Each capability boolean is computed from live runtime state
+    // at connect time so collectors never act on false promises.
     static final int TCP_PROTOCOL_VERSION = 3;
-    static final String HELLO_FRAME = "HELLO {\"proto\":" + TCP_PROTOCOL_VERSION
-            + ",\"windowCut\":true,\"contaminated\":true,\"classMismatch\":true"
-            + ",\"background\":true,\"ackId\":true,\"nopResync\":true"
-            + ",\"asyncExecutors\":true,\"listenerContamination\":true}";
+
+    static String buildHelloFrame(boolean windowCut, boolean contaminated, boolean classMismatch,
+            boolean background, boolean ackId, boolean nopResync,
+            boolean asyncExecutors, boolean listenerContamination) {
+        return "HELLO {\"proto\":" + TCP_PROTOCOL_VERSION
+                + ",\"windowCut\":" + windowCut
+                + ",\"contaminated\":" + contaminated
+                + ",\"classMismatch\":" + classMismatch
+                + ",\"background\":" + background
+                + ",\"ackId\":" + ackId
+                + ",\"nopResync\":" + nopResync
+                + ",\"asyncExecutors\":" + asyncExecutors
+                + ",\"listenerContamination\":" + listenerContamination
+                + "}";
+    }
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
@@ -316,7 +333,29 @@ public final class KeployDedupAgent {
             // instruments, and ids, a server's class as the index read it,
             // and ServerEntries counts in JaCoCo's copy.
             startJacoco(instrumentation, index);
-            countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco));
+            Set<String> appClasses = Collections.emptySet();
+            String appPackagePrefix = null;
+            List<ClassEntry> loadedEntries = index.entries;
+            if (loadedEntries != null) {
+                if (index.appOnly && !loadedEntries.isEmpty()) {
+                    Set<String> names = new HashSet<>(loadedEntries.size() * 2);
+                    for (ClassEntry entry : loadedEntries) {
+                        names.add(entry.className);
+                    }
+                    appClasses = names;
+                }
+            } else {
+                // External JaCoCo attached: avoid eagerly scanning the full
+                // classpath in premain; use the lightweight package root
+                // derived from the JVM launch command instead.
+                AppClasses derived = AppClasses.derive(System.getProperty("java.class.path", ""),
+                        System.getProperty("sun.java.command", ""), System.getProperty("user.dir"));
+                if (!derived.failed && derived.root != null && !derived.root.isEmpty()) {
+                    appPackagePrefix = derived.root.replace('.', '/') + "/";
+                }
+            }
+            countRequests(instrumentation, IndexReport.JACOCO_ATTACHED.equals(index.jacoco),
+                    appClasses, appPackagePrefix);
         } else if (!transformerAdded) {
             // Attached to a running JVM, or started from the app's code, and
             // never as a -javaagent: ServerEntries cannot change a class, so
@@ -348,7 +387,15 @@ public final class KeployDedupAgent {
     // the index holds it, and the log says so when the JVM has a JaCoCo
     // agent of its own (jacocoAttached).
     static void countRequests(Instrumentation instrumentation, boolean jacocoAttached) {
+        countRequests(instrumentation, jacocoAttached, Collections.<String>emptySet(), null);
+    }
+
+    static void countRequests(Instrumentation instrumentation, boolean jacocoAttached,
+            Set<String> appClasses, String appPackagePrefix) {
         boolean requests = endWaitMillis() != 0;
+        Set<String> allowed = appClasses == null ? Collections.<String>emptySet() : appClasses;
+        boolean hasCallSiteRewrites = !allowed.isEmpty()
+                || (appPackagePrefix != null && !appPackagePrefix.isEmpty());
         try {
             boolean retransformable = instrumentation.isRetransformClassesSupported();
             if (!retransformable && jacocoAttached) {
@@ -356,12 +403,15 @@ public final class KeployDedupAgent {
                         + " true in its manifest, or this JVM cannot retransform, so a JaCoCo agent attached after"
                         + " it instruments the " + (requests ? "server, scheduler and Spring executor"
                                 : "scheduler and Spring executor")
-                        + " classes it changes, and each test's classMismatch names them when Keploy measures"
+                        + " classes it changes"
+                        + (hasCallSiteRewrites ? ", as well as any application classes whose executor calls it rewrites" : "")
+                        + ", and each test's classMismatch names them when Keploy measures"
                         + " them. Attach JaCoCo before it, or run keploy-sdk.jar as released",
                         null);
             }
-            instrumentation.addTransformer(new ServerEntries(requests), retransformable);
+            instrumentation.addTransformer(new ServerEntries(requests, allowed, appPackagePrefix), retransformable);
             transformerAdded = true;
+            executorCallSitesEnabled = hasCallSiteRewrites;
         } catch (RuntimeException e) {
             log(Level.WARNING, "Keploy dedup does not count the app's requests or see its scheduled jobs' runs:"
                     + " their classes could not be changed to count them", e);
@@ -1024,18 +1074,22 @@ public final class KeployDedupAgent {
      * connection open for the whole replay. Mirrors {@link CommandServer}'s dispatch
      * but inverts the roles — here the SDK is the client. Wire protocol:
      * <pre>
-     *   collector -&gt; SDK : "BACKGROUND" | "START &lt;id&gt;" | "END &lt;id&gt;"
-     *   SDK -&gt; collector : ["BACKGROUND &lt;compact-json&gt;"] + "ACK &lt;id&gt;"
-     *                                                      (after a START cleared the counters)
-     *                      "COV &lt;compact-json&gt;" + "ACK &lt;id&gt;" (after an END read the test's hits)
-     *                      "IGNORED &lt;id&gt;" + "ACK &lt;id&gt;"    (after a START that could not
+     *   SDK -&gt; collector (on connect): "HELLO {&lt;dynamic capabilities json&gt;}"
+     *   collector -&gt; SDK : "ACK_ID" | "BACKGROUND" | "NOP [&lt;token&gt;]" | "START &lt;id&gt;" | "END &lt;id&gt;"
+     *   SDK -&gt; collector : "ACK [id]" [+ "BACKGROUND &lt;compact-json&gt;"]
+     *                                                      (after a START cleared the counters;
+     *                                                      BACKGROUND follows ACK so START is
+     *                                                      never delayed by index reporting)
+     *                      "COV &lt;compact-json&gt;" + "ACK [id]" (after an END read the test's hits)
+     *                      "IGNORED &lt;id&gt;" + "ACK [id]"    (after a START that could not
      *                                                      clear them, an END with no START,
      *                                                      or an END whose hits could not
      *                                                      be read)
      * </pre>
-     * Echoing {@code &lt;id&gt;} on every {@code ACK} lets the collector correlate each
-     * barrier with the exact test it issued, so a late {@code ACK} for test N can
-     * never satisfy test N+1's barrier.
+     * By default {@code ACK} is bare for older collectors that match
+     * {@code line == "ACK"}. Once the collector sends {@code ACK_ID}, every
+     * subsequent {@code START}/{@code END}/{@code IGNORED} echoes {@code ACK &lt;id&gt;}
+     * so the collector can correlate each barrier with the exact test it issued.
      * The collector starts listening only when replay begins, so the connect loop
      * retries until it is reachable.
      */
@@ -1062,6 +1116,9 @@ public final class KeployDedupAgent {
         // Opt-in per TCP connection via "BACKGROUND" command so older collectors
         // never receive unexpected BACKGROUND frames.
         private boolean backgroundRequested;
+        // Opt-in per TCP connection via "ACK_ID" command so older collectors
+        // matching bare "ACK" keep working unchanged.
+        private boolean ackWithId;
         private int backgroundLost;
         // Connect retries spin ~1/s until the collector is reachable; log the first
         // failure at INFO and the rest at FINE so we don't spam k8s app logs.
@@ -1071,6 +1128,15 @@ public final class KeployDedupAgent {
             this.collector = collector;
             this.host = host;
             this.port = port;
+        }
+
+        private String helloFrame() {
+            boolean agentAttached = transformerAdded;
+            boolean windowCut = agentAttached && collector.endWaitMillis > 0 && !ServerEntries.countsNone();
+            boolean background = collector.probeScan() != null;
+            boolean asyncExecutors = agentAttached && executorCallSitesEnabled;
+            return buildHelloFrame(windowCut, agentAttached, true, background, true, true,
+                    asyncExecutors, agentAttached);
         }
 
         @Override
@@ -1123,6 +1189,7 @@ public final class KeployDedupAgent {
                 activeTestId = "";
                 lastEndedTestId = null;
                 backgroundRequested = false;
+                ackWithId = false;
                 backgroundLost = 0;
             }
             log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
@@ -1132,15 +1199,21 @@ public final class KeployDedupAgent {
                 // dispatch writes a reply's lines here and ack sends them in one
                 // write once the reply is whole.
                 OutputStream out = new BufferedOutputStream(active.getOutputStream(), REPLY_BUFFER_BYTES);
-                // Declare protocol + honesty capabilities immediately on connect.
+                // Declare live protocol + honesty capabilities immediately on connect.
                 // Older collectors ignore unrecognized lines; newer collectors gate
                 // removal eligibility on this declaration.
-                writeLine(out, HELLO_FRAME);
+                writeLine(out, helloFrame());
                 out.flush();
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
                     if (trimmed.isEmpty()) {
+                        continue;
+                    }
+                    if (ACK_ID_COMMAND.equals(trimmed)) {
+                        synchronized (testCaseLock) {
+                            ackWithId = true;
+                        }
                         continue;
                     }
                     if (BACKGROUND_COMMAND.equals(trimmed)) {
@@ -1155,12 +1228,13 @@ public final class KeployDedupAgent {
                         }
                         continue;
                     }
-                    if (trimmed.startsWith(NOP_COMMAND + " ")) {
-                        String token = trimmed.substring(NOP_COMMAND.length() + 1).trim();
-                        if (!token.isEmpty()) {
-                            synchronized (testCaseLock) {
-                                ack(out, token);
-                            }
+                    if (NOP_COMMAND.equals(trimmed) || trimmed.startsWith(NOP_COMMAND + " ")) {
+                        String token = trimmed.length() > NOP_COMMAND.length()
+                                ? trimmed.substring(NOP_COMMAND.length() + 1).trim()
+                                : "";
+                        synchronized (testCaseLock) {
+                            writeLine(out, token.isEmpty() ? "ACK" : "ACK " + token);
+                            out.flush();
                         }
                         continue;
                     }
@@ -1207,15 +1281,18 @@ public final class KeployDedupAgent {
                     }
                     if (reset) {
                         activeTestId = command.testId;
-                        if (after != null && !cleared.isEmpty() && backgroundRequested) {
-                            writeBackgroundFrame(out, after, command.testId, cleared);
-                        }
                     } else {
                         // Said before the ACK, as for an END not taken: the
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
                     ack(out, command.testId);
+                    // Emit BACKGROUND after START's ACK (matching the unix path)
+                    // so building coverageIndex.report() / JSON never delays the
+                    // test's START barrier.
+                    if (reset && after != null && !cleared.isEmpty() && backgroundRequested) {
+                        writeBackgroundFrame(out, after, command.testId, cleared);
+                    }
                     return;
                 }
 
@@ -1293,7 +1370,9 @@ public final class KeployDedupAgent {
         }
 
         private void writeBackgroundFrame(OutputStream out, String after, String before,
-                List<ProbeScan.Hit> cleared) {
+                List<ProbeScan.Hit> cleared) throws IOException {
+            String frame;
+            int classes;
             try {
                 BackgroundRecord record = new BackgroundRecord(
                         collector.coverageIndex.report().build, after, before,
@@ -1301,16 +1380,20 @@ public final class KeployDedupAgent {
                 if (backgroundLost > 0) {
                     record.lost = backgroundLost;
                 }
-                writeLine(out, BACKGROUND_COMMAND + " " + GSON.toJson(record));
-                backgroundLost = 0;
-                if (diagnosticsEnabled()) {
-                    diagnostic("BACKGROUND frame sent over TCP: after=" + after + ", before=" + before
-                            + ", classes=" + record.executedLinesByFile.size());
-                }
+                classes = record.executedLinesByFile.size();
+                frame = BACKGROUND_COMMAND + " " + GSON.toJson(record);
             } catch (Throwable t) {
                 backgroundLost++;
                 log(backgroundLost == 1 ? Level.WARNING : Level.FINE,
-                        "Keploy dedup: could not send BACKGROUND frame before " + before, t);
+                        "Keploy dedup: could not build BACKGROUND frame before " + before, t);
+                return;
+            }
+            writeLine(out, frame);
+            out.flush();
+            backgroundLost = 0;
+            if (diagnosticsEnabled()) {
+                diagnostic("BACKGROUND frame sent over TCP: after=" + after + ", before=" + before
+                        + ", classes=" + classes);
             }
         }
 
@@ -1320,8 +1403,8 @@ public final class KeployDedupAgent {
             out.write('\n');
         }
 
-        private static void ack(OutputStream out, String testId) throws IOException {
-            writeLine(out, "ACK " + testId);
+        private void ack(OutputStream out, String testId) throws IOException {
+            writeLine(out, ackWithId && testId != null && !testId.isEmpty() ? "ACK " + testId : "ACK");
             out.flush();
         }
 

@@ -50,25 +50,35 @@ import org.objectweb.asm.Type;
  * class an agent changed read the class path's classes. Netty, and so
  * WebFlux, is not counted: END then reads a test's hits as soon as it comes.
  *
- * <p>It makes each run of a scheduled job count in {@link JobGate} the same
- * way: Quartz's {@code JobRunShell.run()} and Spring's
- * {@code ScheduledMethodRunnable.run()} (each {@code @Scheduled} method)
- * become methods that call {@link JobGate#enter(Object, String)}, then their
- * own code, renamed {@code keploy$job$run}, then {@link JobGate#exit(Object)},
- * so that a test whose window a job ran in says so. Those count whether or
- * not END waits for requests.
+ * <p>It makes each run of a scheduled job or message listener count in
+ * {@link JobGate} the same way: Quartz's {@code JobRunShell.run()}, Spring's
+ * {@code ScheduledMethodRunnable.run()} (each {@code @Scheduled} method),
+ * Spring Kafka's {@code ListenerConsumer}, and Spring AMQP/JMS's
+ * {@code AbstractMessageListenerContainer.doInvokeListener} become methods
+ * that call {@link JobGate#enter(Object, String)}, then their own code,
+ * renamed {@code keploy$job$<name>}, then {@link JobGate#exit(Object)}, so
+ * that a test whose window one ran in says so. Those count whether or not END
+ * waits for requests.
  *
  * <p>It makes the work a request hands to a Spring TaskExecutor count as
  * the request's (see {@link RequestGate#hand(Object, Runnable)}): the
  * methods of SimpleAsyncTaskExecutor (an async event multicaster's),
- * ThreadPoolTaskExecutor and {@code @Async}'s interceptor that take a task
- * become methods that hand the task, and the executor it is for (the
- * interceptor's executor argument, else the executor itself), to
- * RequestGate, then call their own code, renamed
+ * ThreadPoolTaskExecutor, ThreadPoolTaskScheduler, ConcurrentTaskExecutor and
+ * {@code @Async}'s interceptor that take a task become methods that hand the
+ * task, and the executor it is for (the interceptor's executor argument, else
+ * the executor itself), to RequestGate, then call their own code, renamed
  * {@code keploy$async$<name>}, with what RequestGate gave back, and when that
  * throws, tell RequestGate the task was dropped. A task a job's run hands
  * off counts as that run whether or not END waits for requests; a
  * request's counts only when it does (servers are changed only then).
+ *
+ * <p>For the application's own indexed classes (strictly allow-listed from
+ * {@link AppClasses} / {@code CoverageIndex} so third-party libraries such as
+ * Netty or OkHttp are never touched), it also rewrites standard JDK executor
+ * and {@code CompletableFuture} call sites ({@code execute}, {@code submit},
+ * {@code runAsync}, {@code supplyAsync}, {@code remove}, {@code shutdownNow})
+ * to {@link RequestGate}'s identically-stacked static helpers after a fast
+ * constant-pool pre-check, and preserves those rewrites across retransforms.
  */
 final class ServerEntries implements ClassFileTransformer {
 
@@ -116,8 +126,6 @@ final class ServerEntries implements ClassFileTransformer {
         // listener's probes into the test's record, so mark the test contaminated.
         addJob("Kafka", "org/springframework/kafka/listener/KafkaMessageListenerContainer$ListenerConsumer",
                 "kafka", "invokeRecordListener", "invokeBatchListener", "invokeOnMessage");
-        addJob("Kafka", "org/springframework/kafka/listener/adapter/MessagingMessageListenerAdapter",
-                "kafka", "onMessage");
         addJob("RabbitMQ", "org/springframework/amqp/rabbit/listener/AbstractMessageListenerContainer",
                 "listener", "doInvokeListener");
         addJob("JMS", "org/springframework/jms/listener/AbstractMessageListenerContainer",
@@ -150,20 +158,58 @@ final class ServerEntries implements ClassFileTransformer {
 
     private static final Set<String> COUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNCOUNTED = new CopyOnWriteArraySet<>();
+    // Per-loader cache for seesGate(loader) to avoid repeated Class.forName
+    // calls and ClassNotFoundExceptions during startup class loading.
+    private static final Map<ClassLoader, Boolean> SEES_GATE = new WeakHashMap<>();
+
+    // Constant-pool class owners targeted by wrapExecutorCalls. If none of
+    // these appear in a class's constant pool, ASM rewriting is skipped.
+    private static final Set<String> TARGET_EXECUTOR_OWNERS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "java/util/concurrent/Executor",
+            "java/util/concurrent/ExecutorService",
+            "java/util/concurrent/ScheduledExecutorService",
+            "java/util/concurrent/AbstractExecutorService",
+            "java/util/concurrent/ThreadPoolExecutor",
+            "java/util/concurrent/ScheduledThreadPoolExecutor",
+            "java/util/concurrent/ForkJoinPool",
+            "java/util/concurrent/CompletableFuture")));
 
     // The classes this changed as they loaded, by their loader: the ones it
     // changes again when another agent retransforms them.
     private final Map<ClassLoader, Set<String>> changed = new WeakHashMap<>();
+    // Application classes whose executor call sites were rewritten on load,
+    // by their loader: re-applied if another agent retransforms them.
+    private final Map<ClassLoader, Set<String>> rewritten = new WeakHashMap<>();
     // Whether servers' requests count (END waits for them); jobs' runs
     // count either way.
     private final boolean requests;
+    // Allow-list of indexed application VM class names eligible for JDK
+    // executor call-site rewriting; empty when app-only indexing was not run
+    // eagerly (e.g. external JaCoCo attached) or failed.
+    private final Set<String> appClasses;
+    // Lightweight package prefix ("com/acme/") derived from AppClasses when
+    // appClasses is empty because an external JaCoCo agent skipped premain
+    // index loading; null when unavailable.
+    private final String appPackagePrefix;
 
     ServerEntries() {
-        this(true);
+        this(true, Collections.<String>emptySet(), null);
     }
 
     ServerEntries(boolean requests) {
+        this(requests, Collections.<String>emptySet(), null);
+    }
+
+    ServerEntries(boolean requests, Set<String> appClasses) {
+        this(requests, appClasses, null);
+    }
+
+    ServerEntries(boolean requests, Set<String> appClasses, String appPackagePrefix) {
         this.requests = requests;
+        this.appClasses = appClasses == null || appClasses.isEmpty()
+                ? Collections.<String>emptySet()
+                : Collections.unmodifiableSet(new HashSet<>(appClasses));
+        this.appPackagePrefix = appPackagePrefix == null || appPackagePrefix.isEmpty() ? null : appPackagePrefix;
     }
 
     private static void add(String server, String className, String... methods) {
@@ -189,6 +235,18 @@ final class ServerEntries implements ClassFileTransformer {
         return COUNTED.isEmpty();
     }
 
+    // Snapshot/restore helpers for unit tests exercising dynamic HELLO flags.
+    static Set<String> snapshotCounted() {
+        return new HashSet<>(COUNTED);
+    }
+
+    static void restoreCounted(Set<String> snapshot) {
+        COUNTED.clear();
+        if (snapshot != null) {
+            COUNTED.addAll(snapshot);
+        }
+    }
+
     // uncounted names the servers whose requests do not count that the app
     // loaded, as Netty.
     static List<String> uncounted() {
@@ -207,9 +265,13 @@ final class ServerEntries implements ClassFileTransformer {
             if (uncounted != null) {
                 SEEN_UNCOUNTED.add(uncounted);
             }
-            if (className != null && shouldRewriteExecutorCalls(className) && seesGate(loader)) {
+            if (shouldRewriteExecutorCalls(className) && seesGate(loader)) {
                 try {
-                    return wrapExecutorCalls(classfileBuffer);
+                    byte[] updated = wrapExecutorCalls(classfileBuffer);
+                    if (updated != null) {
+                        recordRewritten(loader, className);
+                    }
+                    return updated;
                 } catch (Throwable t) {
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
                 }
@@ -266,17 +328,47 @@ final class ServerEntries implements ClassFileTransformer {
         }
     }
 
+    private void recordRewritten(ClassLoader loader, String className) {
+        synchronized (rewritten) {
+            Set<String> names = rewritten.get(loader);
+            if (names == null) {
+                names = new HashSet<>();
+                rewritten.put(loader, names);
+            }
+            names.add(className);
+        }
+    }
+
+    private boolean wasRewritten(ClassLoader loader, String className) {
+        if (!shouldRewriteExecutorCalls(className)) {
+            return false;
+        }
+        synchronized (rewritten) {
+            Set<String> names = rewritten.get(loader);
+            return names != null && names.contains(className);
+        }
+    }
+
     // changedAgain is a class another agent retransforms or redefines, when
     // this changed it as it loaded. The JVM passes a retransform the class as
     // it was before this changed it, and a redefine the redefiner's bytes,
     // and refuses a class that has lost a method this added: so either is
     // changed again, unless the bytes already carry the change (a redefiner's
     // copy of the class as this changed it), which the JVM then takes as they
-    // are. Any other class is left as it is: it was loaded unchanged, and the
-    // JVM refuses a method added to it.
+    // are. Application classes whose executor call sites were rewritten on
+    // load also get their call sites re-applied so another agent's
+    // retransform does not silently undo them. Any other class is left as it
+    // is: it was loaded unchanged, and the JVM refuses a method added to it.
     private byte[] changedAgain(ClassLoader loader, String className, byte[] classfile) {
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
+            if (wasRewritten(loader, className)) {
+                try {
+                    return wrapExecutorCalls(classfile);
+                } catch (Throwable t) {
+                    LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site re-wrap for " + className, t);
+                }
+            }
             // Most classes an agent retransforms: no lock taken for them.
             return null;
         }
@@ -308,14 +400,30 @@ final class ServerEntries implements ClassFileTransformer {
     // seesGate says whether code of a class loader defines calls the
     // RequestGate END reads (and so JobGate, of the same jar): one it cannot
     // see would fail each request or job, and a copy of its own would count
-    // where END never looks.
+    // where END never looks. Cached per loader to avoid repeated Class.forName
+    // lookups and ClassNotFoundExceptions on startup.
     private static boolean seesGate(ClassLoader loader) {
-        // The bootstrap loader (null) does not see it either.
-        try {
-            return Class.forName(RequestGate.class.getName(), false, loader) == RequestGate.class;
-        } catch (Throwable t) {
+        // The bootstrap loader (null) does not see keploy-sdk.jar.
+        if (loader == null) {
             return false;
         }
+        Boolean cached;
+        synchronized (SEES_GATE) {
+            cached = SEES_GATE.get(loader);
+        }
+        if (cached != null) {
+            return cached;
+        }
+        boolean sees;
+        try {
+            sees = Class.forName(RequestGate.class.getName(), false, loader) == RequestGate.class;
+        } catch (Throwable t) {
+            sees = false;
+        }
+        synchronized (SEES_GATE) {
+            SEES_GATE.put(loader, sees);
+        }
+        return sees;
     }
 
     private static boolean isInterface(byte[] classfile) {
@@ -350,12 +458,28 @@ final class ServerEntries implements ClassFileTransformer {
         return wrap(classfile, entry.methods, entry.job, entry.async);
     }
 
-    // shouldRewriteExecutorCalls filters out JDK, agent, server, and Spring
-    // executor internals so call-site wrapping targets application and library
-    // classes that submit async tasks to standard JDK Executor/ExecutorService/
-    // CompletableFuture APIs.
-    static boolean shouldRewriteExecutorCalls(String className) {
-        return !className.startsWith("java/")
+    // shouldRewriteExecutorCalls strictly allow-lists indexed application
+    // classes (or, when external JaCoCo defers index loading, the lightweight
+    // app package prefix from AppClasses) plus a belt-and-suspenders filter
+    // against JDK, agent, server, and library internals so third-party
+    // long-lived threads (Netty event loops, OkHttp TaskRunner, Lettuce, gRPC,
+    // AWS SDK, etc.) are never rewritten.
+    boolean shouldRewriteExecutorCalls(String className) {
+        if (className == null || !isRewriteAllowedPackage(className)) {
+            return false;
+        }
+        if (!appClasses.isEmpty()) {
+            return appClasses.contains(className);
+        }
+        return appPackagePrefix != null && className.startsWith(appPackagePrefix);
+    }
+
+    // Belt-and-suspenders guard in case KEPLOY_JAVA_CLASS_DIRS includes
+    // framework/library classes; note org/apache/ is NOT blanket-excluded so
+    // Apache-hosted applications (e.g. org/apache/fineract/) remain eligible.
+    static boolean isRewriteAllowedPackage(String className) {
+        return className != null
+                && !className.startsWith("java/")
                 && !className.startsWith("javax/")
                 && !className.startsWith("sun/")
                 && !className.startsWith("jdk/")
@@ -363,24 +487,64 @@ final class ServerEntries implements ClassFileTransformer {
                 && !className.startsWith("io/keploy/")
                 && !className.startsWith("org/jacoco/")
                 && !className.startsWith("org/newsclub/")
-                && !className.startsWith("org/springframework/core/task/")
-                && !className.startsWith("org/springframework/scheduling/concurrent/")
-                && !className.startsWith("org/springframework/aop/interceptor/")
+                && !className.startsWith("io/netty/")
+                && !className.startsWith("reactor/")
+                && !className.startsWith("okhttp3/")
+                && !className.startsWith("okio/")
+                && !className.startsWith("io/lettuce/")
+                && !className.startsWith("io/grpc/")
+                && !className.startsWith("software/amazon/")
+                && !className.startsWith("com/amazonaws/")
+                && !className.startsWith("org/springframework/")
                 && !className.startsWith("org/apache/catalina/")
+                && !className.startsWith("org/apache/coyote/")
+                && !className.startsWith("org/apache/tomcat/")
+                && !className.startsWith("org/apache/http/")
+                && !className.startsWith("org/apache/hc/")
+                && !className.startsWith("org/apache/kafka/")
                 && !className.startsWith("org/eclipse/jetty/")
                 && !className.startsWith("io/undertow/")
-                && !className.startsWith("org/quartz/");
+                && !className.startsWith("org/quartz/")
+                && !className.startsWith("com/zaxxer/");
+    }
+
+    // Fast constant-pool scan: every matching invoke instruction references a
+    // CONSTANT_Class (tag 7) entry for one of TARGET_EXECUTOR_OWNERS. Classes
+    // with no matching constant-pool class entry skip ASM ClassWriter entirely.
+    static boolean hasExecutorReference(ClassReader reader) {
+        int itemCount = reader.getItemCount();
+        char[] buf = new char[reader.getMaxStringLength()];
+        for (int i = 1; i < itemCount; i++) {
+            int offset = reader.getItem(i);
+            if (offset == 0) {
+                continue;
+            }
+            if (reader.readByte(offset - 1) == 7) {
+                String owner = reader.readUTF8(offset, buf);
+                if (TARGET_EXECUTOR_OWNERS.contains(owner)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // wrapExecutorCalls redirects standard JDK executor hand-off call sites
-    // (Executor.execute, ExecutorService.submit, ThreadPoolExecutor.execute,
-    // AbstractExecutorService.submit, CompletableFuture.runAsync/supplyAsync)
-    // to RequestGate's identically-stacked static helpers so async tails count
-    // in the request's (or job's) window without touching bootstrap JDK classes.
-    // Returns null when the class contains no matching call sites.
+    // (Executor/ExecutorService/ScheduledExecutorService.execute,
+    // ExecutorService/ScheduledExecutorService/AbstractExecutorService/
+    // ThreadPoolExecutor/ScheduledThreadPoolExecutor.submit,
+    // ThreadPoolExecutor/ScheduledThreadPoolExecutor/ForkJoinPool.execute,
+    // CompletableFuture.runAsync/supplyAsync, ThreadPoolExecutor.remove, and
+    // ExecutorService.shutdownNow) to RequestGate's identically-stacked static
+    // helpers so async tails count in the request's (or job's) window without
+    // touching bootstrap JDK classes. Returns null when the class contains no
+    // matching call sites.
     static byte[] wrapExecutorCalls(byte[] classfile) {
         ClassReader reader = new ClassReader(classfile);
         if ((reader.getAccess() & Opcodes.ACC_INTERFACE) != 0) {
+            return null;
+        }
+        if (!hasExecutorReference(reader)) {
             return null;
         }
         ClassWriter writer = new ClassWriter(reader, 0);
@@ -397,7 +561,10 @@ final class ServerEntries implements ClassFileTransformer {
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String mname, String desc,
                             boolean isInterface) {
-                        if (opcode == Opcodes.INVOKEINTERFACE && "java/util/concurrent/Executor".equals(owner)
+                        if (opcode == Opcodes.INVOKEINTERFACE
+                                && ("java/util/concurrent/Executor".equals(owner)
+                                        || "java/util/concurrent/ExecutorService".equals(owner)
+                                        || "java/util/concurrent/ScheduledExecutorService".equals(owner))
                                 && "execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
                             changed[0] = true;
                             super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "execute",
@@ -405,7 +572,8 @@ final class ServerEntries implements ClassFileTransformer {
                             return;
                         }
                         if (opcode == Opcodes.INVOKEVIRTUAL
-                                && ("java/util/concurrent/ThreadPoolExecutor".equals(owner)
+                                && ("java/util/concurrent/AbstractExecutorService".equals(owner)
+                                        || "java/util/concurrent/ThreadPoolExecutor".equals(owner)
                                         || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)
                                         || "java/util/concurrent/ForkJoinPool".equals(owner))
                                 && "execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
@@ -420,8 +588,7 @@ final class ServerEntries implements ClassFileTransformer {
                                 || (opcode == Opcodes.INVOKEVIRTUAL
                                         && ("java/util/concurrent/AbstractExecutorService".equals(owner)
                                                 || "java/util/concurrent/ThreadPoolExecutor".equals(owner)
-                                                || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)
-                                                || "java/util/concurrent/ForkJoinPool".equals(owner)))) {
+                                                || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)))) {
                             if ("submit".equals(mname)) {
                                 if ("(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;".equals(desc)) {
                                     changed[0] = true;
@@ -449,6 +616,29 @@ final class ServerEntries implements ClassFileTransformer {
                                     return;
                                 }
                             }
+                        }
+                        if (opcode == Opcodes.INVOKEVIRTUAL
+                                && ("java/util/concurrent/ThreadPoolExecutor".equals(owner)
+                                        || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner))
+                                && "remove".equals(mname) && "(Ljava/lang/Runnable;)Z".equals(desc)) {
+                            changed[0] = true;
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "remove",
+                                    "(Ljava/util/concurrent/ThreadPoolExecutor;Ljava/lang/Runnable;)Z", false);
+                            return;
+                        }
+                        if (((opcode == Opcodes.INVOKEINTERFACE
+                                        && ("java/util/concurrent/ExecutorService".equals(owner)
+                                                || "java/util/concurrent/ScheduledExecutorService".equals(owner)))
+                                || (opcode == Opcodes.INVOKEVIRTUAL
+                                        && ("java/util/concurrent/AbstractExecutorService".equals(owner)
+                                                || "java/util/concurrent/ThreadPoolExecutor".equals(owner)
+                                                || "java/util/concurrent/ScheduledThreadPoolExecutor".equals(owner)
+                                                || "java/util/concurrent/ForkJoinPool".equals(owner))))
+                                && "shutdownNow".equals(mname) && "()Ljava/util/List;".equals(desc)) {
+                            changed[0] = true;
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "shutdownNow",
+                                    "(Ljava/util/concurrent/ExecutorService;)Ljava/util/List;", false);
+                            return;
                         }
                         if (opcode == Opcodes.INVOKESTATIC
                                 && "java/util/concurrent/CompletableFuture".equals(owner)) {

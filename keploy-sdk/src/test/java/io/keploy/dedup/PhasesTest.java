@@ -140,15 +140,17 @@ public class PhasesTest {
                 OutputStream out = sdk.getOutputStream();
                 BufferedReader in = new BufferedReader(
                         new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
-                assertEquals(KeployDedupAgent.HELLO_FRAME, in.readLine());
+                String hello = in.readLine();
+                assertTrue("expected HELLO frame, got " + hello,
+                        hello != null && hello.startsWith("HELLO {\"proto\":3,"));
                 out.write("START test-set-0/test-1\n".getBytes(StandardCharsets.UTF_8));
                 out.flush();
-                assertEquals("ACK test-set-0/test-1", in.readLine());
+                assertEquals("ACK", in.readLine());
                 out.write("END test-set-0/test-1\n".getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 String cov = in.readLine();
                 assertTrue(cov, cov != null && cov.startsWith("COV ") && cov.contains("\"" + SHOP + "\":[0,2]"));
-                assertEquals("ACK test-set-0/test-1", in.readLine());
+                assertEquals("ACK", in.readLine());
             }
         }
         // Said once the command is answered: waited for.

@@ -5,50 +5,65 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
- * JobGate sees the runs of the app's scheduled jobs, so that a test whose
- * window a job ran in says so: JaCoCo's probes carry no thread, so the lines
- * a Quartz job or a Spring {@code @Scheduled} method runs while a test runs
- * land in that test's hits. A test's record names the jobs whose runs
+ * JobGate sees the runs of the app's scheduled jobs and message listeners, so
+ * that a test whose window one ran in says so: JaCoCo's probes carry no thread,
+ * so the lines a Quartz job, a Spring {@code @Scheduled} method, or a Spring
+ * Kafka/RabbitMQ/JMS message listener runs while a test runs land in that
+ * test's hits. A test's record names the jobs and listeners whose runs
  * overlapped its window, from its START to the read of its hits at END, in
  * {@code contaminated}, and Keploy does not judge such a test.
  *
- * <p>ServerEntries makes Quartz's {@code JobRunShell.run()} and Spring's
- * {@code ScheduledMethodRunnable.run()} call {@link #enter(Object, String)}
- * where a job's run starts and {@link #exit(Object)} where it is done,
- * however it returns or throws. A run is in a window when it ran when the
- * window opened or started before it closed: so a job that started before a
- * test and still runs at its START counts in it, and one that ended before
- * the START does not (the START clears what it ran).
+ * <p>ServerEntries makes Quartz's {@code JobRunShell.run()}, Spring's
+ * {@code ScheduledMethodRunnable.run()}, Spring Kafka's
+ * {@code ListenerConsumer}, and Spring AMQP/JMS's
+ * {@code AbstractMessageListenerContainer.doInvokeListener} call
+ * {@link #enter(Object, String)} where a run starts and {@link #exit(Object)}
+ * where it is done, however it returns or throws. A run is in a window when it
+ * ran when the window opened or started before it closed: so a job that started
+ * before a test and still runs at its START counts in it, and one that ended
+ * before the START does not (the START clears what it ran).
  *
- * <p>The work a job's run hands to a Spring TaskExecutor (an event listener
- * on an async multicaster, a task submitted to a ThreadPoolTaskExecutor,
- * an {@code @Async} method) counts as a run of that job, named the same,
- * from when the task starts until it returns or throws: RequestGate's
+ * <p>The work a job's or listener's run hands to a Spring TaskExecutor or a
+ * rewritten application executor call site counts as a run of that job, named
+ * the same, from when the task starts until it returns or throws: RequestGate's
  * {@link RequestGate#hand(Object, Runnable)} wraps it as the job's when the
- * thread handing it off is in the job's run, so a test whose window the task runs in is marked
- * with the job even when the job's own run ended before the test began.
- * What that task hands off counts the same way.
+ * thread handing it off is in the job's run, so a test whose window the task
+ * runs in is marked with the job even when the job's own run ended before the
+ * test began. Handed-off attribution is bounded by {@link #handedJobMaxNanos}
+ * so a long-lived worker loop started from a job cannot keep {@code RUNNING}
+ * open forever.
  *
- * <p>Jobs the app runs on threads of its own, a custom executor or a
- * {@code java.util.Timer} are not seen, and neither are message listeners or
- * a request's async work that runs past its END.
+ * <p>Jobs the app runs on plain threads of its own, uninstrumented custom
+ * executors, a {@code java.util.Timer}, or unhooked messaging clients are not
+ * seen, nor is a request's async work that runs past its END.
  *
  * <p>Public only for the classes ServerEntries changes, which call it from
  * their own packages; not an API.
  */
 public final class JobGate {
 
+    private static final Logger LOGGER = Logger.getLogger(KeployDedupAgent.class.getName());
     // The most job names a record carries; past them, one more name says
     // how many more there were ("+3").
     static final int NAMES = 8;
     // The most distinct names a window keeps to count: an app has a few
     // jobs, and a window past this many counts each further run as one more.
     static final int KEPT = 1024;
+    // Maximum duration a handed-off async task (enterAs) keeps a job open in
+    // RUNNING before it is evicted as a long-lived worker loop. Not final so
+    // tests can shorten it.
+    static volatile long handedJobMaxNanos = TimeUnit.SECONDS.toNanos(30);
+    private static final Set<String> EXPIRED_LOGGED = ConcurrentHashMap.newKeySet();
 
     private static final Object LOCK = new Object();
     // The runs going on now, and the window of the test running (null
@@ -69,13 +84,13 @@ public final class JobGate {
      * if one is open. Never throws: the job runs whatever happens here.
      *
      * @param job the object whose {@code run()} runs the job
-     * @param kind "quartz" or "scheduled"
+     * @param kind "quartz", "scheduled", "kafka", or "listener"
      * @return the token to pass to {@link #exit(Object)} when it is done
      */
     public static Object enter(Object job, String kind) {
         Run run = null;
         try {
-            run = new Run(name(job, kind), CURRENT.get());
+            run = new Run(name(job, kind), CURRENT.get(), false, 0L);
             begin(run);
         } catch (Throwable t) {
             // The job runs on. A run counted as going on before this (an
@@ -87,12 +102,14 @@ public final class JobGate {
     }
 
     // enterAs counts a task a job's run handed off as a run of that job, as
-    // enter does, from when the task starts; exit counts it done. Never
-    // throws, as enter.
+    // enter does, from when the task starts; exit counts it done. Bounded by
+    // handedJobMaxNanos so a long-lived worker loop started from a job cannot
+    // contaminate every later test forever. Never throws, as enter.
     static Object enterAs(String name) {
         Run run = null;
         try {
-            run = new Run(name, CURRENT.get());
+            long expiresAt = System.nanoTime() + handedJobMaxNanos;
+            run = new Run(name, CURRENT.get(), true, expiresAt);
             begin(run);
         } catch (Throwable t) {
             // As in enter: the task runs on, and a run counted is handed back.
@@ -113,9 +130,16 @@ public final class JobGate {
     }
 
     // running is the name of the job whose run this thread is in (the job's
-    // own, or a task it handed off), or null when it is in none.
+    // own, or a non-expired task it handed off), or null when it is in none.
     static String running() {
         Run run = CURRENT.get();
+        if (run == null) {
+            return null;
+        }
+        long now = System.nanoTime();
+        while (run != null && (run.over || run.isExpired(now))) {
+            run = run.outer;
+        }
         return run == null ? null : run.name;
     }
 
@@ -153,14 +177,36 @@ public final class JobGate {
 
     // open starts the window of a test, before its START clears what ran
     // before it: each run going on now counts in it, as what it runs from
-    // here on lands in the test.
+    // here on lands in the test. Handed-off tasks that have run past
+    // handedJobMaxNanos are evicted so a long-lived worker loop started from a
+    // job cannot mark every later test contaminated forever.
     static void open() {
+        long now = System.nanoTime();
+        List<String> expired = null;
         synchronized (LOCK) {
             Window opened = new Window();
-            for (Run run : RUNNING) {
+            for (Iterator<Run> it = RUNNING.iterator(); it.hasNext(); ) {
+                Run run = it.next();
+                if (run.isExpired(now)) {
+                    it.remove();
+                    if (EXPIRED_LOGGED.add(run.name)) {
+                        if (expired == null) {
+                            expired = new ArrayList<>();
+                        }
+                        expired.add(run.name);
+                    }
+                    continue;
+                }
                 opened.mark(run.name);
             }
             window = opened;
+        }
+        if (expired != null) {
+            for (String jobName : expired) {
+                LOGGER.log(Level.INFO, "Keploy dedup stopped attributing a long-lived handed-off task to "
+                        + jobName + " after " + TimeUnit.NANOSECONDS.toMillis(handedJobMaxNanos)
+                        + " ms so it does not mark every later test contaminated");
+            }
         }
     }
 
@@ -234,12 +280,21 @@ public final class JobGate {
         private final String name;
         // The run the thread was in when this one began, or null.
         private final Run outer;
+        // True for tasks handed off via enterAs (bounded by expiresAtNanos).
+        private final boolean handed;
+        private final long expiresAtNanos;
         // Whether its exit came; only its own thread reads or sets it.
         private boolean over;
 
-        private Run(String name, Run outer) {
+        private Run(String name, Run outer, boolean handed, long expiresAtNanos) {
             this.name = name;
             this.outer = outer;
+            this.handed = handed;
+            this.expiresAtNanos = expiresAtNanos;
+        }
+
+        private boolean isExpired(long now) {
+            return handed && (now - expiresAtNanos) >= 0;
         }
     }
 

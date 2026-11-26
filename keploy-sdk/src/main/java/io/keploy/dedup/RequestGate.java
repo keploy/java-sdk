@@ -1,5 +1,7 @@
 package io.keploy.dedup;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -7,6 +9,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,21 +32,36 @@ import java.util.function.Supplier;
  *
  * <p>The work a request hands to a Spring TaskExecutor (an event listener
  * on an async multicaster, an {@code @Async} method, a task submitted to
- * a ThreadPoolTaskExecutor) counts as that request's until it is done:
- * ServerEntries makes those executors pass each task they are handed, and
- * the executor it is for, to {@link #hand(Object, Runnable)} or
- * {@link #hand(Object, Callable)}, which, on a thread that runs a request
- * or such a task, counts the task in the window that thread counts in,
- * from the hand-off until the task returns or throws. On a thread in a
- * scheduled job's run (JobGate), or in a task such a run handed off, the
- * task counts as a run of that job while it runs, so a test whose window
- * it runs in is marked with the job; END does not wait for it. A task
- * handed from any other thread (a plain scheduler's, the app's own), or to
- * an executor whose pool may order its tasks by their type
- * (OrderedPools), is not counted.
+ * a ThreadPoolTaskExecutor) or to standard JDK executors/CompletableFuture
+ * from rewritten application classes counts as that request's until it is done:
+ * ServerEntries passes each task, and the executor it is for, to
+ * {@link #hand(Object, Runnable)}, {@link #hand(Object, Callable)}, or the
+ * static call-site helpers ({@link #execute}, {@link #submit},
+ * {@link #runAsync}, {@link #supplyAsync}), which, on a thread that runs a
+ * request or such a task, counts the task in the window that thread counts in,
+ * from the hand-off until the task returns, throws, is rejected, or is
+ * cancelled/timed out before running. On a thread in a scheduled job's or
+ * message listener's run (JobGate), or in a task such a run handed off, the
+ * task counts as a run of that job while it runs, so a test whose window it
+ * runs in is marked with the job; END does not wait for it. A task handed from
+ * any other thread (a plain scheduler's, the app's own), or to an executor
+ * whose pool may order tasks, override task hooks, silently discard tasks, or
+ * delegate opaquely (OrderedPools), is not counted.
  *
- * <p>Public only for the server and Spring classes ServerEntries changes,
- * which call it from their own packages; not an API.
+ * <p>Note on pool queue visibility: for {@code submit} and
+ * {@code CompletableFuture}, the JDK already wraps user tasks in
+ * {@code FutureTask}/{@code AsyncRun}; for direct {@code execute(Runnable)}
+ * call sites in rewritten application classes, {@link #remove} and
+ * {@link #shutdownNow} preserve identity and unwrap queued wrappers, while
+ * custom {@code ThreadPoolExecutor} subclasses that override
+ * {@code beforeExecute}/{@code afterExecute} are skipped by
+ * {@link OrderedPools}. Direct inspection of {@code getQueue()} on a plain
+ * {@code ThreadPoolExecutor} that casts elements to an app-private subtype
+ * without {@link Comparable} is the only case where the wrapper could be
+ * visible.
+ *
+ * <p>Public only for the server, Spring, and rewritten application classes
+ * ServerEntries changes, which call it from their own packages; not an API.
  */
 public final class RequestGate {
 
@@ -104,19 +122,23 @@ public final class RequestGate {
      * run of that job while it runs. On any other thread, for a task
      * already counted, for a task that is {@link Comparable}, or for an
      * executor whose pool may order its tasks by their type, it returns the
-     * task.
-     *
-     * <p>Neither of the last two is counted: a pool whose queue orders its
-     * tasks (a PriorityBlockingQueue, or a queue with a Comparator) casts
-     * each to the app's own type, and throws on a task of another type. END
-     * does not wait for such a task, and it is no job's run.
+     * task (and unwraps an already-wrapped task if the inner executor is
+     * ordered/unsafe, releasing its pending window permit).
      *
      * @param executor the executor the task is for, or null
      * @param task the task the executor is handed
      * @return what the executor runs instead
      */
     public static Runnable hand(Object executor, Runnable task) {
-        if (task == null || task instanceof Handed || task instanceof Comparable) {
+        if (task == null || task instanceof Comparable) {
+            return task;
+        }
+        if (task instanceof Handed) {
+            if (OrderedPools.orders(executor)) {
+                Handed existing = (Handed) task;
+                existing.releaseIfPending();
+                return existing.task;
+            }
             return task;
         }
         Window window = INSIDE.get();
@@ -146,7 +168,16 @@ public final class RequestGate {
      * @return what the executor runs instead
      */
     public static <T> Callable<T> hand(Object executor, Callable<T> task) {
-        if (task == null || task instanceof HandedCall || task instanceof Comparable) {
+        if (task == null || task instanceof Comparable) {
+            return task;
+        }
+        if (task instanceof HandedCall) {
+            if (OrderedPools.orders(executor)) {
+                @SuppressWarnings("unchecked")
+                HandedCall<T> existing = (HandedCall<T>) task;
+                existing.releaseIfPending();
+                return existing.task;
+            }
             return task;
         }
         Window window = INSIDE.get();
@@ -171,7 +202,16 @@ public final class RequestGate {
      * @return what runs instead
      */
     public static <T> Supplier<T> handSupplier(Object executor, Supplier<T> supplier) {
-        if (supplier == null || supplier instanceof HandedSupplier || supplier instanceof Comparable) {
+        if (supplier == null || supplier instanceof Comparable) {
+            return supplier;
+        }
+        if (supplier instanceof HandedSupplier) {
+            if (OrderedPools.orders(executor)) {
+                @SuppressWarnings("unchecked")
+                HandedSupplier<T> existing = (HandedSupplier<T>) supplier;
+                existing.releaseIfPending();
+                return existing.task;
+            }
             return supplier;
         }
         Window window = INSIDE.get();
@@ -204,77 +244,158 @@ public final class RequestGate {
     /** Call-site wrapper for {@link ExecutorService#submit(Runnable)}. */
     public static Future<?> submit(ExecutorService executor, Runnable task) {
         Runnable handed = hand(executor, task);
+        Future<?> future;
         try {
-            return executor.submit(handed);
+            future = executor.submit(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
         }
+        return wrapFuture(future, handed, task);
     }
 
     /** Call-site wrapper for {@link ExecutorService#submit(Runnable, Object)}. */
     public static <T> Future<T> submit(ExecutorService executor, Runnable task, T result) {
         Runnable handed = hand(executor, task);
+        Future<T> future;
         try {
-            return executor.submit(handed, result);
+            future = executor.submit(handed, result);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
         }
+        return wrapFuture(future, handed, task);
     }
 
     /** Call-site wrapper for {@link ExecutorService#submit(Callable)}. */
     public static <T> Future<T> submit(ExecutorService executor, Callable<T> task) {
         Callable<T> handed = hand(executor, task);
+        Future<T> future;
         try {
-            return executor.submit(handed);
+            future = executor.submit(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
         }
+        return wrapFuture(future, handed, task);
     }
 
     /** Call-site wrapper for {@link CompletableFuture#runAsync(Runnable)}. */
     public static CompletableFuture<Void> runAsync(Runnable task) {
         Runnable handed = hand(null, task);
+        CompletableFuture<Void> cf;
         try {
-            return CompletableFuture.runAsync(handed);
+            cf = CompletableFuture.runAsync(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
         }
+        attachCompletionRelease(cf, handed, task);
+        return cf;
     }
 
     /** Call-site wrapper for {@link CompletableFuture#runAsync(Runnable, Executor)}. */
     public static CompletableFuture<Void> runAsync(Runnable task, Executor executor) {
         Runnable handed = hand(executor, task);
+        CompletableFuture<Void> cf;
         try {
-            return CompletableFuture.runAsync(handed, executor);
+            cf = CompletableFuture.runAsync(handed, executor);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
         }
+        attachCompletionRelease(cf, handed, task);
+        return cf;
     }
 
     /** Call-site wrapper for {@link CompletableFuture#supplyAsync(Supplier)}. */
     public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier) {
         Supplier<T> handed = handSupplier(null, supplier);
+        CompletableFuture<T> cf;
         try {
-            return CompletableFuture.supplyAsync(handed);
+            cf = CompletableFuture.supplyAsync(handed);
         } catch (Throwable t) {
             dropped(handed, supplier);
             throw t;
         }
+        attachCompletionRelease(cf, handed, supplier);
+        return cf;
     }
 
     /** Call-site wrapper for {@link CompletableFuture#supplyAsync(Supplier, Executor)}. */
     public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier, Executor executor) {
         Supplier<T> handed = handSupplier(executor, supplier);
+        CompletableFuture<T> cf;
         try {
-            return CompletableFuture.supplyAsync(handed, executor);
+            cf = CompletableFuture.supplyAsync(handed, executor);
         } catch (Throwable t) {
             dropped(handed, supplier);
             throw t;
+        }
+        attachCompletionRelease(cf, handed, supplier);
+        return cf;
+    }
+
+    /**
+     * Call-site wrapper for {@link ThreadPoolExecutor#remove(Runnable)}: finds
+     * and removes the wrapped {@link Handed} entry if {@code task} was wrapped,
+     * releasing its pending window permit so END does not wait for it.
+     */
+    public static boolean remove(ThreadPoolExecutor executor, Runnable task) {
+        if (executor.remove(task)) {
+            return true;
+        }
+        if (task == null) {
+            return false;
+        }
+        for (Runnable queued : executor.getQueue()) {
+            if (queued instanceof Handed) {
+                Handed handed = (Handed) queued;
+                if (handed.task == task && executor.remove(handed)) {
+                    handed.releaseIfPending();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Call-site wrapper for {@link ExecutorService#shutdownNow()}: releases
+     * pending window permits for drained wrappers and returns the app's
+     * original tasks so callers casting them never see {@link Handed}.
+     */
+    public static List<Runnable> shutdownNow(ExecutorService executor) {
+        List<Runnable> pending = executor.shutdownNow();
+        if (pending == null || pending.isEmpty()) {
+            return pending;
+        }
+        List<Runnable> unwrapped = null;
+        for (int i = 0; i < pending.size(); i++) {
+            Runnable item = pending.get(i);
+            if (item instanceof Handed) {
+                Handed handed = (Handed) item;
+                handed.releaseIfPending();
+                if (unwrapped == null) {
+                    unwrapped = new ArrayList<>(pending);
+                }
+                unwrapped.set(i, handed.task);
+            }
+        }
+        return unwrapped != null ? unwrapped : pending;
+    }
+
+    private static <T> Future<T> wrapFuture(Future<T> future, Object handed, Object task) {
+        if (future != null && handed != task && handed instanceof Hand) {
+            return new CancelAwareFuture<>(future, (Hand) handed);
+        }
+        return future;
+    }
+
+    private static void attachCompletionRelease(CompletableFuture<?> cf, Object handed, Object task) {
+        if (cf != null && handed != task && handed instanceof Hand) {
+            final Hand hand = (Hand) handed;
+            cf.whenComplete((result, error) -> hand.releaseIfPending());
         }
     }
 
@@ -362,27 +483,43 @@ public final class RequestGate {
     }
 
     // Hand is a task counted in a request's window: done once, when it
-    // returns or throws, or when the executor did not take it. Or, with no
+    // returns or throws, when the executor did not take it, or when it is
+    // cancelled/timed out/removed/drained while still pending. Or, with no
     // window, a task a job's run handed off: a run of that job while it
     // runs, and nothing to count done when the executor did not take it.
     private abstract static class Hand {
 
-        private static final AtomicIntegerFieldUpdater<Hand> RELEASED =
-                AtomicIntegerFieldUpdater.newUpdater(Hand.class, "released");
+        private static final int STATE_PENDING = 0;
+        private static final int STATE_RUNNING = 1;
+        private static final int STATE_DONE = 2;
+
+        private static final AtomicIntegerFieldUpdater<Hand> STATE =
+                AtomicIntegerFieldUpdater.newUpdater(Hand.class, "state");
 
         // The window it counts in, or null for a job's task.
         final Window window;
         // The job whose run handed it off, when window is null.
         final String job;
-        private volatile int released;
+        private volatile int state;
 
         Hand(Window window, String job) {
             this.window = window;
             this.job = job;
         }
 
+        // release marks this task done unconditionally (on exit or rejected drop).
         final void release() {
-            if (window != null && RELEASED.compareAndSet(this, 0, 1)) {
+            if (window != null && STATE.getAndSet(this, STATE_DONE) != STATE_DONE) {
+                done(window);
+            }
+        }
+
+        // releaseIfPending marks this task done only if it has not started
+        // running yet: cancellation/timeout of an already-running task waits
+        // for its finally block's exit() so the window stays open while app
+        // code is still executing.
+        final void releaseIfPending() {
+            if (window != null && STATE.compareAndSet(this, STATE_PENDING, STATE_DONE)) {
                 done(window);
             }
         }
@@ -396,6 +533,7 @@ public final class RequestGate {
             if (window == null) {
                 return JobGate.enterAs(job);
             }
+            STATE.compareAndSet(this, STATE_PENDING, STATE_RUNNING);
             Window outer = INSIDE.get();
             INSIDE.set(window);
             return outer;
@@ -412,6 +550,47 @@ public final class RequestGate {
                 INSIDE.set((Window) outer);
             }
             release();
+        }
+    }
+
+    private static final class CancelAwareFuture<T> implements Future<T> {
+
+        private final Future<T> delegate;
+        private final Hand hand;
+
+        CancelAwareFuture(Future<T> delegate, Hand hand) {
+            this.delegate = delegate;
+            this.hand = hand;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            boolean cancelled = delegate.cancel(mayInterruptIfRunning);
+            if (cancelled) {
+                hand.releaseIfPending();
+            }
+            return cancelled;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return delegate.isCancelled();
+        }
+
+        @Override
+        public boolean isDone() {
+            return delegate.isDone();
+        }
+
+        @Override
+        public T get() throws InterruptedException, ExecutionException {
+            return delegate.get();
+        }
+
+        @Override
+        public T get(long timeout, TimeUnit unit)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            return delegate.get(timeout, unit);
         }
     }
 
@@ -480,7 +659,7 @@ public final class RequestGate {
 
     private static final class HandedCall<T> extends Hand implements Callable<T> {
 
-        private final Callable<T> task;
+        final Callable<T> task;
 
         HandedCall(Window window, String job, Callable<T> task) {
             super(window, job);
@@ -505,7 +684,7 @@ public final class RequestGate {
 
     private static final class HandedSupplier<T> extends Hand implements Supplier<T> {
 
-        private final Supplier<T> task;
+        final Supplier<T> task;
 
         HandedSupplier(Window window, String job, Supplier<T> task) {
             super(window, job);

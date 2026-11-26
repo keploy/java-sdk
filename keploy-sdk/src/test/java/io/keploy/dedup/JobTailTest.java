@@ -316,7 +316,7 @@ public class JobTailTest {
         String test(String id, String... jobs) throws IOException {
             String fullId = "test-set-0/" + id;
             send(sdkOut, "START " + fullId);
-            assertEquals("ACK " + fullId, sdkIn.readLine());
+            assertEquals("ACK", sdkIn.readLine());
             for (String job : jobs) {
                 command(job);
             }
@@ -324,7 +324,7 @@ public class JobTailTest {
             String cov = sdkIn.readLine();
             assertTrue(cov, cov != null && cov.startsWith("COV "));
             String line;
-            while (!(line = sdkIn.readLine()).equals("ACK " + fullId)) {
+            while (!(line = sdkIn.readLine()).equals("ACK")) {
                 assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
             }
             cov = cov.substring("COV ".length());

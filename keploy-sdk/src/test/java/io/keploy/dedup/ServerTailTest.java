@@ -522,7 +522,7 @@ public class ServerTailTest {
                     for (int test = 1; test <= tests; test++) {
                         String fullId = "test-set-0/test-" + test;
                         send(out, "START " + fullId);
-                        assertEquals("ACK " + fullId, in.readLine());
+                        assertEquals("ACK", in.readLine());
                         String query = fork.queries.isEmpty() ? "tail=" + tailMillis : fork.queries.get(test - 1);
                         assertEquals("hello", get(port, "/hello?" + query));
                         send(out, "END " + fullId);
@@ -530,7 +530,7 @@ public class ServerTailTest {
                         assertTrue(cov, cov != null && cov.startsWith("COV "));
                         result.covs.add(cov.substring("COV ".length()));
                         String line;
-                        while (!(line = in.readLine()).equals("ACK " + fullId)) {
+                        while (!(line = in.readLine()).equals("ACK")) {
                             assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
                         }
                     }
