@@ -522,11 +522,18 @@ public class ServerTailTest {
                     for (int test = 1; test <= tests; test++) {
                         String fullId = "test-set-0/test-" + test;
                         send(out, "START " + fullId);
-                        assertEquals("ACK", in.readLine());
+                        String startReply = in.readLine();
+                        while (startReply != null && startReply.startsWith("HELLO ")) {
+                            startReply = in.readLine();
+                        }
+                        assertEquals("ACK", startReply);
                         String query = fork.queries.isEmpty() ? "tail=" + tailMillis : fork.queries.get(test - 1);
                         assertEquals("hello", get(port, "/hello?" + query));
                         send(out, "END " + fullId);
                         String cov = in.readLine();
+                        while (cov != null && cov.startsWith("HELLO ")) {
+                            cov = in.readLine();
+                        }
                         assertTrue(cov, cov != null && cov.startsWith("COV "));
                         result.covs.add(cov.substring("COV ".length()));
                         String line;

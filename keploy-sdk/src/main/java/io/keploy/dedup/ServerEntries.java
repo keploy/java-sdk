@@ -1,6 +1,9 @@
 package io.keploy.dedup;
 
 import java.lang.instrument.ClassFileTransformer;
+import java.net.URI;
+import java.net.URL;
+import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -161,6 +164,11 @@ final class ServerEntries implements ClassFileTransformer {
     // Per-loader cache for seesGate(loader) to avoid repeated Class.forName
     // calls and ClassNotFoundExceptions during startup class loading.
     private static final Map<ClassLoader, Boolean> SEES_GATE = new WeakHashMap<>();
+    // On Java 9+, code-source locations of boot-layer named modules that do
+    // not read RequestGate's unnamed module: rewriting classes inside those
+    // named modules would throw IllegalAccessError at call sites. Empty on
+    // Java 8 or when no unreadable named modules exist.
+    private static final Set<URI> UNREADABLE_MODULE_LOCATIONS = findUnreadableModuleLocations();
 
     // Constant-pool class owners targeted by wrapExecutorCalls. If none of
     // these appear in a class's constant pool, ASM rewriting is skipped.
@@ -265,7 +273,7 @@ final class ServerEntries implements ClassFileTransformer {
             if (uncounted != null) {
                 SEEN_UNCOUNTED.add(uncounted);
             }
-            if (shouldRewriteExecutorCalls(className) && seesGate(loader)) {
+            if (shouldRewriteExecutorCalls(className) && canAccessGate(loader, protectionDomain)) {
                 try {
                     byte[] updated = wrapExecutorCalls(classfileBuffer);
                     if (updated != null) {
@@ -474,9 +482,83 @@ final class ServerEntries implements ClassFileTransformer {
         return appPackagePrefix != null && className.startsWith(appPackagePrefix);
     }
 
+    // canAccessGate checks both class-loader visibility and (on Java 9+) that
+    // the class does not live in a named module that cannot read RequestGate's
+    // unnamed module (which would otherwise throw IllegalAccessError on
+    // rewritten call sites when KEPLOY_JAVA_CLASS_DIRS overrides indexing).
+    private static boolean canAccessGate(ClassLoader loader, ProtectionDomain protectionDomain) {
+        if (!seesGate(loader)) {
+            return false;
+        }
+        if (protectionDomain != null && !UNREADABLE_MODULE_LOCATIONS.isEmpty()) {
+            CodeSource cs = protectionDomain.getCodeSource();
+            URL location = cs == null ? null : cs.getLocation();
+            if (location != null) {
+                try {
+                    if (UNREADABLE_MODULE_LOCATIONS.contains(location.toURI())) {
+                        return false;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<URI> findUnreadableModuleLocations() {
+        try {
+            java.lang.reflect.Method getModule = Class.class.getMethod("getModule");
+            Object gateModule = getModule.invoke(RequestGate.class);
+            if (gateModule == null) {
+                return Collections.emptySet();
+            }
+            Class<?> moduleClass = gateModule.getClass();
+            java.lang.reflect.Method isNamed = moduleClass.getMethod("isNamed");
+            java.lang.reflect.Method canRead = moduleClass.getMethod("canRead", moduleClass);
+            java.lang.reflect.Method getName = moduleClass.getMethod("getName");
+            Class<?> layerClass = Class.forName("java.lang.ModuleLayer");
+            Object bootLayer = layerClass.getMethod("boot").invoke(null);
+            Set<?> modules = (Set<?>) layerClass.getMethod("modules").invoke(bootLayer);
+            Object config = layerClass.getMethod("configuration").invoke(bootLayer);
+            java.lang.reflect.Method findModule = config.getClass().getMethod("findModule", String.class);
+            Set<URI> unreadable = new HashSet<>();
+            for (Object mod : modules) {
+                if (!Boolean.TRUE.equals(isNamed.invoke(mod))) {
+                    continue;
+                }
+                if (Boolean.TRUE.equals(canRead.invoke(mod, gateModule))) {
+                    continue;
+                }
+                String modName = (String) getName.invoke(mod);
+                Object optResolved = findModule.invoke(config, modName);
+                if (optResolved == null) {
+                    continue;
+                }
+                if (Boolean.TRUE.equals(optResolved.getClass().getMethod("isPresent").invoke(optResolved))) {
+                    Object resolved = optResolved.getClass().getMethod("get").invoke(optResolved);
+                    Object ref = resolved.getClass().getMethod("reference").invoke(resolved);
+                    Object optLoc = ref.getClass().getMethod("location").invoke(ref);
+                    if (optLoc != null
+                            && Boolean.TRUE.equals(optLoc.getClass().getMethod("isPresent").invoke(optLoc))) {
+                        Object uri = optLoc.getClass().getMethod("get").invoke(optLoc);
+                        if (uri instanceof URI) {
+                            unreadable.add((URI) uri);
+                        }
+                    }
+                }
+            }
+            return unreadable.isEmpty() ? Collections.<URI>emptySet() : Collections.unmodifiableSet(unreadable);
+        } catch (Throwable t) {
+            // Java 8 (no Module/ModuleLayer) or restricted reflection.
+            return Collections.emptySet();
+        }
+    }
+
     // Belt-and-suspenders guard in case KEPLOY_JAVA_CLASS_DIRS includes
-    // framework/library classes; note org/apache/ is NOT blanket-excluded so
-    // Apache-hosted applications (e.g. org/apache/fineract/) remain eligible.
+    // framework/library classes or a shaded uber-jar; note org/apache/ is NOT
+    // blanket-excluded so Apache-hosted applications (e.g.
+    // org/apache/fineract/) remain eligible.
     static boolean isRewriteAllowedPackage(String className) {
         return className != null
                 && !className.startsWith("java/")
@@ -502,10 +584,22 @@ final class ServerEntries implements ClassFileTransformer {
                 && !className.startsWith("org/apache/http/")
                 && !className.startsWith("org/apache/hc/")
                 && !className.startsWith("org/apache/kafka/")
+                && !className.startsWith("org/apache/logging/log4j/")
                 && !className.startsWith("org/eclipse/jetty/")
                 && !className.startsWith("io/undertow/")
                 && !className.startsWith("org/quartz/")
-                && !className.startsWith("com/zaxxer/");
+                && !className.startsWith("com/zaxxer/")
+                && !className.startsWith("kotlin/")
+                && !className.startsWith("kotlinx/")
+                && !className.startsWith("com/google/common/")
+                && !className.startsWith("com/github/benmanes/caffeine/")
+                && !className.startsWith("io/vertx/")
+                && !className.startsWith("io/micrometer/")
+                && !className.startsWith("io/opentelemetry/")
+                && !className.startsWith("ch/qos/logback/")
+                && !className.startsWith("org/slf4j/")
+                && !className.startsWith("com/mongodb/")
+                && !className.startsWith("redis/clients/");
     }
 
     // Fast constant-pool scan: every matching invoke instruction references a

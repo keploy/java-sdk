@@ -1119,6 +1119,11 @@ public final class KeployDedupAgent {
         // Opt-in per TCP connection via "ACK_ID" command so older collectors
         // matching bare "ACK" keep working unchanged.
         private boolean ackWithId;
+        // Last HELLO frame sent on this connection: whenever live capabilities
+        // change (e.g. a server class loads or external JaCoCo finishes
+        // premain after an early connect), a fresh HELLO is emitted before the
+        // next START/END reply so the collector never acts on stale flags.
+        private String lastHelloSent;
         private int backgroundLost;
         // Connect retries spin ~1/s until the collector is reachable; log the first
         // failure at INFO and the rest at FINE so we don't spam k8s app logs.
@@ -1137,6 +1142,14 @@ public final class KeployDedupAgent {
             boolean asyncExecutors = agentAttached && executorCallSitesEnabled;
             return buildHelloFrame(windowCut, agentAttached, true, background, true, true,
                     asyncExecutors, agentAttached);
+        }
+
+        private void maybeSendUpdatedHello(OutputStream out) throws IOException {
+            String current = helloFrame();
+            if (!current.equals(lastHelloSent)) {
+                writeLine(out, current);
+                lastHelloSent = current;
+            }
         }
 
         @Override
@@ -1190,6 +1203,7 @@ public final class KeployDedupAgent {
                 lastEndedTestId = null;
                 backgroundRequested = false;
                 ackWithId = false;
+                lastHelloSent = null;
                 backgroundLost = 0;
             }
             log(Level.INFO, "Keploy dedup: connected to collector at " + host + ":" + port, null);
@@ -1201,9 +1215,12 @@ public final class KeployDedupAgent {
                 OutputStream out = new BufferedOutputStream(active.getOutputStream(), REPLY_BUFFER_BYTES);
                 // Declare live protocol + honesty capabilities immediately on connect.
                 // Older collectors ignore unrecognized lines; newer collectors gate
-                // removal eligibility on this declaration.
-                writeLine(out, helloFrame());
-                out.flush();
+                // removal eligibility on this declaration and refresh it if a later
+                // HELLO arrives after server/JaCoCo initialization completes.
+                synchronized (testCaseLock) {
+                    maybeSendUpdatedHello(out);
+                    out.flush();
+                }
                 String line;
                 while (running.get() && (line = reader.readLine()) != null) {
                     String trimmed = line.trim();
@@ -1286,6 +1303,7 @@ public final class KeployDedupAgent {
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
+                    maybeSendUpdatedHello(out);
                     ack(out, command.testId);
                     // Emit BACKGROUND after START's ACK (matching the unix path)
                     // so building coverageIndex.report() / JSON never delays the
@@ -1337,6 +1355,10 @@ public final class KeployDedupAgent {
                         log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
                     try {
+                        // Emit updated HELLO if capabilities changed during the test
+                        // (e.g. Jetty/Undertow loaded its request entry on first request,
+                        // or probeScan was dropped).
+                        maybeSendUpdatedHello(out);
                         // Always emit exactly one COV before ACK — even when empty —
                         // so the line-oriented collector stays in lockstep (the unix
                         // transport likewise always publishes).
@@ -1533,13 +1555,22 @@ public final class KeployDedupAgent {
 
         private synchronized ProbeScan probeScan() {
             if (!probeScanLookedUp) {
-                probeScanLookedUp = true;
                 if (isScanTurnedOff()) {
+                    probeScanLookedUp = true;
                     log(Level.INFO, "Keploy dedup: KEPLOY_JAVA_SCAN is off, so each test takes JaCoCo's dump"
                             + " and reset, and no BACKGROUND record is sent", null);
                     return null;
                 }
-                Object agent = jacocoClient.runtimeAgent();
+                JacocoClient.AgentLookup lookup = jacocoClient.lookupRuntimeAgent();
+                if (lookup.notStartedYet) {
+                    // External JaCoCo is on the classpath (e.g. attached after
+                    // keploy-sdk) but its premain has not run yet: do not latch
+                    // probeScanLookedUp so a later START/END picks it up once
+                    // started.
+                    return null;
+                }
+                probeScanLookedUp = true;
+                Object agent = lookup.agent;
                 if (agent != null) {
                     try {
                         probeScan = ProbeScan.locate(agent);
@@ -2080,11 +2111,49 @@ public final class KeployDedupAgent {
             return dumpOverTcp(dump, reset);
         }
 
-        // runtimeAgent is JaCoCo's agent object in this JVM, or null when
-        // JaCoCo is reached over TCP.
-        private Object runtimeAgent() {
-            InProcessAgent agent = inProcessAgent();
-            return agent == null ? null : agent.agent;
+        private static final class AgentLookup {
+            final Object agent;
+            final boolean notStartedYet;
+
+            AgentLookup(Object agent, boolean notStartedYet) {
+                this.agent = agent;
+                this.notStartedYet = notStartedYet;
+            }
+        }
+
+        // lookupRuntimeAgent returns JaCoCo's in-process agent object, or
+        // notStartedYet=true when RT is present on the classpath but its
+        // premain has not started the agent yet (avoiding a permanent latch).
+        private AgentLookup lookupRuntimeAgent() {
+            if (inProcessUnavailable) {
+                return new AgentLookup(null, false);
+            }
+            InProcessAgent cached = inProcessAgent;
+            if (cached != null) {
+                return new AgentLookup(cached.agent, false);
+            }
+            synchronized (this) {
+                if (inProcessUnavailable) {
+                    return new AgentLookup(null, false);
+                }
+                if (inProcessAgent != null) {
+                    return new AgentLookup(inProcessAgent.agent, false);
+                }
+                try {
+                    inProcessAgent = InProcessAgent.locate();
+                    return new AgentLookup(inProcessAgent.agent, false);
+                } catch (AgentNotStartedException e) {
+                    log(Level.FINE, "JaCoCo in-process agent is not started yet; will retry", e);
+                    return new AgentLookup(null, true);
+                } catch (Throwable t) {
+                    inProcessUnavailable = true;
+                    log(Level.FINE,
+                            "JaCoCo in-process agent unavailable, will use TCP fallback at "
+                                    + host + ":" + port,
+                            t);
+                    return new AgentLookup(null, false);
+                }
+            }
         }
 
         private InProcessAgent inProcessAgent() {
@@ -2104,6 +2173,9 @@ public final class KeployDedupAgent {
                 }
                 try {
                     inProcessAgent = InProcessAgent.locate();
+                } catch (AgentNotStartedException e) {
+                    log(Level.FINE, "JaCoCo in-process agent is not started yet; will retry", e);
+                    return null;
                 } catch (Throwable t) {
                     inProcessUnavailable = true;
                     log(Level.FINE,
@@ -2151,6 +2223,18 @@ public final class KeployDedupAgent {
         }
     }
 
+    // Thrown when org.jacoco.agent.rt.RT is present on the classpath (e.g.
+    // external -javaagent:jacocoagent.jar attached after keploy-sdk.jar) but
+    // its premain has not started the agent yet (RT.getAgent() throws
+    // IllegalStateException). Must not permanently latch in-process lookup off.
+    private static final class AgentNotStartedException extends ReflectiveOperationException {
+        private static final long serialVersionUID = 1L;
+
+        AgentNotStartedException(Throwable cause) {
+            super(cause);
+        }
+    }
+
     private static final class InProcessAgent {
 
         private final Object agent;
@@ -2165,11 +2249,14 @@ public final class KeployDedupAgent {
 
         static InProcessAgent locate() throws ReflectiveOperationException {
             ReflectiveOperationException firstFailure = null;
+            AgentNotStartedException notStarted = null;
             try {
                 InProcessAgent bootstrapAgent = locateWithLoader(null);
                 if (bootstrapAgent != null) {
                     return bootstrapAgent;
                 }
+            } catch (AgentNotStartedException e) {
+                notStarted = e;
             } catch (ReflectiveOperationException e) {
                 firstFailure = e;
             }
@@ -2180,6 +2267,10 @@ public final class KeployDedupAgent {
                     if (agent != null) {
                         return agent;
                     }
+                } catch (AgentNotStartedException e) {
+                    if (notStarted == null) {
+                        notStarted = e;
+                    }
                 } catch (ReflectiveOperationException e) {
                     if (firstFailure == null) {
                         firstFailure = e;
@@ -2187,6 +2278,9 @@ public final class KeployDedupAgent {
                 }
             }
 
+            if (notStarted != null) {
+                throw notStarted;
+            }
             if (firstFailure != null) {
                 throw firstFailure;
             }
@@ -2203,7 +2297,15 @@ public final class KeployDedupAgent {
                 String loaderName = loader == null ? "bootstrap" : loader.toString();
                 diagnostic("resolved JaCoCo RT with loader=" + loaderName + ", source=" + source);
             }
-            Object resolved = rtClass.getMethod("getAgent").invoke(null);
+            Object resolved;
+            try {
+                resolved = rtClass.getMethod("getAgent").invoke(null);
+            } catch (InvocationTargetException e) {
+                if (e.getCause() instanceof IllegalStateException) {
+                    throw new AgentNotStartedException(e.getCause());
+                }
+                throw e;
+            }
             if (resolved == null) {
                 return null;
             }

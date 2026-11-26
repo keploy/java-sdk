@@ -33,11 +33,14 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.After;
@@ -50,6 +53,7 @@ import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
  * Covers the v3 honest TCP protocol (dynamic HELLO capabilities, backwards-compatible
@@ -163,6 +167,68 @@ public class HonestProtocolAndAsyncTest {
         String helloFallback = connectAndReadHello(true);
         assertEquals(KeployDedupAgent.buildHelloFrame(true, true, true, true, true, true, false, true),
                 helloFallback);
+    }
+
+    @Test(timeout = 60000)
+    public void earlyConnectBeforeJacocoAndServerInitDoesNotLatchFailureAndRefreshesHello() throws Exception {
+        byte[] shopBytes = new byte[] {11, 12, 13};
+        File shop = new File(tmp.newFolder("classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+
+        // Simulate premain early connect: -javaagent attached, server class NOT loaded yet,
+        // and external JaCoCo RT is on the classpath but its premain has not run yet
+        // (RT.getAgent() throws IllegalStateException("JaCoCo agent not started.")).
+        KeployDedupAgent.transformerAdded = true;
+        KeployDedupAgent.executorCallSitesEnabled = true;
+        ServerEntries.restoreCounted(Collections.<String>emptySet());
+
+        InProcessScanTest.Agent realAgent = new InProcessScanTest.Agent();
+        boolean[] probes = realAgent.probes(IndexReport.classId(shopBytes), "com/acme/Shop", 2);
+        DeferredRtLoader.agent = null; // triggers IllegalStateException("JaCoCo agent not started.")
+        savedContextLoader = Thread.currentThread().getContextClassLoader();
+        Thread.currentThread().setContextClassLoader(new DeferredRtLoader(getClass().getClassLoader()));
+        System.setProperty(JACOCO_PORT_PROPERTY, "1"); // unreachable TCP port: must use in-process once started
+
+        collector = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        collector.setSoTimeout(30000);
+        System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+
+            // Initial HELLO on early connect honestly reports windowCut:false, background:false.
+            String initialHello = in.readLine();
+            assertEquals(KeployDedupAgent.buildHelloFrame(false, true, true, false, true, true, true, true),
+                    initialHello);
+
+            // Now external JaCoCo's premain finishes and Tomcat's CoyoteAdapter loads.
+            DeferredRtLoader.agent = realAgent;
+            ServerEntries.restoreCounted(Collections.singleton("Tomcat"));
+
+            // Next START must succeed via in-process ProbeScan (NOT latched off!) and emit updated HELLO.
+            send(out, "ACK_ID");
+            send(out, "START ts/test-1");
+            String updatedHello = in.readLine();
+            assertEquals("HELLO must refresh once server and JaCoCo are live",
+                    KeployDedupAgent.buildHelloFrame(true, true, true, true, true, true, true, true),
+                    updatedHello);
+            assertEquals("ACK ts/test-1", in.readLine());
+
+            probes[1] = true;
+            send(out, "END ts/test-1");
+            String cov = in.readLine();
+            assertEquals("COV {\"id\":\"ts/test-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]}}", cov);
+            assertEquals("ACK ts/test-1", in.readLine());
+        } finally {
+            DeferredRtLoader.agent = null;
+        }
     }
 
     @Test(timeout = 60000)
@@ -330,7 +396,11 @@ public class HonestProtocolAndAsyncTest {
                 "software/amazon/awssdk/Client",
                 "com/amazonaws/Client",
                 "org/springframework/core/task/Custom",
-                "com/zaxxer/hikari/Pool"
+                "com/zaxxer/hikari/Pool",
+                "kotlinx/coroutines/DefaultExecutor",
+                "com/google/common/util/concurrent/MoreExecutors",
+                "io/opentelemetry/sdk/trace/BatchSpanProcessor",
+                "com/github/benmanes/caffeine/cache/BoundedLocalCache"
         }) {
             assertFalse("library must never be rewritten: " + lib, entries.shouldRewriteExecutorCalls(lib));
             assertNull("library transform must return null: " + lib,
@@ -581,7 +651,8 @@ public class HonestProtocolAndAsyncTest {
             runningRelease.countDown();
             assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(5)));
 
-            // 3. shutdownNow() unwraps queued tasks (no ClassCastException) and releases permits.
+            // 3. shutdownNow() unwraps queued execute() tasks (no ClassCastException) AND releases
+            //    pending permits for submit()-ed FutureTasks and ScheduledThreadPoolExecutor tasks.
             CountDownLatch hold2 = new CountDownLatch(1);
             CountDownLatch rel2 = new CountDownLatch(1);
             pool.execute(latchTask(hold2, rel2));
@@ -590,18 +661,87 @@ public class HonestProtocolAndAsyncTest {
             RequestGate.open();
             MyAppTask queuedAppTask = new MyAppTask("queued");
             Object req3 = RequestGate.enter();
+            Future<?> submittedRunnable;
+            Future<String> submittedCallable;
             try {
                 RequestGate.execute(pool, queuedAppTask);
+                submittedRunnable = RequestGate.submit(pool, () -> { });
+                submittedCallable = RequestGate.submit(pool, (Callable<String>) () -> "val");
+                // Casting submit() result to Runnable (FutureTask) must work without ClassCastException!
+                assertTrue("submit() must return executor's own RunnableFuture", submittedRunnable instanceof Runnable);
+                assertTrue("submit(Callable) must return executor's own RunnableFuture",
+                        submittedCallable instanceof Runnable);
             } finally {
                 RequestGate.exit(req3);
             }
-            assertEquals(1, RequestGate.running());
+            assertEquals(3, RequestGate.running());
             List<Runnable> drained = RequestGate.shutdownNow(pool);
             rel2.countDown();
-            assertEquals(1, drained.size());
+            assertEquals(3, drained.size());
             MyAppTask castBack = (MyAppTask) drained.get(0);
             assertSame("shutdownNow must return the app's original Runnable", queuedAppTask, castBack);
-            assertEquals("shutdownNow must release pending permits", 0, RequestGate.running());
+            assertEquals("shutdownNow must release pending permits for execute + submit tasks",
+                    0, RequestGate.running());
+            assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(2)));
+
+            // 4. ScheduledThreadPoolExecutor: cast submit() to ScheduledFuture, remove((Runnable) f),
+            //    and shutdownNow() releasing pending permits for both execute() and submit().
+            ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
+            CountDownLatch stpeHold = new CountDownLatch(1);
+            CountDownLatch stpeRel = new CountDownLatch(1);
+            try {
+                stpe.execute(latchTask(stpeHold, stpeRel));
+                assertTrue(stpeHold.await(10, TimeUnit.SECONDS));
+
+                RequestGate.open();
+                Object req4 = RequestGate.enter();
+                Future<?> sf1;
+                Future<?> sf2;
+                try {
+                    sf1 = RequestGate.submit(stpe, () -> { });
+                    // Must preserve ScheduledFuture cast!
+                    ScheduledFuture<?> asScheduled = (ScheduledFuture<?>) sf1;
+                    assertNotNull(asScheduled);
+                    // tpe.remove((Runnable) f) idiom must work and release permit!
+                    assertTrue(RequestGate.remove(stpe, (Runnable) sf1));
+                    assertEquals("only request remains after remove((Runnable) sf1)", 1, RequestGate.running());
+
+                    RequestGate.execute(stpe, () -> { });
+                    sf2 = RequestGate.submit(stpe, (Callable<String>) () -> "s");
+                } finally {
+                    RequestGate.exit(req4);
+                }
+                assertEquals(2, RequestGate.running());
+                RequestGate.shutdownNow(stpe);
+                stpeRel.countDown();
+                assertEquals("shutdownNow on STPE must release both execute and submit pending permits",
+                        0, RequestGate.running());
+                assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(2)));
+            } finally {
+                stpeRel.countDown();
+                stpe.shutdownNow();
+            }
+
+            // 5. dropped() must NOT release a task that has already started running.
+            RequestGate.open();
+            CountDownLatch runningDropStart = new CountDownLatch(1);
+            CountDownLatch runningDropRel = new CountDownLatch(1);
+            Object req5 = RequestGate.enter();
+            Runnable raw = latchTask(runningDropStart, runningDropRel);
+            Runnable handed = RequestGate.hand(null, raw);
+            RequestGate.exit(req5);
+            Thread t = new Thread(handed);
+            t.start();
+            try {
+                assertTrue(runningDropStart.await(10, TimeUnit.SECONDS));
+                RequestGate.dropped(handed, raw);
+                assertEquals("dropped() on already-running task must not close window early",
+                        1, RequestGate.running());
+            } finally {
+                runningDropRel.countDown();
+                t.join(10000);
+            }
+            assertEquals(0, RequestGate.running());
         } finally {
             blockerRelease.countDown();
             pool.shutdownNow();
@@ -619,7 +759,8 @@ public class HonestProtocolAndAsyncTest {
                 new LinkedBlockingQueue<Runnable>(1), new ThreadPoolExecutor.DiscardPolicy());
         ThreadPoolExecutor discardOldest = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(1), new ThreadPoolExecutor.DiscardOldestPolicy());
-        // 3. ThreadPoolExecutor subclass overriding beforeExecute that casts Runnable to MyAppTask.
+        // 3. ThreadPoolExecutor subclasses overriding beforeExecute or newTaskFor that cast Runnable to MyAppTask,
+        //    and a pool with a custom log-and-drop RejectedExecutionHandler.
         AtomicReference<String> hookSaw = new AtomicReference<>();
         ThreadPoolExecutor customHookPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>()) {
@@ -628,14 +769,28 @@ public class HonestProtocolAndAsyncTest {
                 hookSaw.set(((MyAppTask) r).name);
             }
         };
-        // 4. Exact ScheduledThreadPoolExecutor IS safe (wraps in ScheduledFutureTask).
+        AtomicReference<String> newTaskForSaw = new AtomicReference<>();
+        ThreadPoolExecutor customNewTaskForPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>()) {
+            @Override
+            protected <T> RunnableFuture<T> newTaskFor(Runnable runnable, T value) {
+                newTaskForSaw.set(((MyAppTask) runnable).name);
+                return super.newTaskFor(runnable, value);
+            }
+        };
+        ThreadPoolExecutor customDropHandlerPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(1), (r, e) -> { /* custom log-and-drop */ });
+        // 4. Exact ScheduledThreadPoolExecutor & Spring ThreadPoolTaskScheduler ARE safe.
         ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
-        // 5. ConcurrentTaskExecutor wrapping priority pool vs opaque executor vs normal pool.
+        ThreadPoolTaskScheduler springScheduler = new ThreadPoolTaskScheduler();
+        springScheduler.initialize();
+        // 5. ConcurrentTaskExecutor wrapping priority pool vs opaque executor vs normal pool vs default single-thread.
         ThreadPoolExecutor normalPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
         ConcurrentTaskExecutor ctePriority = new ConcurrentTaskExecutor(priority);
         ConcurrentTaskExecutor cteOpaque = new ConcurrentTaskExecutor(Runnable::run);
         ConcurrentTaskExecutor cteNormal = new ConcurrentTaskExecutor(normalPool);
+        ConcurrentTaskExecutor cteDefault = new ConcurrentTaskExecutor();
         ExecutorService unconfigurable = Executors.unconfigurableExecutorService(priority);
 
         try {
@@ -643,22 +798,30 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(OrderedPools.orders(discard));
             assertTrue(OrderedPools.orders(discardOldest));
             assertTrue(OrderedPools.orders(customHookPool));
+            assertTrue("newTaskFor override must be skipped", OrderedPools.orders(customNewTaskForPool));
+            assertTrue("custom RejectedExecutionHandler must be skipped", OrderedPools.orders(customDropHandlerPool));
             assertFalse("exact ScheduledThreadPoolExecutor is safe", OrderedPools.orders(stpe));
+            assertFalse("Spring ThreadPoolTaskScheduler is safe", OrderedPools.orders(springScheduler));
             assertTrue("ConcurrentTaskExecutor wrapping priority pool must not wrap",
                     OrderedPools.orders(ctePriority));
             assertTrue("ConcurrentTaskExecutor wrapping opaque delegate must not wrap",
                     OrderedPools.orders(cteOpaque));
             assertFalse("ConcurrentTaskExecutor wrapping LinkedBlockingQueue pool is safe",
                     OrderedPools.orders(cteNormal));
+            assertFalse("default ConcurrentTaskExecutor (newSingleThreadExecutor) is safe on JDK 8-21+",
+                    OrderedPools.orders(cteDefault));
             assertTrue("unconfigurableExecutorService cannot be inspected",
                     OrderedPools.orders(unconfigurable));
 
-            // Custom beforeExecute pool receives original MyAppTask without ClassCastException.
+            // Custom beforeExecute & newTaskFor pools receive original MyAppTask without ClassCastException.
             RequestGate.open();
             MyAppTask appTask = new MyAppTask("hooked");
+            MyAppTask submittedTask = new MyAppTask("newTaskFor");
             Object req = RequestGate.enter();
+            Future<?> submittedFuture;
             try {
                 RequestGate.execute(customHookPool, appTask);
+                submittedFuture = RequestGate.submit(customNewTaskForPool, submittedTask);
             } finally {
                 RequestGate.exit(req);
             }
@@ -666,6 +829,9 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(customHookPool.awaitTermination(10, TimeUnit.SECONDS));
             assertEquals("hooked", hookSaw.get());
             assertTrue(appTask.ran.get());
+            submittedFuture.get(10, TimeUnit.SECONDS);
+            assertEquals("newTaskFor", newTaskForSaw.get());
+            assertTrue(submittedTask.ran.get());
 
             // Pass-through app decorator wrapping a PriorityBlockingQueue pool:
             // outer call wraps into Handed; inner RequestGate.execute(priority, handed) unwraps and releases permit!
@@ -688,9 +854,64 @@ public class HonestProtocolAndAsyncTest {
             discard.shutdownNow();
             discardOldest.shutdownNow();
             customHookPool.shutdownNow();
+            customNewTaskForPool.shutdownNow();
+            customDropHandlerPool.shutdownNow();
             stpe.shutdownNow();
+            springScheduler.shutdown();
             normalPool.shutdownNow();
+            if (cteDefault.getConcurrentExecutor() instanceof ExecutorService) {
+                ((ExecutorService) cteDefault.getConcurrentExecutor()).shutdownNow();
+            }
             unconfigurable.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void selfResubmittingChainStartedFromJobExpiresAtOriginalDeadline() throws Exception {
+        JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(80);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        AtomicInteger hops = new AtomicInteger();
+        AtomicBoolean sawAttributed = new AtomicBoolean();
+        CountDownLatch expiredHopSeen = new CountDownLatch(1);
+        AtomicBoolean keepLooping = new AtomicBoolean(true);
+        try {
+            Runnable[] self = new Runnable[1];
+            self[0] = () -> {
+                int hop = hops.incrementAndGet();
+                String current = JobGate.running();
+                if (current != null) {
+                    sawAttributed.set(true);
+                } else if (hop > 1) {
+                    expiredHopSeen.countDown();
+                    keepLooping.set(false);
+                    return;
+                }
+                if (keepLooping.get()) {
+                    try {
+                        Thread.sleep(25);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    RequestGate.execute(pool, self[0]);
+                }
+            };
+            Object job = JobGate.enter(new Object(), "scheduled");
+            try {
+                RequestGate.execute(pool, self[0]);
+            } finally {
+                JobGate.exit(job);
+            }
+            assertTrue("chained self-resubmitting job task must expire at original deadline, hops=" + hops.get(),
+                    expiredHopSeen.await(10, TimeUnit.SECONDS));
+            assertTrue("earlier hops within deadline were attributed", sawAttributed.get());
+            assertTrue("multiple hops executed before expiry", hops.get() >= 2);
+            JobGate.open();
+            assertEquals("no contamination after chain deadline expires",
+                    Collections.<String>emptyList(), JobGate.close());
+        } finally {
+            keepLooping.set(false);
+            pool.shutdownNow();
         }
     }
 
@@ -1170,6 +1391,58 @@ public class HonestProtocolAndAsyncTest {
 
         Class<?> define(String name, byte[] bytes) {
             return defineClass(name, bytes, 0, bytes.length);
+        }
+    }
+
+    // Simulates org.jacoco.agent.rt.RT being on the classpath before its
+    // premain starts the agent: getAgent() throws IllegalStateException while
+    // DeferredRtLoader.agent is null, then returns the live agent once set.
+    public static final class DeferredRtLoader extends ClassLoader {
+
+        public static volatile Object agent;
+
+        public static Object resolveAgent() {
+            Object current = agent;
+            if (current == null) {
+                throw new IllegalStateException("JaCoCo agent not started.");
+            }
+            return current;
+        }
+
+        DeferredRtLoader(ClassLoader parent) {
+            super(parent);
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if ("org.jacoco.agent.rt.RT".equals(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    byte[] bytes = generateDeferredRt();
+                    loaded = defineClass(name, bytes, 0, bytes.length);
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+            return super.loadClass(name, resolve);
+        }
+
+        private static byte[] generateDeferredRt() {
+            ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "org/jacoco/agent/rt/RT", null, "java/lang/Object", null);
+            MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "getAgent",
+                    "()Ljava/lang/Object;", null, null);
+            mv.visitCode();
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC,
+                    DeferredRtLoader.class.getName().replace('.', '/'),
+                    "resolveAgent", "()Ljava/lang/Object;", false);
+            mv.visitInsn(Opcodes.ARETURN);
+            mv.visitMaxs(1, 0);
+            mv.visitEnd();
+            cw.visitEnd();
+            return cw.toByteArray();
         }
     }
 }

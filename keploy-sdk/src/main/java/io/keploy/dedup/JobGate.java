@@ -102,14 +102,24 @@ public final class JobGate {
     }
 
     // enterAs counts a task a job's run handed off as a run of that job, as
-    // enter does, from when the task starts; exit counts it done. Bounded by
-    // handedJobMaxNanos so a long-lived worker loop started from a job cannot
-    // contaminate every later test forever. Never throws, as enter.
-    static Object enterAs(String name) {
+    // enter does, from when the task starts; exit counts it done. Preserves
+    // the original attribution deadline across chained hand-offs (taking the
+    // earlier of the carried deadline and now + handedJobMaxNanos) and skips
+    // entering if already expired, so a self-resubmitting loop started from a
+    // job cannot contaminate every later test forever. Never throws, as enter.
+    static Object enterAs(Attribution attribution) {
+        if (attribution == null) {
+            return null;
+        }
         Run run = null;
         try {
-            long expiresAt = System.nanoTime() + handedJobMaxNanos;
-            run = new Run(name, CURRENT.get(), true, expiresAt);
+            long now = System.nanoTime();
+            if ((now - attribution.expiresAtNanos) >= 0) {
+                return null;
+            }
+            long cap = now + handedJobMaxNanos;
+            long deadline = (attribution.expiresAtNanos - cap) <= 0 ? attribution.expiresAtNanos : cap;
+            run = new Run(attribution.name, CURRENT.get(), true, deadline);
             begin(run);
         } catch (Throwable t) {
             // As in enter: the task runs on, and a run counted is handed back.
@@ -132,6 +142,15 @@ public final class JobGate {
     // running is the name of the job whose run this thread is in (the job's
     // own, or a non-expired task it handed off), or null when it is in none.
     static String running() {
+        Attribution attr = runningAttribution();
+        return attr == null ? null : attr.name;
+    }
+
+    // runningAttribution returns the active job name and its carried deadline:
+    // a direct job run gets a fresh handedJobMaxNanos budget; a handed-off
+    // task carries its existing deadline unchanged so re-submitting across
+    // multiple hops can never extend attribution past the original bound.
+    static Attribution runningAttribution() {
         Run run = CURRENT.get();
         if (run == null) {
             return null;
@@ -140,7 +159,24 @@ public final class JobGate {
         while (run != null && (run.over || run.isExpired(now))) {
             run = run.outer;
         }
-        return run == null ? null : run.name;
+        if (run == null) {
+            return null;
+        }
+        long deadline = run.handed ? run.expiresAtNanos : now + handedJobMaxNanos;
+        return new Attribution(run.name, deadline);
+    }
+
+    // Attribution carries a job's name and absolute nanoTime expiry across
+    // async hand-off hops.
+    static final class Attribution {
+
+        final String name;
+        final long expiresAtNanos;
+
+        Attribution(String name, long expiresAtNanos) {
+            this.name = name;
+            this.expiresAtNanos = expiresAtNanos;
+        }
     }
 
     /**

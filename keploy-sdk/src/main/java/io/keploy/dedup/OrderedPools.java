@@ -70,6 +70,8 @@ final class OrderedPools {
     private static final String SPRING_SIMPLE_ASYNC = "org.springframework.core.task.SimpleAsyncTaskExecutor";
     private static final String JDK_FINALIZABLE_DELEGATED =
             "java.util.concurrent.Executors$FinalizableDelegatedExecutorService";
+    private static final String JDK_AUTO_SHUTDOWN_DELEGATED =
+            "java.util.concurrent.Executors$AutoShutdownDelegatedExecutorService";
     private static final String JDK_DELEGATED_SCHEDULED =
             "java.util.concurrent.Executors$DelegatedScheduledExecutorService";
     private static final String JDK_DELEGATED =
@@ -88,10 +90,12 @@ final class OrderedPools {
     private static final ClassValue<Object> CONCURRENT_EXECUTOR = methodLookup("getConcurrentExecutor");
 
     // Whether a ThreadPoolExecutor subclass overrides beforeExecute,
-    // afterExecute, or (for ScheduledThreadPoolExecutor) decorateTask, which
-    // may cast the queued Runnable/Callable to an app-specific subtype.
-    // Spring 6's ThreadPoolTaskExecutor inner ThreadPoolExecutor subclass only
-    // tracks Spring lifecycle hooks and never casts the task, so it is allowed.
+    // afterExecute, newTaskFor, execute, submit, or (for
+    // ScheduledThreadPoolExecutor) decorateTask, which may cast the queued
+    // Runnable/Callable to an app-specific subtype. Spring's internal
+    // ThreadPoolTaskExecutor$ and ThreadPoolTaskScheduler$ anonymous subclasses
+    // only track Spring lifecycle hooks and never cast the task, so they are
+    // allowed.
     private static final ClassValue<Boolean> OVERRIDES_TASK_HOOKS = new ClassValue<Boolean>() {
         @Override
         protected Boolean computeValue(Class<?> type) {
@@ -102,11 +106,18 @@ final class OrderedPools {
                 if (c == ScheduledThreadPoolExecutor.class) {
                     break;
                 }
-                if (c.getName().startsWith(SPRING_POOL + "$")) {
+                String name = c.getName();
+                if (name.startsWith(SPRING_POOL + "$") || name.startsWith(SPRING_SCHEDULER + "$")) {
                     continue;
                 }
                 if (declares(c, "beforeExecute", Thread.class, Runnable.class)
                         || declares(c, "afterExecute", Runnable.class, Throwable.class)
+                        || declares(c, "newTaskFor", Runnable.class, Object.class)
+                        || declares(c, "newTaskFor", Callable.class)
+                        || declares(c, "execute", Runnable.class)
+                        || declares(c, "submit", Runnable.class)
+                        || declares(c, "submit", Runnable.class, Object.class)
+                        || declares(c, "submit", Callable.class)
                         || declares(c, "decorateTask", Runnable.class, RunnableScheduledFuture.class)
                         || declares(c, "decorateTask", Callable.class, RunnableScheduledFuture.class)) {
                     return Boolean.TRUE;
@@ -179,6 +190,7 @@ final class OrderedPools {
         }
         String className = executor.getClass().getName();
         if (JDK_FINALIZABLE_DELEGATED.equals(className)
+                || JDK_AUTO_SHUTDOWN_DELEGATED.equals(className)
                 || JDK_DELEGATED_SCHEDULED.equals(className)) {
             return false;
         }
@@ -259,10 +271,12 @@ final class OrderedPools {
         }
         try {
             RejectedExecutionHandler handler = pool.getRejectedExecutionHandler();
-            if (handler instanceof ThreadPoolExecutor.DiscardPolicy
-                    || handler instanceof ThreadPoolExecutor.DiscardOldestPolicy) {
+            if (handler == null
+                    || (handler.getClass() != ThreadPoolExecutor.AbortPolicy.class
+                            && handler.getClass() != ThreadPoolExecutor.CallerRunsPolicy.class)) {
+                String handlerName = handler == null ? "null" : handler.getClass().getName();
                 return uncounted(reportedOwner, "its rejected execution handler, a "
-                        + handler.getClass().getName() + ", may silently discard tasks");
+                        + handlerName + ", may silently discard or inspect tasks");
             }
         } catch (Throwable e) {
             if (e instanceof VirtualMachineError) {
@@ -270,10 +284,14 @@ final class OrderedPools {
             }
             return uncounted(reportedOwner, "its pool's rejected execution handler cannot be read (" + e + ")");
         }
-        if (pool.getClass() == ScheduledThreadPoolExecutor.class) {
-            // Exact ScheduledThreadPoolExecutor always wraps execute/submit
-            // tasks in its own ScheduledFutureTask before enqueueing into
-            // DelayedWorkQueue, so the queue never casts the caller's task.
+        if (pool.getClass() == ScheduledThreadPoolExecutor.class
+                || (pool instanceof ScheduledThreadPoolExecutor
+                        && pool.getClass().getName().startsWith(SPRING_SCHEDULER + "$"))) {
+            // Exact ScheduledThreadPoolExecutor (and Spring's own
+            // ThreadPoolTaskScheduler internal subclass) always wraps
+            // execute/submit tasks in its own ScheduledFutureTask before
+            // enqueueing into DelayedWorkQueue, so the queue never casts the
+            // caller's task.
             return false;
         }
         Class<?> queue;
