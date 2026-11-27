@@ -62,7 +62,7 @@ public final class AsyncHonestyApp {
     private static final ExecutorService ASYNC_SERIALIZABLE_POOL = new SerializableOnlyExecutor(true);
     private static final ConcreteCustomPool CONCRETE_POOL = new ConcreteCustomPool();
     private static volatile java.util.concurrent.CountDownLatch VIRTUAL_RELEASE_LATCH;
-    private static volatile java.util.concurrent.CountDownLatch VIRTUAL_DONE_LATCH;
+    private static volatile Thread VIRTUAL_THREAD;
     // Simulates an external library's event loop (e.g. HttpClient/Netty/AWS SDK)
     // started outside any request, completing CompletableFutures asynchronously.
     private static final LinkedBlockingQueue<Runnable> EXTERNAL_LIBRARY_LOOP = new LinkedBlockingQueue<>();
@@ -240,62 +240,41 @@ public final class AsyncHonestyApp {
                 });
             } else if ("/method-ref".equals(path)) {
                 Collections.<Runnable>singletonList(() -> AsyncTail.ran()).forEach(PLAIN_POOL::execute);
-            } else if ("/virtual-thread".equals(path)) {
-                final long delay = ms;
-                VirtualThreadLauncher.launchDirect(() -> {
-                    sleepQuietly(delay);
-                    AsyncTail.ran();
-                });
-            } else if ("/virtual-builder".equals(path)) {
-                final long delay = ms;
-                VirtualThreadLauncher.launchBuilder(() -> {
-                    sleepQuietly(delay);
-                    AsyncTail.ran();
-                });
             } else if ("/virtual-thread-latch".equals(path)) {
                 final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-                final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
                 VIRTUAL_RELEASE_LATCH = release;
-                VIRTUAL_DONE_LATCH = done;
-                VirtualThreadLauncher.launchDirect(() -> {
+                VIRTUAL_THREAD = VirtualThreadLauncher.launchDirect(() -> {
                     try {
                         release.await(30, TimeUnit.SECONDS);
                         AsyncTail.ran();
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                    } finally {
-                        done.countDown();
                     }
                 });
             } else if ("/virtual-builder-latch".equals(path)) {
                 final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-                final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
                 VIRTUAL_RELEASE_LATCH = release;
-                VIRTUAL_DONE_LATCH = done;
-                VirtualThreadLauncher.launchBuilder(() -> {
+                VIRTUAL_THREAD = VirtualThreadLauncher.launchBuilder(() -> {
                     try {
                         release.await(30, TimeUnit.SECONDS);
                         AsyncTail.ran();
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                    } finally {
-                        done.countDown();
                     }
                 });
             } else if ("/release-virtual".equals(path)) {
                 java.util.concurrent.CountDownLatch release = VIRTUAL_RELEASE_LATCH;
-                java.util.concurrent.CountDownLatch done = VIRTUAL_DONE_LATCH;
+                Thread vt = VIRTUAL_THREAD;
                 if (release != null) {
                     release.countDown();
                 }
-                if (done != null) {
+                if (vt != null) {
                     try {
-                        done.await(5, TimeUnit.SECONDS);
+                        vt.join(5000);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
                 }
-                sleepQuietly(30);
             } else if ("/untracked-schedule".equals(path)) {
                 SCHED.schedule(() -> AsyncTail.ran(), 1, TimeUnit.MILLISECONDS);
             } else if ("/untracked-thread".equals(path)) {

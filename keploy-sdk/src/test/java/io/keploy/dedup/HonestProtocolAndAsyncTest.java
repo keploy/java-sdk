@@ -1467,8 +1467,8 @@ public class HonestProtocolAndAsyncTest {
             RequestGate.open("cf-dep", null);
             Object req = RequestGate.enter();
             CompletableFuture<Void> chain;
+            CountDownLatch gateSupplier = new CountDownLatch(1);
             try {
-                CountDownLatch gateSupplier = new CountDownLatch(1);
                 CompletableFuture<String> base = RequestGate.supplyAsync(() -> {
                     try {
                         gateSupplier.await(10, TimeUnit.SECONDS);
@@ -1487,10 +1487,12 @@ public class HonestProtocolAndAsyncTest {
                         Thread.currentThread().interrupt();
                     }
                 });
-                gateSupplier.countDown();
             } finally {
                 RequestGate.exit(req);
             }
+            // Release supplier AFTER RequestGate.exit(req) so audit deterministically
+            // observes count == 1 (only the supplier's deferred permit, never req + permit).
+            gateSupplier.countDown();
             assertTrue("supplier completed", supplierDone.await(10, TimeUnit.SECONDS));
             assertTrue("dependent audit stage started", auditStarted.await(10, TimeUnit.SECONDS));
             assertEquals("window count must stay 1 while dependent thenAccept(audit) runs",
@@ -2746,7 +2748,7 @@ public class HonestProtocolAndAsyncTest {
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(50); // Past gen 1 completion + 30ms base tail while gen 2 is still pending!
             RequestGate.open("sf3-while-gen2-pending", null);
-            assertEquals("gen 2 ScheduledFuture tracked via propagated context keeps tail active (SF-3)",
+            assertEquals("gen 2 scheduled via propagated context keeps tail active past gen 1 base tail (SF-3)",
                     Collections.singletonList("tail:sf3-retry"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             assertTrue("gen 2 started", gen2Started.await(5, TimeUnit.SECONDS));
