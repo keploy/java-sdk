@@ -118,8 +118,11 @@ public final class RequestGate {
     private static final int MAX_UNTRACKED_HANDLES = 64;
     private static final long UNARMED_HANDOFF_THROTTLE_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     // Short grace for a Thread subclass registered right before start() while
-    // still in Thread.State.NEW.
+    // still in Thread.State.NEW, and safety margin for Timer.cancel() wall-clock
+    // vs nanoTime() rounding (~1ms) so an already-firing one-shot task is never
+    // misclassified as cancelled-before-fire.
     private static final long HANDLE_START_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+    private static final long TIMER_CANCEL_MARGIN_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
     // Weakly-keyed maps of cancelled TimerTasks and Timers populated by rewritten
     // TimerTask.cancel() / Timer.cancel() call sites (zero JDK-internal reflection,
     // so no JDK 9-15 illegal-access warning when Keploy is absent).
@@ -4271,7 +4274,8 @@ public final class RequestGate {
                 Timer t = timerRef == null ? null : timerRef.get();
                 Long timerCancelledAt = t == null ? null : timerCancelledAtNanos(t);
                 if (timerCancelledAt != null) {
-                    boolean cancelledBeforeFirstFire = (timerCancelledAt.longValue() - timerExpectedFireAtNanos) < 0L
+                    boolean cancelledBeforeFirstFire =
+                            (timerCancelledAt.longValue() - timerExpectedFireAtNanos) < -TIMER_CANCEL_MARGIN_NANOS
                             && (!timerPeriodic || safeScheduledExecutionTime(task) == timerInitialScheduledExecMillis);
                     if (cancelledBeforeFirstFire) {
                         return false;

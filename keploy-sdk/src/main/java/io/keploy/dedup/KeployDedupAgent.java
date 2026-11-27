@@ -1283,7 +1283,7 @@ public final class KeployDedupAgent {
                 // test's own late hits: not a window, as after an END not
                 // taken.
                 lastEndedTestId = cut ? null : command.testId;
-                lastEndedMayEmitTail = !cut && (outcome.tailActiveAtEnd || JobGate.hasExpiredRunning());
+                lastEndedMayEmitTail = !cut && (outcome.tailActiveAtEnd || noServerEntry || JobGate.hasExpiredRunning());
                 return true;
             } catch (Exception e) {
                 // Not ACK for the same reason: nothing reached Keploy.
@@ -1663,6 +1663,9 @@ public final class KeployDedupAgent {
                         boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
                                 && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0
                                 && jobContams.isEmpty();
+                        if (noServerEntry) {
+                            tailActiveAtEnd = true;
+                        }
                         List<String> unverified = noServerEntry
                                 ? Collections.singletonList("no-server-entry")
                                 : Collections.<String>emptyList();

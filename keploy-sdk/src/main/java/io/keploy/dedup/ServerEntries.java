@@ -1317,12 +1317,14 @@ final class ServerEntries implements ClassFileTransformer {
                                 return;
                             }
                             if ("cancel".equals(mname) && "()V".equals(desc)) {
+                                // Record Timer.cancel() AFTER cancel() returns so
+                                // cancelledAtNanos never precedes an already-started fire.
                                 changed[0] = true;
                                 ensureExtraStack(1);
                                 super.visitInsn(Opcodes.DUP);
+                                super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteTimerCancelled",
                                         "(Ljava/util/Timer;)V", false);
-                                super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
                                 return;
                             }
                         }
