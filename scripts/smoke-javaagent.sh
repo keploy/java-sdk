@@ -312,7 +312,7 @@ public final class SmokeHarness {
             String json = next(records, mode);
             if (!json.contains("\"id\":\"" + id + "\"")
                     || !json.contains("\"smoke/Work\":[")
-                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]}")) {
+                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]")) {
                 throw new IllegalStateException("the record of a test that ran another copy of smoke/Work does"
                         + " not name it, alone, in classMismatch in " + mode + ": " + json);
             }
@@ -381,10 +381,10 @@ public final class SmokeHarness {
             OutputStream output = socket.getOutputStream();
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
-            // The whole answer: one line saying the command was taken, then
-            // the close.
+            // The whole answer: one line saying the command was taken (proto=3
+            // with capability flags), then the close.
             String ack = readAll(socket.getInputStream());
-            if (!"ACK proto=2\n".equals(ack)) {
+            if (!ack.startsWith("ACK proto=3 ") || !ack.contains("caps=") || !ack.endsWith("\n")) {
                 throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
         }
@@ -781,7 +781,7 @@ public final class TomcatHarness {
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
             String ack = readAll(socket.getInputStream());
-            if (!"ACK proto=2\n".equals(ack)) {
+            if (!ack.startsWith("ACK proto=3 ") || !ack.contains("caps=") || !ack.endsWith("\n")) {
                 throw new IllegalStateException("not taken: " + command + ": " + ack);
             }
         }
