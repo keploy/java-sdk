@@ -2103,11 +2103,12 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             RequestGate.untrackedTailWindowNanos = savedTailWindow;
 
-            // SF5: Expired job hop that fans out to an executor flags job-tail on active & next window!
+            // SF5: Expired job hop that fans out to an unverified executor flags job-tail on active & next window,
+            //      and on a verified executor propagates expired Attribution through gen 2 & gen 3!
             RequestGate.disarm();
             JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(40);
             RequestGate.open("sf5-arm", null);
-            CountDownLatch fanoutDone = new CountDownLatch(1);
+            Object unknownExecSf5 = new Object();
             Runnable hop1;
             Object jTok = JobGate.enter(new Object(), "scheduled");
             try {
@@ -2120,19 +2121,18 @@ public class HonestProtocolAndAsyncTest {
                     assertNull("hop1 expired so running() is null", JobGate.running());
                     assertNotNull("hop1 expiredRunningName() still knows job", JobGate.expiredRunningName());
                     JobGate.open();
-                    RequestGate.execute(pool, fanoutDone::countDown);
+                    RequestGate.hand(unknownExecSf5, () -> { });
                 });
             } finally {
                 JobGate.exit(jTok);
             }
             hop1.run();
-            assertTrue(fanoutDone.await(5, TimeUnit.SECONDS));
             List<String> sf5JobContams = JobGate.close();
-            assertTrue("expired hop fan-out must mark JobGate window job-tail (SF5): " + sf5JobContams,
+            assertTrue("expired hop unverified fan-out must mark JobGate window job-tail (SF5): " + sf5JobContams,
                     sf5JobContams.stream().anyMatch(s -> s.startsWith("job-tail:")));
             RequestGate.open("sf5-next", null);
             RequestGate.WindowOutcome sf5Next = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue("expired hop fan-out must mark next RequestGate window tail:job-tail (SF5): "
+            assertTrue("expired hop unverified fan-out must mark next RequestGate window tail:job-tail (SF5): "
                     + sf5Next.contaminations,
                     sf5Next.contaminations.stream().anyMatch(s -> s.startsWith("tail:job-tail:")));
 
@@ -2203,6 +2203,374 @@ public class HonestProtocolAndAsyncTest {
             pool.shutdownNow();
             stpe.shutdownNow();
         }
+    }
+
+    @Test(timeout = 60000)
+    public void r4RegressionsExecutingPastMaxLingeringLiveUntrackedHandlesMultiHopExpiredJobAndBytecodeFlagSites()
+            throws Exception {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
+        java.util.concurrent.ForkJoinPool fjp = new java.util.concurrent.ForkJoinPool(2);
+        java.util.Timer timer = new java.util.Timer(true);
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
+        long savedMaxLingering = RequestGate.maxLingeringNanos;
+        long savedJobMax = JobGate.handedJobMaxNanos;
+        try {
+            // SF-A: Actively executing task running PAST maxLingeringNanos MUST keep marking tail:<id>
+            //       until it actually exits, then clear cleanly!
+            RequestGate.disarm();
+            RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(50);
+            CountDownLatch taskStarted = new CountDownLatch(1);
+            CountDownLatch taskRelease = new CountDownLatch(1);
+            RequestGate.open("sfa-active", null);
+            Object reqSfa = RequestGate.enter();
+            try {
+                RequestGate.execute(pool, latchTask(taskStarted, taskRelease));
+            } finally {
+                RequestGate.exit(reqSfa);
+            }
+            assertTrue(taskStarted.await(5, TimeUnit.SECONDS));
+            assertFalse("cut while task executes", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(20)));
+            Thread.sleep(100); // Well past 50ms maxLingeringNanos while task is STILL executing!
+            RequestGate.open("sfa-past-cap", null);
+            assertEquals("actively executing task past maxLingeringNanos must STILL flag tail (SF-A)",
+                    Collections.singletonList("tail:sfa-active"),
+                    RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
+            taskRelease.countDown();
+            long drainDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (RequestGate.pendingByExecutorSize(pool) > 0 && System.nanoTime() < drainDeadline) {
+                Thread.sleep(5);
+            }
+            Thread.sleep(20);
+            RequestGate.open("sfa-after-exit", null);
+            assertEquals("clean after actively executing task finishes",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+
+            // SF-B: Untracked Thread.start() and periodic ScheduledFuture stay flagged past base tail
+            //       for as long as Thread.isAlive() / !ScheduledFuture.isDone()!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            CountDownLatch rawStarted = new CountDownLatch(1);
+            CountDownLatch rawRelease = new CountDownLatch(1);
+            Thread rawThread = new Thread(latchTask(rawStarted, rawRelease), "sfb-live-thread");
+            rawThread.setDaemon(true);
+            RequestGate.open("sfb-thread", null);
+            Object reqT = RequestGate.enter();
+            try {
+                RequestGate.startThread(rawThread);
+            } finally {
+                RequestGate.exit(reqT);
+            }
+            assertTrue(rawStarted.await(5, TimeUnit.SECONDS));
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            Thread.sleep(80); // Past 30ms base tail while rawThread.isAlive() is STILL true!
+            RequestGate.open("sfb-thread-still-alive", null);
+            assertEquals("live raw thread must keep marking tail past base window (SF-B)",
+                    Collections.singletonList("tail:sfb-thread"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            rawRelease.countDown();
+            rawThread.join(5000);
+            RequestGate.open("sfb-thread-dead", null);
+            assertEquals("clean once raw thread terminates",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // SF-B periodic ScheduledFuture:
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            RequestGate.open("sfb-periodic", null);
+            Object reqP = RequestGate.enter();
+            ScheduledFuture<?> periodic;
+            try {
+                periodic = RequestGate.scheduleAtFixedRate(stpe, () -> { }, 5, 40, TimeUnit.MILLISECONDS);
+            } finally {
+                RequestGate.exit(reqP);
+            }
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            Thread.sleep(100);
+            RequestGate.open("sfb-periodic-alive", null);
+            assertEquals("uncancelled periodic ScheduledFuture keeps marking tail (SF-B)",
+                    Collections.singletonList("tail:sfb-periodic"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            periodic.cancel(false);
+            RequestGate.open("sfb-periodic-cancelled", null);
+            assertEquals("clean once periodic ScheduledFuture is cancelled",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+
+            // SF-C: Multi-hop expired self-resubmitting job loop (gen 1 -> gen 2 -> gen 3) on verified
+            //       executor MUST stay marked job-tail across ALL generations until it stops!
+            RequestGate.disarm();
+            JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(35);
+            RequestGate.open("sfc-arm", null);
+            CountDownLatch gen3Entered = new CountDownLatch(1);
+            CountDownLatch gen3Release = new CountDownLatch(1);
+            CountDownLatch gen1Exited = new CountDownLatch(1);
+            CountDownLatch gen2Exited = new CountDownLatch(1);
+            Object jTokC = JobGate.enter(new Object(), "scheduled");
+            try {
+                RequestGate.execute(pool, () -> {
+                    try {
+                        Thread.sleep(60); // Gen 1 expires past 35ms budget!
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    assertNull("gen 1 expired", JobGate.running());
+                    RequestGate.execute(pool, () -> {
+                        try {
+                            gen1Exited.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        RequestGate.execute(pool, () -> {
+                            try {
+                                gen2Exited.await(5, TimeUnit.SECONDS);
+                                gen3Entered.countDown();
+                                gen3Release.await(5, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+                        gen2Exited.countDown();
+                    });
+                    gen1Exited.countDown();
+                });
+            } finally {
+                JobGate.exit(jTokC);
+            }
+            assertTrue("gen 3 entered after gen 1 and gen 2 exited", gen3Entered.await(10, TimeUnit.SECONDS));
+            JobGate.open();
+            List<String> gen3Contams = JobGate.close();
+            gen3Release.countDown();
+            assertTrue("gen 3 of expired self-resubmitting loop must STILL carry job-tail (SF-C): " + gen3Contams,
+                    gen3Contams.stream().anyMatch(s -> s.startsWith("job-tail:")));
+            long jobDrain = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (JobGate.activeRunCount() > 0 && System.nanoTime() < jobDrain) {
+                Thread.sleep(5);
+            }
+
+            // SF-E: Real bytecode-rewritten call sites via ServerEntries.wrapExecutorCalls for
+            //       TaskExecutor interface, TaskScheduler.schedule, Timer.schedule,
+            //       ForkJoinPool.execute/submit(ForkJoinTask), and Guava addListener/Futures.addCallback!
+            byte[] sfEBytes = ServerEntries.wrapExecutorCalls(generateSfEBytecodeClass("com/acme/SfECallSites"));
+            assertNotNull("SfECallSites must be rewritten by ServerEntries.wrapExecutorCalls", sfEBytes);
+            Class<?> sfEClass = new ByteLoader(getClass().getClassLoader()).define("com.acme.SfECallSites", sfEBytes);
+
+            // SF-E.1: TaskExecutor interface with hooked+verified ThreadPoolTaskExecutor (CLEAN)
+            //         vs unhooked custom TaskExecutor (FLAGGED).
+            org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springTe =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+            springTe.initialize();
+            try {
+                ServerEntries.markSpringExecutorHookedForTests(springTe.getClass().getName());
+                RequestGate.disarm();
+                RequestGate.open("sfe-spring-te", null);
+                Object r1 = RequestGate.enter();
+                CountDownLatch teRan = new CountDownLatch(1);
+                try {
+                    sfEClass.getMethod("callTaskExecutor",
+                            org.springframework.core.task.TaskExecutor.class, Runnable.class)
+                            .invoke(null, springTe, (Runnable) teRan::countDown);
+                } finally {
+                    RequestGate.exit(r1);
+                }
+                assertTrue(teRan.await(5, TimeUnit.SECONDS));
+                assertEquals("rewritten TaskExecutor.execute on hooked Spring pool must stay clean (SF-E)",
+                        Collections.<String>emptyList(),
+                        RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+                RequestGate.disarm();
+                RequestGate.open("sfe-custom-te", null);
+                Object r2 = RequestGate.enter();
+                org.springframework.core.task.TaskExecutor customTe = r -> r.run();
+                try {
+                    sfEClass.getMethod("callTaskExecutor",
+                            org.springframework.core.task.TaskExecutor.class, Runnable.class)
+                            .invoke(null, customTe, (Runnable) () -> { });
+                } finally {
+                    RequestGate.exit(r2);
+                }
+                List<String> customTeContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
+                assertTrue("rewritten TaskExecutor.execute on unhooked impl must flag (SF-E): " + customTeContams,
+                        customTeContams.contains("untracked-executor:" + customTe.getClass().getName()));
+            } finally {
+                springTe.shutdown();
+            }
+
+            // SF-E.2: Spring TaskScheduler.schedule(Runnable, Date) flags AND tracks returned ScheduledFuture!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler springTs =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
+            springTs.initialize();
+            try {
+                RequestGate.open("sfe-task-scheduler", null);
+                Object rTs = RequestGate.enter();
+                ScheduledFuture<?> tsFut;
+                try {
+                    tsFut = (ScheduledFuture<?>) sfEClass.getMethod("callTaskScheduler",
+                            org.springframework.scheduling.TaskScheduler.class, Runnable.class, java.util.Date.class)
+                            .invoke(null, springTs, (Runnable) () -> { },
+                                    new java.util.Date(System.currentTimeMillis() + 5000));
+                } finally {
+                    RequestGate.exit(rTs);
+                }
+                List<String> tsContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
+                assertTrue("rewritten TaskScheduler.schedule must flag (SF-E): " + tsContams,
+                        tsContams.contains("untracked-async:schedule"));
+                Thread.sleep(60); // Past 30ms base tail while ScheduledFuture is still pending!
+                RequestGate.open("sfe-ts-alive", null);
+                assertEquals("TaskScheduler ScheduledFuture keeps tail active until cancelled (SF-B/SF-E)",
+                        Collections.singletonList("tail:sfe-task-scheduler"),
+                        RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+                tsFut.cancel(false);
+            } finally {
+                springTs.shutdown();
+                RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            }
+
+            // SF-E.3: Timer.schedule(TimerTask, long) flags untracked-async:timer!
+            RequestGate.disarm();
+            RequestGate.open("sfe-timer", null);
+            Object rTimer = RequestGate.enter();
+            CountDownLatch timerRan = new CountDownLatch(1);
+            try {
+                sfEClass.getMethod("callTimer", java.util.Timer.class, java.util.TimerTask.class, long.class)
+                        .invoke(null, timer, new java.util.TimerTask() {
+                            @Override
+                            public void run() {
+                                timerRan.countDown();
+                            }
+                        }, 1L);
+            } finally {
+                RequestGate.exit(rTimer);
+            }
+            assertTrue(timerRan.await(5, TimeUnit.SECONDS));
+            assertTrue("rewritten Timer.schedule must flag untracked-async:timer (SF-E)",
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                            .contains("untracked-async:timer"));
+
+            // SF-E.4: ForkJoinPool.execute(ForkJoinTask) flags untracked-async:forkjoin-task!
+            RequestGate.disarm();
+            RequestGate.open("sfe-fjp", null);
+            Object rFjp = RequestGate.enter();
+            CountDownLatch fjpRan = new CountDownLatch(1);
+            try {
+                sfEClass.getMethod("callFjpTask", java.util.concurrent.ForkJoinPool.class,
+                        java.util.concurrent.ForkJoinTask.class)
+                        .invoke(null, fjp, java.util.concurrent.ForkJoinTask.adapt(fjpRan::countDown));
+            } finally {
+                RequestGate.exit(rFjp);
+            }
+            assertTrue(fjpRan.await(5, TimeUnit.SECONDS));
+            assertTrue("rewritten ForkJoinPool.execute(ForkJoinTask) must flag (SF-E)",
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                            .contains("untracked-async:forkjoin-task"));
+
+            // SF-E.5: Guava ListenableFuture.addListener(Runnable, Executor) flags untracked-async:guava-future!
+            RequestGate.disarm();
+            RequestGate.open("sfe-guava", null);
+            Object rGuava = RequestGate.enter();
+            try {
+                sfEClass.getMethod("callGuavaListener", FakeListenableFuture.class, Runnable.class, Executor.class)
+                        .invoke(null, (FakeListenableFuture) (r, e) -> r.run(), (Runnable) () -> { }, pool);
+            } finally {
+                RequestGate.exit(rGuava);
+            }
+            assertTrue("rewritten addListener(Runnable, Executor) must flag untracked-async:guava-future (SF-E)",
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                            .contains("untracked-async:guava-future"));
+        } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+            JobGate.handedJobMaxNanos = savedJobMax;
+            timer.cancel();
+            fjp.shutdownNow();
+            pool.shutdownNow();
+            stpe.shutdownNow();
+        }
+    }
+
+    public interface FakeListenableFuture {
+        void addListener(Runnable listener, Executor executor);
+    }
+
+    private static byte[] generateSfEBytecodeClass(String className) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+
+        // callTaskExecutor(TaskExecutor, Runnable) -> INVOKEINTERFACE TaskExecutor.execute(Runnable)V
+        MethodVisitor te = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callTaskExecutor",
+                "(Lorg/springframework/core/task/TaskExecutor;Ljava/lang/Runnable;)V", null, null);
+        te.visitCode();
+        te.visitVarInsn(Opcodes.ALOAD, 0);
+        te.visitVarInsn(Opcodes.ALOAD, 1);
+        te.visitMethodInsn(Opcodes.INVOKEINTERFACE, "org/springframework/core/task/TaskExecutor",
+                "execute", "(Ljava/lang/Runnable;)V", true);
+        te.visitInsn(Opcodes.RETURN);
+        te.visitMaxs(2, 2);
+        te.visitEnd();
+
+        // callTaskScheduler(TaskScheduler, Runnable, Date) -> ScheduledFuture
+        MethodVisitor ts = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callTaskScheduler",
+                "(Lorg/springframework/scheduling/TaskScheduler;Ljava/lang/Runnable;Ljava/util/Date;)"
+                        + "Ljava/util/concurrent/ScheduledFuture;", null, null);
+        ts.visitCode();
+        ts.visitVarInsn(Opcodes.ALOAD, 0);
+        ts.visitVarInsn(Opcodes.ALOAD, 1);
+        ts.visitVarInsn(Opcodes.ALOAD, 2);
+        ts.visitMethodInsn(Opcodes.INVOKEINTERFACE, "org/springframework/scheduling/TaskScheduler",
+                "schedule", "(Ljava/lang/Runnable;Ljava/util/Date;)Ljava/util/concurrent/ScheduledFuture;", true);
+        ts.visitInsn(Opcodes.ARETURN);
+        ts.visitMaxs(3, 3);
+        ts.visitEnd();
+
+        // callTimer(Timer, TimerTask, long) -> void
+        MethodVisitor tm = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callTimer",
+                "(Ljava/util/Timer;Ljava/util/TimerTask;J)V", null, null);
+        tm.visitCode();
+        tm.visitVarInsn(Opcodes.ALOAD, 0);
+        tm.visitVarInsn(Opcodes.ALOAD, 1);
+        tm.visitVarInsn(Opcodes.LLOAD, 2);
+        tm.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/Timer",
+                "schedule", "(Ljava/util/TimerTask;J)V", false);
+        tm.visitInsn(Opcodes.RETURN);
+        tm.visitMaxs(4, 4);
+        tm.visitEnd();
+
+        // callFjpTask(ForkJoinPool, ForkJoinTask) -> void
+        MethodVisitor fj = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callFjpTask",
+                "(Ljava/util/concurrent/ForkJoinPool;Ljava/util/concurrent/ForkJoinTask;)V", null, null);
+        fj.visitCode();
+        fj.visitVarInsn(Opcodes.ALOAD, 0);
+        fj.visitVarInsn(Opcodes.ALOAD, 1);
+        fj.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/concurrent/ForkJoinPool",
+                "execute", "(Ljava/util/concurrent/ForkJoinTask;)V", false);
+        fj.visitInsn(Opcodes.RETURN);
+        fj.visitMaxs(2, 2);
+        fj.visitEnd();
+
+        // callGuavaListener(FakeListenableFuture, Runnable, Executor) -> void
+        String flf = FakeListenableFuture.class.getName().replace('.', '/');
+        MethodVisitor gv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callGuavaListener",
+                "(L" + flf + ";Ljava/lang/Runnable;Ljava/util/concurrent/Executor;)V", null, null);
+        gv.visitCode();
+        gv.visitVarInsn(Opcodes.ALOAD, 0);
+        gv.visitVarInsn(Opcodes.ALOAD, 1);
+        gv.visitVarInsn(Opcodes.ALOAD, 2);
+        gv.visitMethodInsn(Opcodes.INVOKEINTERFACE, flf,
+                "addListener", "(Ljava/lang/Runnable;Ljava/util/concurrent/Executor;)V", true);
+        gv.visitInsn(Opcodes.RETURN);
+        gv.visitMaxs(3, 3);
+        gv.visitEnd();
+
+        cw.visitEnd();
+        return cw.toByteArray();
     }
 
     @Test(timeout = 60000)

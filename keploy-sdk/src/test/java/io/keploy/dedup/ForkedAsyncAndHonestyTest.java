@@ -289,6 +289,36 @@ public class ForkedAsyncAndHonestyTest {
     }
 
     @Test(timeout = 120000)
+    public void forkedVirtualThreadStartAndBuilderFlagAndTrackLiveness() throws Exception {
+        String spec = System.getProperty("java.specification.version");
+        org.junit.Assume.assumeTrue("Virtual threads require JDK 21+",
+                !spec.startsWith("1.") && Integer.parseInt(spec) >= 21);
+
+        // External-JaCoCo prefix mode ("org/example/servers/") automatically rewrites
+        // the dynamically defined org/example/servers/VirtualThreadHelper on load!
+        try (ForkedApp app = startFork("tomcat", "2000", true, false, null, null)) {
+            String covDirect = app.runHttpTest("ts/vthread-1", "/virtual-thread?ms=350");
+            assertTrue("Thread.startVirtualThread must contaminate COV (SF-D): " + covDirect,
+                    covDirect.contains("\"untracked-async:virtual-thread\""));
+
+            String covAfterDirect = app.runHttpTest("ts/vthread-next", "/clean");
+            assertTrue("next window while virtual thread is alive must carry tail (SF-B/SF-D): " + covAfterDirect,
+                    covAfterDirect.contains("\"tail:ts/vthread-1\""));
+            Thread.sleep(450);
+
+            String covBuilder = app.runHttpTest("ts/vbuilder-1", "/virtual-builder?ms=350");
+            assertTrue("Thread.ofVirtual().start() must contaminate COV (SF-D): " + covBuilder,
+                    covBuilder.contains("\"untracked-async:thread-builder\""));
+
+            String covAfterBuilder = app.runHttpTest("ts/vbuilder-next", "/clean");
+            assertTrue("next window while builder virtual thread is alive must carry tail (SF-B/SF-D): "
+                    + covAfterBuilder,
+                    covAfterBuilder.contains("\"tail:ts/vbuilder-1\""));
+            Thread.sleep(450);
+        }
+    }
+
+    @Test(timeout = 120000)
     public void forkedKafkaListenerHookEmitsTopicAndBeanAttributionInTcpCov() throws Exception {
         try (ForkedApp kafka = startFork("kafka", "2000", false, false, null, null)) {
             JsonObject hello = parseHello(kafka.initialHello);
@@ -312,8 +342,9 @@ public class ForkedAsyncAndHonestyTest {
         for (Class<?> cls : new Class<?>[] {
                 AsyncHonestyApp.class, AsyncHonestyApp.AsyncServlet.class,
                 AsyncHonestyApp.SerializableOnlyExecutor.class, AsyncHonestyApp.ConcreteCustomPool.class,
-                AsyncHonestyApp.MyWorkerThread.class, AsyncHonestyApp.OrdersListenerBean.class,
-                AsyncHonestyApp.FakeKafkaProps.class, AsyncTail.class, Tail.class
+                AsyncHonestyApp.MyWorkerThread.class, AsyncHonestyApp.VirtualThreadLauncher.class,
+                AsyncHonestyApp.OrdersListenerBean.class, AsyncHonestyApp.FakeKafkaProps.class,
+                AsyncTail.class, Tail.class
         }) {
             String key = cls.getName().replace('.', '/') + ".class";
             File copy = new File(classes, key);

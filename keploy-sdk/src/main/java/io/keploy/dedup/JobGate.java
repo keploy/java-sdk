@@ -154,11 +154,12 @@ public final class JobGate {
         RequestGate.noteExternalUntrackedTail(reason, extraTailNanos);
     }
 
-    // expiredRunningName returns the job name if this thread is currently
-    // executing an expired handed-off job Run (whose runningAttribution()
-    // returns null so chained wrapping stops, while fan-out work from it is
-    // still flagged via job-tail:<name>).
-    static String expiredRunningName() {
+    // expiredAttribution returns an already-expired Attribution if this thread
+    // is currently executing an expired handed-off job Run. Verified executors
+    // wrap hand-offs with this expired Attribution so multi-hop self-resubmitting
+    // loops and long fan-out tasks keep marking overlapping windows "job-tail:"
+    // until they actually exit, while JobGate.running() still returns null.
+    static Attribution expiredAttribution() {
         Run run = CURRENT.get();
         if (run == null) {
             return null;
@@ -166,11 +167,18 @@ public final class JobGate {
         long now = System.nanoTime();
         while (run != null) {
             if (!run.over && run.isExpired(now)) {
-                return run.name;
+                return new Attribution(run.name, true, run.expiresAtNanos);
             }
             run = run.outer;
         }
         return null;
+    }
+
+    // expiredRunningName returns the job name if this thread is currently
+    // executing an expired handed-off job Run.
+    static String expiredRunningName() {
+        Attribution expired = expiredAttribution();
+        return expired == null ? null : expired.name;
     }
 
     // detachThread restores CURRENT without removing the Run from RUNNING, so

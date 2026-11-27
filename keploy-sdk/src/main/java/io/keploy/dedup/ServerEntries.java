@@ -176,6 +176,9 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/concurrent/CompletableFuture",
             "java/util/concurrent/CompletionStage",
             "java/lang/Thread",
+            "java/lang/Thread$Builder",
+            "java/lang/Thread$Builder$OfVirtual",
+            "java/lang/Thread$Builder$OfPlatform",
             "java/util/Timer",
             "org/springframework/scheduling/TaskScheduler",
             "com/google/common/util/concurrent/Futures",
@@ -193,7 +196,7 @@ final class ServerEntries implements ClassFileTransformer {
     private static final Set<String> TARGET_ASYNC_METHOD_NAMES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "execute", "submit", "submitListenable", "submitCompletable",
             "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
-            "invokeAny", "fork", "subscribe", "start",
+            "invokeAny", "fork", "subscribe", "start", "startVirtualThread",
             "addListener", "addCallback", "transform", "transformAsync", "catching", "catchingAsync",
             "poll", "basicConsume", "receive", "setMessageListener")));
 
@@ -451,11 +454,13 @@ final class ServerEntries implements ClassFileTransformer {
                     appRewriteFailed = true;
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
                 }
-            } else if (className != null && isRewriteAllowedPackage(className)) {
+            } else if (className != null && isRewriteAllowedPackage(className)
+                    && !isKnownMessagingPoolWrapper(className)) {
                 // Even when KEPLOY_JAVA_ASYNC_CALLSITES=off or no app allow-list
                 // is configured, read-only CP scan still detects direct raw
                 // Kafka/RabbitMQ/JMS consumer calls so listenerContamination
-                // stays honest without modifying any bytecode.
+                // stays honest without modifying any bytecode (skipping known
+                // JMS/RabbitMQ pooling/recovery wrappers used by Spring Boot).
                 scanRawConsumerCalls(classfileBuffer);
             }
             return null;
@@ -647,6 +652,12 @@ final class ServerEntries implements ClassFileTransformer {
         return appPackagePrefix != null
                 && className.startsWith(appPackagePrefix)
                 && !isShadedOrRelocated(className);
+    }
+
+    private static boolean isKnownMessagingPoolWrapper(String className) {
+        return className.startsWith("org/messaginghub/pooled/")
+                || className.startsWith("org/apache/activemq/jms/pool/")
+                || className.startsWith("com/rabbitmq/client/impl/recovery/");
     }
 
     private static boolean isInternalOrAgentClass(String className) {
@@ -1025,7 +1036,13 @@ final class ServerEntries implements ClassFileTransformer {
         if ("fork".equals(mname) && "()Ljava/util/concurrent/ForkJoinTask;".equals(desc)) {
             return true;
         }
-        if ("java/lang/Thread".equals(owner) && "start".equals(mname) && "()V".equals(desc)) {
+        if ("java/lang/Thread".equals(owner)
+                && (("start".equals(mname) && "()V".equals(desc))
+                        || ("startVirtualThread".equals(mname)
+                                && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)))) {
+            return true;
+        }
+        if ("start".equals(mname) && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
             return true;
         }
         return isReactorSubscribe(owner, mname);
@@ -1282,6 +1299,27 @@ final class ServerEntries implements ClassFileTransformer {
                                     "(Ljava/lang/Thread;)V", false);
                             return;
                         }
+                        if (opcode == Opcodes.INVOKESTATIC
+                                && "java/lang/Thread".equals(owner)
+                                && "startVirtualThread".equals(mname)
+                                && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
+                            emitUntrackedFlag("untracked-async:virtual-thread");
+                            super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                            super.visitInsn(Opcodes.DUP);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedThread",
+                                    "(Ljava/lang/Object;)V", false);
+                            return;
+                        }
+                        if ((opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
+                                && "start".equals(mname)
+                                && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
+                            emitUntrackedFlag("untracked-async:thread-builder");
+                            super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                            super.visitInsn(Opcodes.DUP);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedThread",
+                                    "(Ljava/lang/Object;)V", false);
+                            return;
+                        }
                         // Flag-only async submission sites (task untouched, 100% app-safe).
                         if (isGuavaAsyncCall(opcode, owner, mname, desc)) {
                             emitUntrackedFlag("untracked-async:guava-future");
@@ -1306,6 +1344,13 @@ final class ServerEntries implements ClassFileTransformer {
                             } else if (isUntrackedScheduleOrInvokeAny(mname, desc)) {
                                 emitUntrackedFlag("untracked-async:" + ("invokeAny".equals(mname)
                                         ? "invokeAny" : "schedule"));
+                                if (desc.endsWith(")Ljava/util/concurrent/ScheduledFuture;")) {
+                                    super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                                    super.visitInsn(Opcodes.DUP);
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedFuture",
+                                            "(Ljava/lang/Object;)V", false);
+                                    return;
+                                }
                             } else if ("fork".equals(mname)
                                     && "()Ljava/util/concurrent/ForkJoinTask;".equals(desc)) {
                                 emitUntrackedFlag("untracked-async:fork");

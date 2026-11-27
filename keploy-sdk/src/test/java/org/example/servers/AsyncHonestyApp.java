@@ -238,6 +238,18 @@ public final class AsyncHonestyApp {
                 });
             } else if ("/method-ref".equals(path)) {
                 Collections.<Runnable>singletonList(() -> AsyncTail.ran()).forEach(PLAIN_POOL::execute);
+            } else if ("/virtual-thread".equals(path)) {
+                final long delay = ms;
+                VirtualThreadLauncher.launchDirect(() -> {
+                    sleepQuietly(delay);
+                    AsyncTail.ran();
+                });
+            } else if ("/virtual-builder".equals(path)) {
+                final long delay = ms;
+                VirtualThreadLauncher.launchBuilder(() -> {
+                    sleepQuietly(delay);
+                    AsyncTail.ran();
+                });
             } else if ("/untracked-schedule".equals(path)) {
                 SCHED.schedule(() -> AsyncTail.ran(), 1, TimeUnit.MILLISECONDS);
             } else if ("/untracked-thread".equals(path)) {
@@ -262,6 +274,82 @@ public final class AsyncHonestyApp {
                 t.setDaemon(true);
                 return t;
             });
+        }
+    }
+
+    /**
+     * Dynamically defines a class in {@code org.example.servers} containing real
+     * JDK 21 {@code Thread.startVirtualThread(Runnable)} and
+     * {@code Thread.ofVirtual().start(Runnable)} bytecode so tests compiled with
+     * {@code --release 8} still exercise {@code ServerEntries} rewriting those
+     * exact opcodes in a forked JDK 21 JVM.
+     */
+    public static final class VirtualThreadLauncher {
+        private static volatile Class<?> helperClass;
+
+        private static Class<?> helper() throws Exception {
+            Class<?> c = helperClass;
+            if (c != null) {
+                return c;
+            }
+            String internal = "org/example/servers/VirtualThreadHelper";
+            ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, internal, null, "java/lang/Object", null);
+            MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+            init.visitCode();
+            init.visitVarInsn(Opcodes.ALOAD, 0);
+            init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+            init.visitInsn(Opcodes.RETURN);
+            init.visitMaxs(1, 1);
+            init.visitEnd();
+
+            MethodVisitor direct = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "startDirect",
+                    "(Ljava/lang/Runnable;)Ljava/lang/Thread;", null, null);
+            direct.visitCode();
+            direct.visitVarInsn(Opcodes.ALOAD, 0);
+            direct.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Thread", "startVirtualThread",
+                    "(Ljava/lang/Runnable;)Ljava/lang/Thread;", false);
+            direct.visitInsn(Opcodes.ARETURN);
+            direct.visitMaxs(1, 1);
+            direct.visitEnd();
+
+            MethodVisitor builder = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "startBuilder",
+                    "(Ljava/lang/Runnable;)Ljava/lang/Thread;", null, null);
+            builder.visitCode();
+            builder.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Thread", "ofVirtual",
+                    "()Ljava/lang/Thread$Builder$OfVirtual;", false);
+            builder.visitVarInsn(Opcodes.ALOAD, 0);
+            builder.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/lang/Thread$Builder$OfVirtual", "start",
+                    "(Ljava/lang/Runnable;)Ljava/lang/Thread;", true);
+            builder.visitInsn(Opcodes.ARETURN);
+            builder.visitMaxs(2, 1);
+            builder.visitEnd();
+
+            cw.visitEnd();
+            byte[] bytes = cw.toByteArray();
+            c = new ClassLoader(AsyncHonestyApp.class.getClassLoader()) {
+                Class<?> define() {
+                    return defineClass("org.example.servers.VirtualThreadHelper", bytes, 0, bytes.length);
+                }
+            }.define();
+            helperClass = c;
+            return c;
+        }
+
+        public static Thread launchDirect(Runnable r) {
+            try {
+                return (Thread) helper().getMethod("startDirect", Runnable.class).invoke(null, r);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public static Thread launchBuilder(Runnable r) {
+            try {
+                return (Thread) helper().getMethod("startBuilder", Runnable.class).invoke(null, r);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
