@@ -188,7 +188,7 @@ public class HonestProtocolAndAsyncTest {
         assertEquals("uid-1234", h1.get("podUid").getAsString());
         assertEquals("orders-pod-0", h1.get("podName").getAsString());
         assertEquals("sess-abc", h1.get("sessionId").getAsString());
-        assertEquals(KeployDedupAgent.JVM_NONCE, h1.get("jvmNonce").getAsString());
+        assertEquals(KeployDedupAgent.jvmNonce(), h1.get("jvmNonce").getAsString());
         assertFalse("buildId must be non-empty", h1.get("buildId").getAsString().isEmpty());
         assertFalse(h1.get("windowCut").getAsBoolean());
         assertFalse(h1.get("contaminated").getAsBoolean());
@@ -249,12 +249,43 @@ public class HonestProtocolAndAsyncTest {
         JsonObject h7 = parseHello(connectAndReadHello(true));
         assertFalse("JPMS skipped must declare asyncExecutors=false", h7.get("asyncExecutors").getAsBoolean());
 
-        // Case 8: Listener hook failure -> listenerContamination must be false.
+        // Case 8: Listener hook failure OR unhooked consumer -> listenerContamination must be false.
         ServerEntries.setHookStatusForTests(false, true, false);
         JsonObject h8 = parseHello(connectAndReadHello(true));
         assertFalse("listener hook failure must declare listenerContamination=false",
                 h8.get("listenerContamination").getAsBoolean());
         ServerEntries.setHookStatusForTests(false, false, false);
+
+        // Case 8b (S4): Unhooked consumer (e.g. KafkaStreams) -> listenerContamination must be false.
+        ServerEntries entries = new ServerEntries(true);
+        entries.transform(getClass().getClassLoader(), "org/apache/kafka/streams/KafkaStreams", null, null,
+                generatePlainClass("org/apache/kafka/streams/KafkaStreams"));
+        JsonObject h8b = parseHello(connectAndReadHello(true));
+        assertFalse("KafkaStreams must declare listenerContamination=false",
+                h8b.get("listenerContamination").getAsBoolean());
+        ServerEntries.setHookStatusForTests(false, false, false);
+
+        // Case 8c (S5): Uncounted servers (gRPC, Vert.x, Micronaut, JDK HttpServer) -> windowCut & asyncExecutors false.
+        for (String srv : new String[] {
+                "io/grpc/netty/NettyServer",
+                "io/vertx/core/http/impl/HttpServerImpl",
+                "io/micronaut/http/server/netty/NettyHttpServer",
+                "sun/net/httpserver/ServerImpl"
+        }) {
+            ServerEntries.restoreUncounted(Collections.<String>emptySet());
+            entries.transform(getClass().getClassLoader(), srv, null, null, generatePlainClass(srv));
+            JsonObject hs = parseHello(connectAndReadHello(true));
+            assertFalse(srv + " must declare windowCut=false", hs.get("windowCut").getAsBoolean());
+            assertFalse(srv + " must declare asyncExecutors=false", hs.get("asyncExecutors").getAsBoolean());
+        }
+        ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+        // Case 8d (Nit): App rewrite failure -> asyncExecutors must be false.
+        ServerEntries.setHookStatusForTests(false, false, false, true);
+        JsonObject h8d = parseHello(connectAndReadHello(true));
+        assertFalse("app rewrite failure must declare asyncExecutors=false",
+                h8d.get("asyncExecutors").getAsBoolean());
+        ServerEntries.setHookStatusForTests(false, false, false, false);
 
         // Case 9: classpath fallback (executorCallSitesEnabled=false) -> asyncExecutors must be false.
         KeployDedupAgent.executorCallSitesEnabled = false;
@@ -1001,9 +1032,10 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(req2);
             }
             RequestGate.WindowOutcome decOutcome = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("unknown decorator carries tail from prior untracked window: " + decOutcome.contaminations,
+                    decOutcome.contaminations.contains("tail:t-unknown"));
             assertTrue("unknown decorator contaminates window: " + decOutcome.contaminations,
-                    !decOutcome.contaminations.isEmpty()
-                            && decOutcome.contaminations.get(0).startsWith("untracked-executor:"));
+                    decOutcome.contaminations.stream().anyMatch(s -> s.startsWith("untracked-executor:")));
             assertTrue(ran.await(10, TimeUnit.SECONDS));
         } finally {
             priority.shutdownNow();
@@ -1094,8 +1126,13 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("chained self-resubmitting job task must expire at hop 1 deadline, hops=" + hops.get(),
                     expiredHopSeen.await(10, TimeUnit.SECONDS));
             assertTrue("multiple hops executed before expiry", hops.get() >= 2);
+            // Wait briefly for the expired hop's finally block to call JobGate.exit().
+            long exitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (JobGate.activeRunCount() > 0 && System.nanoTime() < exitDeadline) {
+                Thread.sleep(5);
+            }
             JobGate.open();
-            assertEquals("no contamination after chain deadline expires",
+            assertEquals("no contamination after expired chain hop exits",
                     Collections.<String>emptyList(), JobGate.close());
         } finally {
             pool.shutdownNow();
@@ -1544,7 +1581,13 @@ public class HonestProtocolAndAsyncTest {
     public void pendingByFutureDoesNotLeakSelfReferencingCancellableJob() throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
+        CountDownLatch blockStart = new CountDownLatch(1);
+        CountDownLatch blockRel = new CountDownLatch(1);
         try {
+            // Block the single worker so job sits queued and actually enters PENDING_BY_FUTURE.
+            pool.execute(latchTask(blockStart, blockRel));
+            assertTrue(blockStart.await(10, TimeUnit.SECONDS));
+
             RequestGate.open("leak-check", null);
             Object req = RequestGate.enter();
             WeakReference<SelfReferencingJob> weakJob;
@@ -1552,9 +1595,13 @@ public class HonestProtocolAndAsyncTest {
                 SelfReferencingJob job = new SelfReferencingJob();
                 weakJob = new WeakReference<>(job);
                 job.future = RequestGate.submit(pool, job);
+                assertEquals("queued submit must actually populate PENDING_BY_FUTURE",
+                        1, RequestGate.pendingByFutureSize());
+                blockRel.countDown();
                 job.future.get(10, TimeUnit.SECONDS);
                 job = null;
             } finally {
+                blockRel.countDown();
                 RequestGate.exit(req);
             }
             assertTrue(RequestGate.await(TimeUnit.SECONDS.toNanos(5)));
@@ -1568,6 +1615,7 @@ public class HonestProtocolAndAsyncTest {
             assertNull("self-referencing job.future = exec.submit(job) must be GC'd with no leak",
                     weakJob.get());
         } finally {
+            blockRel.countDown();
             pool.shutdownNow();
         }
     }
@@ -1607,35 +1655,43 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void unarmedKeployAbsentIsNoOpAndFirstArmedWindowMarksArmedMidFlight() throws Exception {
+    public void unarmedKeployAbsentIsNoOpAndMarksArmedMidFlightWhileUnarmedWorkRemainsInFlight() throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
         try {
             RequestGate.disarm();
             assertFalse(RequestGate.isArmed());
 
-            // While unarmed: RequestGate.enter returns null, tasks are NOT wrapped, JobGate does nothing.
-            Object token = RequestGate.enter();
-            assertNull("unarmed RequestGate.enter must be a no-op", token);
+            // While unarmed: RequestGate.enter and JobGate.enter return the same static
+            // zero-allocation sentinel token, tasks are NOT wrapped, and JobGate has 0 active runs.
+            Object reqTok = RequestGate.enter();
+            assertTrue("unarmed RequestGate.enter returns static sentinel", RequestGate.isUnarmedToken(reqTok));
             Runnable raw = () -> { };
             assertSame("unarmed RequestGate.hand must not wrap", raw, RequestGate.hand(pool, raw));
             Object jobTok = JobGate.enter(new Object(), "quartz");
-            assertNull("unarmed JobGate.enter must be a no-op", jobTok);
+            assertSame("unarmed JobGate.enter returns the same zero-allocation sentinel", reqTok, jobTok);
             assertEquals("unarmed JobGate has zero active runs", 0, JobGate.activeRunCount());
             assertEquals("unarmed PENDING_BY_FUTURE stays 0", 0, RequestGate.pendingByFutureSize());
-            RequestGate.exit(token);
-            JobGate.exit(jobTok);
+            RequestGate.exit(reqTok);
 
-            // Now arm via first START -> first armed window must be contaminated with "armed-mid-flight".
+            // B3: Long-running job started BEFORE arming stays in flight across Tests 1 AND 2 ->
+            // BOTH Test 1 AND Test 2 MUST be marked "armed-mid-flight"!
             RequestGate.open("first-armed", null);
             assertTrue(RequestGate.isArmed());
             RequestGate.WindowOutcome first = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertEquals(Collections.singletonList("armed-mid-flight"), first.contaminations);
 
-            // Second armed window is clean.
-            RequestGate.open("second-armed", null);
+            RequestGate.open("second-armed-still-in-flight", null);
             RequestGate.WindowOutcome second = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertEquals(Collections.<String>emptyList(), second.contaminations);
+            assertEquals("in-flight unarmed job must keep marking subsequent windows armed-mid-flight",
+                    Collections.singletonList("armed-mid-flight"), second.contaminations);
+
+            // Once the pre-arming job finally exits, Test 3 is clean.
+            JobGate.exit(jobTok);
+            assertEquals(0L, RequestGate.unarmedInFlight());
+            RequestGate.open("third-armed-after-exit", null);
+            RequestGate.WindowOutcome third = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals(Collections.<String>emptyList(), third.contaminations);
         } finally {
             pool.shutdownNow();
         }
@@ -1662,14 +1718,187 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void shadedAndRelocatedPackagesAreSkippedInPrefixMode() {
+    public void shadedAndRelocatedPackagesAreSkippedOnlyInPrefixModeAndVendorIsNotSkipped() {
         ServerEntries prefixed = new ServerEntries(true, Collections.<String>emptySet(), "com/acme/");
         assertTrue(prefixed.shouldRewriteExecutorCalls("com/acme/service/OrderService"));
+        assertTrue("app package /vendor/ must NOT be skipped (S6)",
+                prefixed.shouldRewriteExecutorCalls("com/acme/vendor/VendorService"));
+        assertTrue("app package /shadow/ must NOT be skipped (S6)",
+                prefixed.shouldRewriteExecutorCalls("com/acme/shadow/ShadowService"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/shaded/io/grpc/Channel"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/internal/shaded/Foo"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/relocated/netty/Loop"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/repackaged/Pool"));
-        assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/third_party/Worker"));
+
+        // S6: In exact appClasses index mode, shaded filter does NOT drop indexed app classes.
+        ServerEntries indexed = new ServerEntries(true,
+                new HashSet<>(Arrays.asList("com/acme/shaded/AppClass", "com/acme/vendor/VendorService")), null);
+        assertTrue(indexed.shouldRewriteExecutorCalls("com/acme/shaded/AppClass"));
+        assertTrue(indexed.shouldRewriteExecutorCalls("com/acme/vendor/VendorService"));
+    }
+
+    @Test(timeout = 60000)
+    public void untrackedTailsJobDeferredCfSpringSubclassFailClosedAndB2BytecodeForms() throws Exception {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
+        try {
+            // B1: Untracked async hand-off marks current window AND immediately following window
+            //     "tail:<id>" until untrackedTailWindowNanos elapses.
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(120);
+            RequestGate.open("b1-untracked", null);
+            Object req1 = RequestGate.enter();
+            try {
+                RequestGate.noteUntrackedAsync("untracked-executor:com.acme.CustomPool");
+            } finally {
+                RequestGate.exit(req1);
+            }
+            RequestGate.WindowOutcome out1 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals(Collections.singletonList("untracked-executor:com.acme.CustomPool"), out1.contaminations);
+
+            RequestGate.open("b1-next", null);
+            RequestGate.WindowOutcome out2 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals("next window immediately after untracked hand-off must carry tail",
+                    Collections.singletonList("tail:b1-untracked"), out2.contaminations);
+
+            Thread.sleep(160);
+            RequestGate.open("b1-after-expiry", null);
+            RequestGate.WindowOutcome out3 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals("clean after untracked tail window expires",
+                    Collections.<String>emptyList(), out3.contaminations);
+
+            // S1: Job-originated CompletableFuture.supplyAsync().thenAccept(audit) keeps JobGate run
+            //     active until audit finishes, and job-originated unknown executor flags contamination!
+            CountDownLatch gateSupplier = new CountDownLatch(1);
+            CountDownLatch auditEntered = new CountDownLatch(1);
+            CountDownLatch auditRelease = new CountDownLatch(1);
+            RequestGate.open("s1-arm", null);
+            JobGate.open();
+            Object jt = JobGate.enter(new Object(), "scheduled");
+            CompletableFuture<Void> jobChain;
+            try {
+                CompletableFuture<String> base = RequestGate.supplyAsync(() -> {
+                    try {
+                        gateSupplier.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return "job-val";
+                }, pool);
+                jobChain = base.thenAccept(v -> {
+                    auditEntered.countDown();
+                    try {
+                        auditRelease.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            } finally {
+                JobGate.exit(jt);
+            }
+            JobGate.close();
+            gateSupplier.countDown();
+            assertTrue("job CF audit entered", auditEntered.await(10, TimeUnit.SECONDS));
+            // While audit is still running AFTER supplier returned, JobGate MUST still be active!
+            JobGate.open();
+            List<String> duringAudit = JobGate.close();
+            assertEquals("job CF dependent stage must remain attributed in JobGate: " + duringAudit,
+                    1, duringAudit.size());
+            auditRelease.countDown();
+            jobChain.get(10, TimeUnit.SECONDS);
+            long jobDoneDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (JobGate.activeRunCount() > 0 && System.nanoTime() < jobDoneDeadline) {
+                Thread.sleep(5);
+            }
+            assertEquals("JobGate run exits once job CF dependent completes", 0, JobGate.activeRunCount());
+
+            // S1b: Job-originated unknown executor flags active JobGate window AND next RequestGate window!
+            Object unknownExec = new Object();
+            JobGate.open();
+            Object jt2 = JobGate.enter(new Object(), "quartz");
+            try {
+                Runnable task = () -> { };
+                assertSame("unknown executor stays unwrapped for job", task, RequestGate.hand(unknownExec, task));
+            } finally {
+                JobGate.exit(jt2);
+            }
+            List<String> jobContams = JobGate.close();
+            assertTrue("job window must contain untracked-executor: " + jobContams,
+                    jobContams.contains("untracked-executor:java.lang.Object"));
+            RequestGate.open("s1-after-job-unknown", null);
+            RequestGate.WindowOutcome afterJobUnknown = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("next request window carries tail from job untracked hand-off: "
+                    + afterJobUnknown.contaminations,
+                    afterJobUnknown.contaminations.contains("tail:untracked-executor:java.lang.Object"));
+
+            // S3: App subclass of ThreadPoolTaskExecutor overriding execute() MUST fail closed,
+            //     and arbitrary non-Spring class with getThreadPoolExecutor() MUST fail closed!
+            org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor overridingSpring =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor() {
+                        private static final long serialVersionUID = 1L;
+
+                        @Override
+                        public void execute(Runnable task) {
+                            super.execute(task);
+                        }
+                    };
+            overridingSpring.initialize();
+            try {
+                assertTrue("Spring subclass overriding execute() must fail closed (S3)",
+                        OrderedPools.orders(overridingSpring));
+            } finally {
+                overridingSpring.shutdown();
+            }
+            Object nonSpringWithPoolMethod = new Object() {
+                @SuppressWarnings("unused")
+                public ThreadPoolExecutor getThreadPoolExecutor() {
+                    return pool;
+                }
+            };
+            assertTrue("non-Spring class with getThreadPoolExecutor() must fail closed (S3)",
+                    OrderedPools.orders(nonSpringWithPoolMethod));
+
+            // B2: Non-Thread start() must NOT false-positive, while Thread subclass start() DOES flag.
+            RequestGate.disarm();
+            RequestGate.open("b2-start-check", null);
+            Object reqStart = RequestGate.enter();
+            try {
+                RequestGate.noteIfThread(new Object());
+                RequestGate.noteIfThread(null);
+            } finally {
+                RequestGate.exit(reqStart);
+            }
+            assertEquals("non-Thread start() must not contaminate",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // B2 + S4: Direct raw KafkaConsumer.poll in an app class flips hasUnhookedConsumer()!
+            ServerEntries.setHookStatusForTests(false, false, false, false);
+            assertFalse(ServerEntries.hasUnhookedConsumer());
+            ClassWriter kafkaApp = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            kafkaApp.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "com/acme/RawKafkaPoller", null,
+                    "java/lang/Object", null);
+            emitDefaultCtor(kafkaApp);
+            MethodVisitor pollMv = kafkaApp.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                    "pollOnce", "(Lorg/apache/kafka/clients/consumer/KafkaConsumer;)V", null, null);
+            pollMv.visitCode();
+            pollMv.visitVarInsn(Opcodes.ALOAD, 0);
+            pollMv.visitLdcInsn(100L);
+            pollMv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "org/apache/kafka/clients/consumer/KafkaConsumer",
+                    "poll", "(J)Ljava/lang/Object;", false);
+            pollMv.visitInsn(Opcodes.POP);
+            pollMv.visitInsn(Opcodes.RETURN);
+            pollMv.visitMaxs(3, 1);
+            pollMv.visitEnd();
+            kafkaApp.visitEnd();
+            ServerEntries.wrapExecutorCalls(kafkaApp.toByteArray());
+            assertTrue("direct KafkaConsumer.poll in app class must flag unhooked consumer (S4)",
+                    ServerEntries.hasUnhookedConsumer());
+            ServerEntries.setHookStatusForTests(false, false, false, false);
+        } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            pool.shutdownNow();
+        }
     }
 
     @Test(timeout = 60000)

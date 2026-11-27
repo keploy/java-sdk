@@ -22,6 +22,7 @@ import java.util.logging.Logger;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Handle;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
@@ -109,13 +110,34 @@ final class ServerEntries implements ClassFileTransformer {
     static {
         UNCOUNTED.put("io/netty/handler/codec/http/HttpServerCodec", "Netty");
         UNCOUNTED.put("reactor/netty/http/server/HttpServer", "Reactor Netty");
+        UNCOUNTED.put("io/grpc/netty/NettyServer", "gRPC");
+        UNCOUNTED.put("io/grpc/netty/shaded/io/grpc/netty/NettyServer", "gRPC");
+        UNCOUNTED.put("io/grpc/internal/ServerImpl", "gRPC");
+        UNCOUNTED.put("io/vertx/core/http/impl/HttpServerImpl", "Vert.x");
+        UNCOUNTED.put("io/micronaut/http/server/netty/NettyHttpServer", "Micronaut");
+        UNCOUNTED.put("sun/net/httpserver/ServerImpl", "JDK HttpServer");
+    }
+
+    // Classes of messaging consumers that ServerEntries does not hook into
+    // JobGate, so HELLO/caps can honestly report listenerContamination=false.
+    private static final Map<String, String> UNHOOKED_CONSUMERS = new HashMap<>();
+
+    static {
+        UNHOOKED_CONSUMERS.put("org/apache/kafka/streams/KafkaStreams", "Kafka Streams");
+        UNHOOKED_CONSUMERS.put("reactor/kafka/receiver/KafkaReceiver", "Reactor Kafka");
+        UNHOOKED_CONSUMERS.put("reactor/kafka/receiver/internals/DefaultKafkaReceiver", "Reactor Kafka");
+        UNHOOKED_CONSUMERS.put("io/awspring/cloud/sqs/listener/SqsMessageListenerContainer", "Spring Cloud SQS");
+        UNHOOKED_CONSUMERS.put("com/amazonaws/services/sqs/AmazonSQSClient", "AWS SQS");
+        UNHOOKED_CONSUMERS.put("software/amazon/awssdk/services/sqs/DefaultSqsClient", "AWS SQS");
     }
 
     private static final Set<String> COUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNCOUNTED = new CopyOnWriteArraySet<>();
+    private static final Set<String> SEEN_UNHOOKED_CONSUMERS = new CopyOnWriteArraySet<>();
     private static volatile boolean serverHookFailed;
     private static volatile boolean listenerHookFailed;
     private static volatile boolean jpmsGuardTriggered;
+    private static volatile boolean appRewriteFailed;
 
     // Per-loader cache for seesGate(loader) to avoid repeated Class.forName
     // calls and ClassNotFoundExceptions during startup class loading.
@@ -126,8 +148,7 @@ final class ServerEntries implements ClassFileTransformer {
     // on Java 8 or when no unreadable named modules exist.
     private static final Set<String> UNREADABLE_MODULE_LOCATIONS = findUnreadableModuleLocations();
 
-    // Constant-pool class owners targeted by wrapExecutorCalls. If none of
-    // these appear in a class's constant pool, ASM rewriting is skipped.
+    // Constant-pool class owners targeted by wrapExecutorCalls.
     private static final Set<String> TARGET_EXECUTOR_OWNERS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "java/util/concurrent/Executor",
             "java/util/concurrent/ExecutorService",
@@ -136,15 +157,47 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/concurrent/ThreadPoolExecutor",
             "java/util/concurrent/ScheduledThreadPoolExecutor",
             "java/util/concurrent/ForkJoinPool",
+            "java/util/concurrent/ForkJoinTask",
+            "java/util/concurrent/ExecutorCompletionService",
             "java/util/concurrent/CompletableFuture",
-            "java/lang/Thread")));
+            "java/util/concurrent/CompletionStage",
+            "java/lang/Thread",
+            "reactor/core/publisher/Mono",
+            "reactor/core/publisher/Flux",
+            "reactor/core/publisher/ParallelFlux")));
+
+    // Constant-pool method names (CONSTANT_NameAndType, tag 12) targeted by
+    // wrapExecutorCalls, so custom executor subtypes, Thread subclasses,
+    // CompletionStage, Reactor subscribe, method references, and raw consumer
+    // polling are never skipped by the fast pre-scan.
+    private static final Set<String> TARGET_ASYNC_METHOD_NAMES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "execute", "submit", "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
+            "invokeAny", "remove", "shutdownNow", "runAsync", "supplyAsync", "completeAsync",
+            "fork", "subscribe", "start", "poll", "basicConsume", "receive",
+            "thenApplyAsync", "thenAcceptAsync", "thenRunAsync", "thenComposeAsync",
+            "thenCombineAsync", "thenAcceptBothAsync", "runAfterBothAsync",
+            "applyToEitherAsync", "acceptEitherAsync", "runAfterEitherAsync",
+            "handleAsync", "whenCompleteAsync", "exceptionallyAsync", "exceptionallyComposeAsync",
+            "thenApply", "thenAccept", "thenRun", "thenCompose",
+            "thenCombine", "thenAcceptBoth", "runAfterBoth",
+            "applyToEither", "acceptEither", "runAfterEither",
+            "handle", "whenComplete", "exceptionally", "exceptionallyCompose")));
 
     // CompletableFuture *Async instance methods rewritten to RequestGate.
-    private static final Map<String, Set<String>> CF_ASYNC_INSTANCE_METHODS = buildCfAsyncMethods();
+    private static final Map<String, Set<String>> CF_ASYNC_INSTANCE_METHODS =
+            buildStageAsyncMethods("Ljava/util/concurrent/CompletableFuture;");
+    // CompletableFuture plain dependent instance methods rewritten to RequestGate.
+    private static final Map<String, Set<String>> CF_SYNC_INSTANCE_METHODS =
+            buildStageSyncMethods("Ljava/util/concurrent/CompletableFuture;");
+    // CompletionStage *Async interface methods rewritten to RequestGate.
+    private static final Map<String, Set<String>> CS_ASYNC_INSTANCE_METHODS =
+            buildStageAsyncMethods("Ljava/util/concurrent/CompletionStage;");
+    // CompletionStage plain dependent interface methods rewritten to RequestGate.
+    private static final Map<String, Set<String>> CS_SYNC_INSTANCE_METHODS =
+            buildStageSyncMethods("Ljava/util/concurrent/CompletionStage;");
 
-    private static Map<String, Set<String>> buildCfAsyncMethods() {
+    private static Map<String, Set<String>> buildStageAsyncMethods(String ret) {
         Map<String, Set<String>> m = new HashMap<>();
-        String cf = "Ljava/util/concurrent/CompletableFuture;";
         String cs = "Ljava/util/concurrent/CompletionStage;";
         String ex = "Ljava/util/concurrent/Executor;";
         String fn = "Ljava/util/function/Function;";
@@ -152,20 +205,45 @@ final class ServerEntries implements ClassFileTransformer {
         String run = "Ljava/lang/Runnable;";
         String bifn = "Ljava/util/function/BiFunction;";
         String bicons = "Ljava/util/function/BiConsumer;";
-        m.put("thenApplyAsync", setOf("(" + fn + ")" + cf, "(" + fn + ex + ")" + cf));
-        m.put("thenAcceptAsync", setOf("(" + cons + ")" + cf, "(" + cons + ex + ")" + cf));
-        m.put("thenRunAsync", setOf("(" + run + ")" + cf, "(" + run + ex + ")" + cf));
-        m.put("thenComposeAsync", setOf("(" + fn + ")" + cf, "(" + fn + ex + ")" + cf));
-        m.put("thenCombineAsync", setOf("(" + cs + bifn + ")" + cf, "(" + cs + bifn + ex + ")" + cf));
-        m.put("thenAcceptBothAsync", setOf("(" + cs + bicons + ")" + cf, "(" + cs + bicons + ex + ")" + cf));
-        m.put("runAfterBothAsync", setOf("(" + cs + run + ")" + cf, "(" + cs + run + ex + ")" + cf));
-        m.put("applyToEitherAsync", setOf("(" + cs + fn + ")" + cf, "(" + cs + fn + ex + ")" + cf));
-        m.put("acceptEitherAsync", setOf("(" + cs + cons + ")" + cf, "(" + cs + cons + ex + ")" + cf));
-        m.put("runAfterEitherAsync", setOf("(" + cs + run + ")" + cf, "(" + cs + run + ex + ")" + cf));
-        m.put("handleAsync", setOf("(" + bifn + ")" + cf, "(" + bifn + ex + ")" + cf));
-        m.put("whenCompleteAsync", setOf("(" + bicons + ")" + cf, "(" + bicons + ex + ")" + cf));
-        m.put("exceptionallyAsync", setOf("(" + fn + ")" + cf, "(" + fn + ex + ")" + cf));
-        m.put("exceptionallyComposeAsync", setOf("(" + fn + ")" + cf, "(" + fn + ex + ")" + cf));
+        m.put("thenApplyAsync", setOf("(" + fn + ")" + ret, "(" + fn + ex + ")" + ret));
+        m.put("thenAcceptAsync", setOf("(" + cons + ")" + ret, "(" + cons + ex + ")" + ret));
+        m.put("thenRunAsync", setOf("(" + run + ")" + ret, "(" + run + ex + ")" + ret));
+        m.put("thenComposeAsync", setOf("(" + fn + ")" + ret, "(" + fn + ex + ")" + ret));
+        m.put("thenCombineAsync", setOf("(" + cs + bifn + ")" + ret, "(" + cs + bifn + ex + ")" + ret));
+        m.put("thenAcceptBothAsync", setOf("(" + cs + bicons + ")" + ret, "(" + cs + bicons + ex + ")" + ret));
+        m.put("runAfterBothAsync", setOf("(" + cs + run + ")" + ret, "(" + cs + run + ex + ")" + ret));
+        m.put("applyToEitherAsync", setOf("(" + cs + fn + ")" + ret, "(" + cs + fn + ex + ")" + ret));
+        m.put("acceptEitherAsync", setOf("(" + cs + cons + ")" + ret, "(" + cs + cons + ex + ")" + ret));
+        m.put("runAfterEitherAsync", setOf("(" + cs + run + ")" + ret, "(" + cs + run + ex + ")" + ret));
+        m.put("handleAsync", setOf("(" + bifn + ")" + ret, "(" + bifn + ex + ")" + ret));
+        m.put("whenCompleteAsync", setOf("(" + bicons + ")" + ret, "(" + bicons + ex + ")" + ret));
+        m.put("exceptionallyAsync", setOf("(" + fn + ")" + ret, "(" + fn + ex + ")" + ret));
+        m.put("exceptionallyComposeAsync", setOf("(" + fn + ")" + ret, "(" + fn + ex + ")" + ret));
+        return Collections.unmodifiableMap(m);
+    }
+
+    private static Map<String, Set<String>> buildStageSyncMethods(String ret) {
+        Map<String, Set<String>> m = new HashMap<>();
+        String cs = "Ljava/util/concurrent/CompletionStage;";
+        String fn = "Ljava/util/function/Function;";
+        String cons = "Ljava/util/function/Consumer;";
+        String run = "Ljava/lang/Runnable;";
+        String bifn = "Ljava/util/function/BiFunction;";
+        String bicons = "Ljava/util/function/BiConsumer;";
+        m.put("thenApply", setOf("(" + fn + ")" + ret));
+        m.put("thenAccept", setOf("(" + cons + ")" + ret));
+        m.put("thenRun", setOf("(" + run + ")" + ret));
+        m.put("thenCompose", setOf("(" + fn + ")" + ret));
+        m.put("thenCombine", setOf("(" + cs + bifn + ")" + ret));
+        m.put("thenAcceptBoth", setOf("(" + cs + bicons + ")" + ret));
+        m.put("runAfterBoth", setOf("(" + cs + run + ")" + ret));
+        m.put("applyToEither", setOf("(" + cs + fn + ")" + ret));
+        m.put("acceptEither", setOf("(" + cs + cons + ")" + ret));
+        m.put("runAfterEither", setOf("(" + cs + run + ")" + ret));
+        m.put("handle", setOf("(" + bifn + ")" + ret));
+        m.put("whenComplete", setOf("(" + bicons + ")" + ret));
+        m.put("exceptionally", setOf("(" + fn + ")" + ret));
+        m.put("exceptionallyCompose", setOf("(" + fn + ")" + ret));
         return Collections.unmodifiableMap(m);
     }
 
@@ -238,6 +316,10 @@ final class ServerEntries implements ClassFileTransformer {
         return !SEEN_UNCOUNTED.isEmpty();
     }
 
+    static boolean hasUnhookedConsumer() {
+        return !SEEN_UNHOOKED_CONSUMERS.isEmpty();
+    }
+
     static boolean hadServerHookFailure() {
         return serverHookFailed;
     }
@@ -248,6 +330,10 @@ final class ServerEntries implements ClassFileTransformer {
 
     static boolean wasJpmsGuardTriggered() {
         return jpmsGuardTriggered;
+    }
+
+    static boolean hadAppRewriteFailure() {
+        return appRewriteFailed;
     }
 
     static void markJpmsGuardTriggered() {
@@ -277,10 +363,28 @@ final class ServerEntries implements ClassFileTransformer {
         }
     }
 
+    static Set<String> snapshotUnhookedConsumers() {
+        return new HashSet<>(SEEN_UNHOOKED_CONSUMERS);
+    }
+
+    static void restoreUnhookedConsumers(Set<String> snapshot) {
+        SEEN_UNHOOKED_CONSUMERS.clear();
+        if (snapshot != null) {
+            SEEN_UNHOOKED_CONSUMERS.addAll(snapshot);
+        }
+    }
+
     static void setHookStatusForTests(boolean serverFailed, boolean listenerFailed, boolean jpmsSkipped) {
+        setHookStatusForTests(serverFailed, listenerFailed, jpmsSkipped, false);
+    }
+
+    static void setHookStatusForTests(boolean serverFailed, boolean listenerFailed, boolean jpmsSkipped,
+            boolean rewriteFailed) {
         serverHookFailed = serverFailed;
         listenerHookFailed = listenerFailed;
         jpmsGuardTriggered = jpmsSkipped;
+        appRewriteFailed = rewriteFailed;
+        SEEN_UNHOOKED_CONSUMERS.clear();
     }
 
     // uncounted names the servers whose requests do not count that the app
@@ -301,10 +405,16 @@ final class ServerEntries implements ClassFileTransformer {
             if (uncounted != null) {
                 SEEN_UNCOUNTED.add(uncounted);
             }
+            String unhookedConsumer = UNHOOKED_CONSUMERS.get(className);
+            if (unhookedConsumer != null) {
+                SEEN_UNHOOKED_CONSUMERS.add(unhookedConsumer);
+            }
             if (shouldRewriteExecutorCalls(className)) {
                 if (!canAccessGate(loader, protectionDomain)) {
                     if (seesGate(loader)) {
                         jpmsGuardTriggered = true;
+                    } else {
+                        appRewriteFailed = true;
                     }
                     return null;
                 }
@@ -315,6 +425,7 @@ final class ServerEntries implements ClassFileTransformer {
                     }
                     return updated;
                 } catch (Throwable t) {
+                    appRewriteFailed = true;
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
                 }
             }
@@ -498,7 +609,9 @@ final class ServerEntries implements ClassFileTransformer {
         if (!appClasses.isEmpty()) {
             return appClasses.contains(className);
         }
-        return appPackagePrefix != null && className.startsWith(appPackagePrefix);
+        return appPackagePrefix != null
+                && className.startsWith(appPackagePrefix)
+                && !isShadedOrRelocated(className);
     }
 
     static boolean canAccessGate(ClassLoader loader, ProtectionDomain protectionDomain) {
@@ -613,22 +726,18 @@ final class ServerEntries implements ClassFileTransformer {
     static boolean isShadedOrRelocated(String className) {
         return className.contains("/shaded/")
                 || className.contains("/relocated/")
-                || className.contains("/shadow/")
                 || className.contains("/repackaged/")
-                || className.contains("/thirdparty/")
-                || className.contains("/third_party/")
-                || className.contains("/vendor/")
                 || className.startsWith("shaded/")
                 || className.startsWith("relocated/");
     }
 
     // Belt-and-suspenders guard in case KEPLOY_JAVA_CLASS_DIRS or
-    // appPackagePrefix includes framework/library/shaded classes; note
+    // appPackagePrefix includes framework/library classes; note
     // org/apache/ is NOT blanket-excluded so Apache-hosted applications (e.g.
-    // org/apache/fineract/) remain eligible.
+    // org/apache/fineract/) remain eligible. Shaded/relocated filtering is
+    // applied only in prefix mode (not exact appClasses index mode).
     static boolean isRewriteAllowedPackage(String className) {
         return className != null
-                && !isShadedOrRelocated(className)
                 && !className.startsWith("java/")
                 && !className.startsWith("javax/")
                 && !className.startsWith("sun/")
@@ -670,9 +779,11 @@ final class ServerEntries implements ClassFileTransformer {
                 && !className.startsWith("redis/clients/");
     }
 
-    // Fast constant-pool scan: every matching invoke instruction references a
-    // CONSTANT_Class (tag 7) entry for one of TARGET_EXECUTOR_OWNERS. Classes
-    // with no matching constant-pool class entry skip ASM ClassWriter entirely.
+    // Fast constant-pool scan: checks CONSTANT_Class (tag 7) against
+    // TARGET_EXECUTOR_OWNERS AND CONSTANT_NameAndType (tag 12) method names
+    // against TARGET_ASYNC_METHOD_NAMES so custom executor subtypes, Thread
+    // subclasses, CompletionStage, method references, and direct consumer
+    // polling are never missed while non-async classes skip ClassWriter.
     static boolean hasExecutorReference(ClassReader reader) {
         int itemCount = reader.getItemCount();
         char[] buf = new char[reader.getMaxStringLength()];
@@ -681,9 +792,15 @@ final class ServerEntries implements ClassFileTransformer {
             if (offset == 0) {
                 continue;
             }
-            if (reader.readByte(offset - 1) == 7) {
+            int tag = reader.readByte(offset - 1);
+            if (tag == 7) {
                 String owner = reader.readUTF8(offset, buf);
                 if (TARGET_EXECUTOR_OWNERS.contains(owner)) {
+                    return true;
+                }
+            } else if (tag == 12) {
+                String memberName = reader.readUTF8(offset, buf);
+                if (TARGET_ASYNC_METHOD_NAMES.contains(memberName)) {
                     return true;
                 }
             }
@@ -691,10 +808,123 @@ final class ServerEntries implements ClassFileTransformer {
         return false;
     }
 
+    private static boolean isHookedSpringExecutorOwner(String owner) {
+        return "org/springframework/core/task/TaskExecutor".equals(owner)
+                || "org/springframework/core/task/AsyncTaskExecutor".equals(owner)
+                || "org/springframework/core/task/AsyncListenableTaskExecutor".equals(owner)
+                || "org/springframework/core/task/SimpleAsyncTaskExecutor".equals(owner)
+                || "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor".equals(owner)
+                || "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler".equals(owner)
+                || "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor".equals(owner);
+    }
+
+    private static boolean isUntrackedExecuteOrSubmit(String owner, String mname, String desc) {
+        if (isHookedSpringExecutorOwner(owner)) {
+            return false;
+        }
+        if ("execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
+            return true;
+        }
+        if ("submit".equals(mname)
+                && (desc.startsWith("(Ljava/lang/Runnable;)")
+                        || desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)")
+                        || desc.startsWith("(Ljava/util/concurrent/Callable;)"))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isUntrackedScheduleOrInvokeAny(String mname, String desc) {
+        if ("schedule".equals(mname)
+                && (desc.startsWith("(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)")
+                        || desc.startsWith("(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)"))) {
+            return true;
+        }
+        if (("scheduleAtFixedRate".equals(mname) || "scheduleWithFixedDelay".equals(mname))
+                && desc.startsWith("(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)")) {
+            return true;
+        }
+        if ("invokeAny".equals(mname)
+                && (desc.startsWith("(Ljava/util/Collection;)")
+                        || desc.startsWith("(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)"))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isReactorSubscribe(String owner, String mname) {
+        return "subscribe".equals(mname)
+                && ("reactor/core/publisher/Mono".equals(owner)
+                        || "reactor/core/publisher/Flux".equals(owner)
+                        || "reactor/core/publisher/ParallelFlux".equals(owner));
+    }
+
+    private static boolean isDirectRawConsumerCall(String owner, String mname) {
+        if ("poll".equals(mname)
+                && ("org/apache/kafka/clients/consumer/KafkaConsumer".equals(owner)
+                        || "org/apache/kafka/clients/consumer/Consumer".equals(owner))) {
+            return true;
+        }
+        if ("basicConsume".equals(mname) && "com/rabbitmq/client/Channel".equals(owner)) {
+            return true;
+        }
+        if ("receive".equals(mname)
+                && ("javax/jms/MessageConsumer".equals(owner)
+                        || "jakarta/jms/MessageConsumer".equals(owner))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isAsyncMethodRefTarget(Handle h) {
+        String owner = h.getOwner();
+        String mname = h.getName();
+        String desc = h.getDesc();
+        if (isUntrackedExecuteOrSubmit(owner, mname, desc) || isUntrackedScheduleOrInvokeAny(mname, desc)) {
+            return true;
+        }
+        if ("java/util/concurrent/CompletableFuture".equals(owner)) {
+            if ("runAsync".equals(mname) || "supplyAsync".equals(mname) || "completeAsync".equals(mname)) {
+                return true;
+            }
+            Set<String> asyncDescs = CF_ASYNC_INSTANCE_METHODS.get(mname);
+            if (asyncDescs != null && asyncDescs.contains(desc)) {
+                return true;
+            }
+            Set<String> syncDescs = CF_SYNC_INSTANCE_METHODS.get(mname);
+            if (syncDescs != null && syncDescs.contains(desc)) {
+                return true;
+            }
+        }
+        if ("java/util/concurrent/CompletionStage".equals(owner)) {
+            Set<String> asyncDescs = CS_ASYNC_INSTANCE_METHODS.get(mname);
+            if (asyncDescs != null && asyncDescs.contains(desc)) {
+                return true;
+            }
+            Set<String> syncDescs = CS_SYNC_INSTANCE_METHODS.get(mname);
+            if (syncDescs != null && syncDescs.contains(desc)) {
+                return true;
+            }
+        }
+        if ("fork".equals(mname) && "()Ljava/util/concurrent/ForkJoinTask;".equals(desc)) {
+            return true;
+        }
+        if ("java/lang/Thread".equals(owner) && "start".equals(mname) && "()V".equals(desc)) {
+            return true;
+        }
+        return isReactorSubscribe(owner, mname);
+    }
+
+    private static String stageHelperName(String mname) {
+        return "stage" + Character.toUpperCase(mname.charAt(0)) + mname.substring(1);
+    }
+
     // wrapExecutorCalls redirects standard JDK executor hand-off call sites,
-    // CompletableFuture.runAsync/supplyAsync and *Async instance stages,
+    // CompletableFuture (runAsync, supplyAsync, completeAsync, *Async and plain
+    // dependent stages), CompletionStage (*Async and plain dependent stages),
     // remove/shutdownNow, and untracked async sites (schedule*, invokeAny,
-    // Thread.start) to RequestGate's identically-stacked static helpers.
+    // Thread.start, custom executor subtypes, ForkJoinTask.fork, Reactor
+    // subscribe, async method references) to RequestGate static helpers.
     // Returns null when the class contains no matching call sites.
     static byte[] wrapExecutorCalls(byte[] classfile) {
         ClassReader reader = new ClassReader(classfile);
@@ -715,9 +945,40 @@ final class ServerEntries implements ClassFileTransformer {
                     return null;
                 }
                 return new MethodVisitor(Opcodes.ASM9, mv) {
+                    private boolean addedStack;
+
+                    private void emitUntrackedFlag(String reason) {
+                        changed[0] = true;
+                        addedStack = true;
+                        super.visitLdcInsn(reason);
+                        super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteUntrackedAsync",
+                                "(Ljava/lang/String;)V", false);
+                    }
+
+                    @Override
+                    public void visitInvokeDynamicInsn(String indyName, String indyDesc, Handle bsm,
+                            Object... bsmArgs) {
+                        if (bsmArgs != null) {
+                            for (Object arg : bsmArgs) {
+                                if (arg instanceof Handle) {
+                                    Handle h = (Handle) arg;
+                                    if (isAsyncMethodRefTarget(h)) {
+                                        emitUntrackedFlag("untracked-async:method-ref:"
+                                                + h.getOwner().replace('/', '.') + "." + h.getName());
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        super.visitInvokeDynamicInsn(indyName, indyDesc, bsm, bsmArgs);
+                    }
+
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String mname, String desc,
                             boolean isInterface) {
+                        if (isDirectRawConsumerCall(owner, mname)) {
+                            SEEN_UNHOOKED_CONSUMERS.add(owner.replace('/', '.') + "." + mname);
+                        }
                         if (opcode == Opcodes.INVOKEINTERFACE
                                 && ("java/util/concurrent/Executor".equals(owner)
                                         || "java/util/concurrent/ExecutorService".equals(owner)
@@ -848,11 +1109,45 @@ final class ServerEntries implements ClassFileTransformer {
                         }
                         if (opcode == Opcodes.INVOKEVIRTUAL
                                 && "java/util/concurrent/CompletableFuture".equals(owner)) {
+                            if ("completeAsync".equals(mname)
+                                    && ("(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;"
+                                                    .equals(desc)
+                                            || ("(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)"
+                                                    + "Ljava/util/concurrent/CompletableFuture;").equals(desc))) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "completeAsync",
+                                        "(Ljava/util/concurrent/CompletableFuture;" + desc.substring(1), false);
+                                return;
+                            }
                             Set<String> descs = CF_ASYNC_INSTANCE_METHODS.get(mname);
                             if (descs != null && descs.contains(desc)) {
                                 changed[0] = true;
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, mname,
                                         "(Ljava/util/concurrent/CompletableFuture;" + desc.substring(1), false);
+                                return;
+                            }
+                            Set<String> syncDescs = CF_SYNC_INSTANCE_METHODS.get(mname);
+                            if (syncDescs != null && syncDescs.contains(desc)) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, mname,
+                                        "(Ljava/util/concurrent/CompletableFuture;" + desc.substring(1), false);
+                                return;
+                            }
+                        }
+                        if (opcode == Opcodes.INVOKEINTERFACE
+                                && "java/util/concurrent/CompletionStage".equals(owner)) {
+                            Set<String> descs = CS_ASYNC_INSTANCE_METHODS.get(mname);
+                            if (descs != null && descs.contains(desc)) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, stageHelperName(mname),
+                                        "(Ljava/util/concurrent/CompletionStage;" + desc.substring(1), false);
+                                return;
+                            }
+                            Set<String> syncDescs = CS_SYNC_INSTANCE_METHODS.get(mname);
+                            if (syncDescs != null && syncDescs.contains(desc)) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, stageHelperName(mname),
+                                        "(Ljava/util/concurrent/CompletionStage;" + desc.substring(1), false);
                                 return;
                             }
                         }
@@ -865,7 +1160,35 @@ final class ServerEntries implements ClassFileTransformer {
                                     "(Ljava/lang/Thread;)V", false);
                             return;
                         }
+                        // Flag-only async submission sites (task untouched, 100% app-safe).
+                        if (opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE) {
+                            if (isUntrackedExecuteOrSubmit(owner, mname, desc)) {
+                                emitUntrackedFlag("untracked-executor:" + owner.replace('/', '.'));
+                            } else if (isUntrackedScheduleOrInvokeAny(mname, desc)) {
+                                emitUntrackedFlag("untracked-async:" + ("invokeAny".equals(mname)
+                                        ? "invokeAny" : "schedule"));
+                            } else if ("fork".equals(mname)
+                                    && "()Ljava/util/concurrent/ForkJoinTask;".equals(desc)) {
+                                emitUntrackedFlag("untracked-async:fork");
+                            } else if (isReactorSubscribe(owner, mname)) {
+                                emitUntrackedFlag("untracked-async:reactor-subscribe");
+                            } else if (opcode == Opcodes.INVOKEVIRTUAL
+                                    && "start".equals(mname) && "()V".equals(desc)) {
+                                // Only flag if runtime receiver is a Thread subclass (zero false
+                                // positives on non-Thread start() methods).
+                                changed[0] = true;
+                                addedStack = true;
+                                super.visitInsn(Opcodes.DUP);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfThread",
+                                        "(Ljava/lang/Object;)V", false);
+                            }
+                        }
                         super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                    }
+
+                    @Override
+                    public void visitMaxs(int maxStack, int maxLocals) {
+                        super.visitMaxs(addedStack ? maxStack + 1 : maxStack, maxLocals);
                     }
                 };
             }

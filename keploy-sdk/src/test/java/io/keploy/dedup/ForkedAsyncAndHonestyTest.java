@@ -101,7 +101,9 @@ public class ForkedAsyncAndHonestyTest {
 
             // Wait for audit to finish, then verify tail contamination was observed and drains.
             Thread.sleep(500);
-            app.runHttpTest("ts/drain-after-cf", "/clean");
+            String covDrain = app.runHttpTest("ts/drain-after-cf", "/clean");
+            assertTrue("window after cut CF dependent must report tail:ts/cf-dep: " + covDrain,
+                    covDrain.contains("\"contaminated\":[\"tail:ts/cf-dep\"]"));
 
             // 2. Chained thenApplyAsync(350ms, pool) with endWait=80ms -> MUST report windowCut:true!
             String cov2 = app.runHttpTest("ts/cf-chain", "/cf-then-apply-async?ms=350");
@@ -120,14 +122,77 @@ public class ForkedAsyncAndHonestyTest {
     }
 
     @Test(timeout = 120000)
-    public void forkedUnknownSerializableExecutorIsUnwrappedAndContaminatesCov() throws Exception {
+    public void forkedUnknownSerializableExecutorIsUnwrappedAndContaminatesCurrentAndNextWindow() throws Exception {
         try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
-            // SerializableOnlyExecutor throws IllegalStateException if task is wrapped!
+            // 1. Synchronous SerializableOnlyExecutor throws IllegalStateException if task is wrapped.
             String cov = app.runHttpTest("ts/unknown-exec", "/unknown-serializable");
             assertFalse("must not fail or cut: " + cov, cov.contains("windowCut"));
             assertTrue("unknown executor must contaminate COV with untracked-executor: " + cov,
                     cov.contains("\"contaminated\":[\"untracked-executor:"
                             + AsyncHonestyApp.SerializableOnlyExecutor.class.getName() + "\"]"));
+
+            // 2. B1: Async 350ms task on unknown SerializableOnlyExecutor -> Test 1 gets
+            //    untracked-executor:... AND Test 2 immediately gets tail:ts/unknown-async!
+            String covAsync = app.runHttpTest("ts/unknown-async", "/unknown-serializable-async?ms=350");
+            assertTrue("Test 1 must carry untracked-executor: " + covAsync,
+                    covAsync.contains("untracked-executor:"
+                            + AsyncHonestyApp.SerializableOnlyExecutor.class.getName()));
+            String covNext = app.runHttpTest("ts/after-unknown", "/clean");
+            assertTrue("Test 2 immediately after untracked async hand-off must carry tail contamination: " + covNext,
+                    covNext.contains("\"tail:ts/unknown-async\""));
+            Thread.sleep(450);
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void forkedExternalCfDependentAndConcreteAsyncFormsAreTrackedOrFlagged() throws Exception {
+        try (ForkedApp app = startFork("tomcat", "80", false, false, null, null)) {
+            // B2: External library CompletableFuture.thenAccept(350ms audit) with endWait=80ms -> windowCut:true!
+            String covExtCut = app.runHttpTest("ts/ext-cf-cut", "/external-cf-dependent?ms=350");
+            assertTrue("external CF plain thenAccept must hold window permit and cut at 80ms: " + covExtCut,
+                    covExtCut.contains("\"windowCut\":true"));
+            Thread.sleep(450);
+            String covAfterExt = app.runHttpTest("ts/after-ext-cf", "/clean");
+            assertTrue("window after cut external CF must carry tail:ts/ext-cf-cut: " + covAfterExt,
+                    covAfterExt.contains("\"tail:ts/ext-cf-cut\""));
+
+            // B2: CompletionStage-typed thenApplyAsync(350ms) with endWait=80ms -> windowCut:true!
+            String covStage = app.runHttpTest("ts/stage-async", "/completion-stage-async?ms=350");
+            assertTrue("CompletionStage.thenApplyAsync must hold window permit and cut at 80ms: " + covStage,
+                    covStage.contains("\"windowCut\":true"));
+            Thread.sleep(450);
+            app.runHttpTest("ts/after-stage", "/clean");
+        }
+
+        // With 2000ms endWait: external CF dependent's AsyncTail probe lands cleanly inside COV,
+        // and concrete custom pool / Thread subclass / ForkJoinTask.fork / CompletionService / method-ref all flag!
+        try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
+            String covExt = app.runHttpTest("ts/ext-cf-ok", "/external-cf-dependent?ms=200");
+            assertFalse("external CF with sufficient wait must not cut: " + covExt, covExt.contains("windowCut"));
+            assertFalse("external CF with sufficient wait must not contaminate: " + covExt,
+                    covExt.contains("contaminated"));
+            assertTrue("external CF audit probe must land in COV: " + covExt,
+                    covExt.contains("\"" + ASYNC_TAIL + "\""));
+
+            String covConcrete = app.runHttpTest("ts/concrete-pool", "/concrete-pool");
+            assertTrue("concrete ThreadPoolExecutor subclass must contaminate: " + covConcrete,
+                    covConcrete.contains("untracked-executor:" + AsyncHonestyApp.ConcreteCustomPool.class.getName()));
+
+            String covSubThread = app.runHttpTest("ts/sub-thread", "/subclassed-thread");
+            assertTrue("subclassed Thread.start() must contaminate: " + covSubThread,
+                    covSubThread.contains("\"untracked-async:thread-start\""));
+
+            String covFork = app.runHttpTest("ts/fj-fork", "/fork-join-fork");
+            assertTrue("ForkJoinTask.fork() must contaminate: " + covFork,
+                    covFork.contains("\"untracked-async:fork\""));
+
+            String covEcs = app.runHttpTest("ts/ecs-submit", "/completion-service");
+            assertTrue("ExecutorCompletionService.submit() must contaminate: " + covEcs,
+                    covEcs.contains("untracked-executor:java.util.concurrent.ExecutorCompletionService"));
+
+            String covMethodRef = app.runHttpTest("ts/method-ref", "/method-ref");
+            assertTrue("executor::execute method ref must contaminate: " + covMethodRef,
+                    covMethodRef.contains("untracked-async:method-ref:"));
         }
     }
 
@@ -204,7 +269,9 @@ public class ForkedAsyncAndHonestyTest {
             assertFalse("Jetty request is counted, no no-server-entry: " + cov, cov.contains("no-server-entry"));
         }
 
-        // 2. Uncounted HTTP server (JDK HttpServer): probes execute while enteredCount == 0 -> no-server-entry!
+        // 2. Uncounted HTTP server (JDK HttpServer): sun/net/httpserver/ServerImpl is in UNCOUNTED
+        //    (so HELLO reports windowCut=false once loaded) AND runtime probes with enteredCount == 0
+        //    still fail closed with no-server-entry!
         try (ForkedApp uncounted = startFork("uncounted", "2000", false, false, null, null)) {
             JsonObject hello = parseHello(uncounted.initialHello);
             assertNotEquals("distinct JVM restart must generate a distinct jvmNonce",
@@ -212,6 +279,12 @@ public class ForkedAsyncAndHonestyTest {
             String cov = uncounted.runHttpTest("ts/uncounted-1", "/clean");
             assertTrue("uncounted server recording probes must fail closed with no-server-entry: " + cov,
                     cov.contains("\"contaminated\":[\"no-server-entry\"]"));
+            assertNotNull("JDK HttpServer must refresh HELLO with windowCut=false", uncounted.lastHello);
+            JsonObject latest = parseHello(uncounted.lastHello);
+            assertFalse("JDK HttpServer must declare windowCut=false: " + uncounted.lastHello,
+                    latest.get("windowCut").getAsBoolean());
+            assertFalse("JDK HttpServer must declare asyncExecutors=false: " + uncounted.lastHello,
+                    latest.get("asyncExecutors").getAsBoolean());
         }
     }
 
@@ -238,7 +311,8 @@ public class ForkedAsyncAndHonestyTest {
         File classes = tmp.newFolder();
         for (Class<?> cls : new Class<?>[] {
                 AsyncHonestyApp.class, AsyncHonestyApp.AsyncServlet.class,
-                AsyncHonestyApp.SerializableOnlyExecutor.class, AsyncHonestyApp.OrdersListenerBean.class,
+                AsyncHonestyApp.SerializableOnlyExecutor.class, AsyncHonestyApp.ConcreteCustomPool.class,
+                AsyncHonestyApp.MyWorkerThread.class, AsyncHonestyApp.OrdersListenerBean.class,
                 AsyncHonestyApp.FakeKafkaProps.class, AsyncTail.class, Tail.class
         }) {
             String key = cls.getName().replace('.', '/') + ".class";
@@ -495,6 +569,7 @@ public class ForkedAsyncAndHonestyTest {
         final OutputStream out;
         final int port;
         final String initialHello;
+        String lastHello;
 
         ForkedApp(Process proc, File log, ServerSocket collector, Socket sdk,
                 BufferedReader in, OutputStream out, int port, String initialHello) {
@@ -506,6 +581,7 @@ public class ForkedAsyncAndHonestyTest {
             this.out = out;
             this.port = port;
             this.initialHello = initialHello;
+            this.lastHello = initialHello;
         }
 
         String runHttpTest(String testId, String path) throws IOException {
@@ -547,6 +623,7 @@ public class ForkedAsyncAndHonestyTest {
         private String nextNonHello() throws IOException {
             String line = in.readLine();
             while (line != null && line.startsWith("HELLO ")) {
+                lastHello = line;
                 line = in.readLine();
             }
             return line;

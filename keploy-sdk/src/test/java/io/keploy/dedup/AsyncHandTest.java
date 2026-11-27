@@ -775,16 +775,18 @@ public class AsyncHandTest {
         return executor;
     }
 
-    // An executor whose class has a public getThreadPoolExecutor() and a
-    // public method that names a type no class loader has.
+    // An executor whose class (extending Spring's SimpleAsyncTaskExecutor) has
+    // a public getThreadPoolExecutor() and a public method that names a type no
+    // class loader has.
     private static Object missingTypeExecutor() throws Exception {
         String name = "org/example/pools/MissingType";
+        String parent = "org/springframework/core/task/SimpleAsyncTaskExecutor";
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name, null, "java/lang/Object", null);
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, name, null, parent, null);
         MethodVisitor init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
         init.visitCode();
         init.visitVarInsn(Opcodes.ALOAD, 0);
-        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, parent, "<init>", "()V", false);
         init.visitInsn(Opcodes.RETURN);
         init.visitMaxs(0, 0);
         init.visitEnd();

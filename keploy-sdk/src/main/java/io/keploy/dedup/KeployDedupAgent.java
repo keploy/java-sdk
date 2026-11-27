@@ -154,10 +154,18 @@ public final class KeployDedupAgent {
     // proto=2 says this SDK answers every command it reads, so Keploy can read
     // a close with no answer as a command not taken: on macOS a connection
     // closed with its command unread gives Keploy no error, only the close.
-    // Random UUID generated once per JVM startup (never changes on TCP
-    // reconnect; distinct across JVM restarts) so collectors can detect pod
+    // Random UUID generated lazily once per JVM startup (never changes on TCP
+    // reconnect; distinct across JVM restarts; avoids initializing SecureRandom
+    // during premain when dedup is disabled) so collectors can detect pod
     // identity, restarts, and wrong-JVM routing.
-    static final String JVM_NONCE = UUID.randomUUID().toString();
+    private static final class NonceHolder {
+        static final String VALUE = UUID.randomUUID().toString();
+    }
+
+    static String jvmNonce() {
+        return NonceHolder.VALUE;
+    }
+
     static final String UNIX_REPLY_TAKEN = "ACK proto=3";
     static final String UNIX_REPLY_IGNORED = IGNORED_REPLY + " proto=3";
     // The unix control command a Keploy that reads BACKGROUND records sends
@@ -287,7 +295,7 @@ public final class KeployDedupAgent {
                     envOrProperty("KEPLOY_DEDUP_POD_UID", "keploy.dedup.pod.uid", ""),
                     envOrProperty("KEPLOY_DEDUP_POD_NAME", "keploy.dedup.pod.name", ""),
                     envOrProperty("KEPLOY_DEDUP_SESSION_ID", "keploy.dedup.session.id", ""),
-                    JVM_NONCE,
+                    jvmNonce(),
                     buildId,
                     windowCut, contaminated, classMismatch, background, true, true,
                     asyncExecutors, listenerContamination);
@@ -316,8 +324,10 @@ public final class KeployDedupAgent {
                 && !isAsyncCallSitesTurnedOff()
                 && appOnlyActive
                 && !ServerEntries.wasJpmsGuardTriggered()
-                && RequestGate.CF_DEPENDENT_TRACKING_ENABLED;
-        boolean listenerContamination = agentAttached && !ServerEntries.hadListenerHookFailure();
+                && !ServerEntries.hadAppRewriteFailure();
+        boolean listenerContamination = agentAttached
+                && !ServerEntries.hadListenerHookFailure()
+                && !ServerEntries.hasUnhookedConsumer();
         return new Capabilities(windowCut, contaminated, classMismatch, background,
                 asyncExecutors, listenerContamination);
     }
@@ -1394,7 +1404,7 @@ public final class KeployDedupAgent {
             while (running.get()) {
                 try {
                     connectAndServe();
-                } catch (IOException e) {
+                } catch (IOException | RuntimeException e) {
                     if (running.get()) {
                         Level level = connectFailureLogged ? Level.FINE : Level.INFO;
                         connectFailureLogged = true;
@@ -1608,11 +1618,16 @@ public final class KeployDedupAgent {
                     if (coverage.probesByClass.isEmpty()) {
                         log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                     }
+                    // Emit updated HELLO if capabilities changed during the test
+                    // (e.g. Jetty/Undertow loaded its request entry on first request,
+                    // or probeScan was dropped). Isolated from the COV try block so a
+                    // runtime error computing HELLO can never suppress COV before ACK.
                     try {
-                        // Emit updated HELLO if capabilities changed during the test
-                        // (e.g. Jetty/Undertow loaded its request entry on first request,
-                        // or probeScan was dropped).
                         maybeSendUpdatedHello(out);
+                    } catch (RuntimeException e) {
+                        log(Level.FINE, "Failed to refresh HELLO before COV for " + command.testId, e);
+                    }
+                    try {
                         // Always emit exactly one COV before ACK — even when empty —
                         // so the line-oriented collector stays in lockstep (the unix
                         // transport likewise always publishes).
@@ -2753,26 +2768,29 @@ public final class KeployDedupAgent {
 
         // report is the INDEX report of this index: computed once, on the
         // first call, from entries() (so it reads the index if nothing has).
+        // Hashing runs outside `lock` so background precomputation never
+        // blocks an END command waiting on entries().
         private IndexReport report() {
             IndexReport cached = report;
             if (cached != null) {
                 return cached;
             }
+            List<ClassEntry> all = entries();
+            long[] ids = new long[all.size()];
+            Set<String> roots = new LinkedHashSet<>();
+            for (int i = 0; i < ids.length; i++) {
+                ClassEntry entry = all.get(i);
+                ids[i] = IndexReport.classId(entry.bytes);
+                String root = IndexReport.rootOf(entry.location, entry.className);
+                if (root != null) {
+                    roots.add(root);
+                }
+            }
+            IndexReport built = new IndexReport(IndexReport.buildId(ids), sourceKind, launch, roots, packages,
+                    all.size(), includes, jacoco, IndexReport.versionOf(IndexReport.class), jacocoVersion);
             synchronized (lock) {
                 if (report == null) {
-                    List<ClassEntry> all = entries();
-                    long[] ids = new long[all.size()];
-                    Set<String> roots = new LinkedHashSet<>();
-                    for (int i = 0; i < ids.length; i++) {
-                        ClassEntry entry = all.get(i);
-                        ids[i] = IndexReport.classId(entry.bytes);
-                        String root = IndexReport.rootOf(entry.location, entry.className);
-                        if (root != null) {
-                            roots.add(root);
-                        }
-                    }
-                    report = new IndexReport(IndexReport.buildId(ids), sourceKind, launch, roots, packages,
-                            all.size(), includes, jacoco, IndexReport.versionOf(IndexReport.class), jacocoVersion);
+                    report = built;
                 }
                 return report;
             }

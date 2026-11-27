@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -78,15 +79,27 @@ import java.util.function.Supplier;
  */
 public final class RequestGate {
 
-    /** Feature flag proving CompletableFuture dependent-stage tracking is active. */
-    static final boolean CF_DEPENDENT_TRACKING_ENABLED = true;
-
     // Runtime arming gate: false until a collector connects or START arrives.
     private static volatile boolean armed = false;
     // Set once if any request/job executed while unarmed.
     private static volatile boolean unarmedEntered = false;
     private static volatile boolean pendingArmedMidFlight = false;
     private static final AtomicBoolean ARMED_MID_FLIGHT_CONSUMED = new AtomicBoolean(false);
+    // Zero-allocation sentinel returned by RequestGate.enter() and
+    // JobGate.enter() while unarmed so long-running work started before arming
+    // keeps marking every subsequent window "armed-mid-flight" until exit().
+    private static final Object UNARMED_TOKEN = new Object();
+    private static final LongAdder UNARMED_IN_FLIGHT = new LongAdder();
+
+    // Duration after an untracked async hand-off during which subsequent
+    // windows are conservatively marked contaminated ("tail:<prevTestId>").
+    static volatile long untrackedTailWindowNanos =
+            TimeUnit.MILLISECONDS.toNanos(KeployDedupAgent.MAX_END_WAIT_MILLIS);
+    // Untracked async tail recorded outside a request window (e.g., from a
+    // scheduled job or message listener handing work to an unknown executor).
+    private static volatile boolean externalUntrackedTailPending;
+    private static volatile long externalUntrackedTailExpiresAtNanos;
+    private static volatile String externalUntrackedTailReason;
 
     // The window of the test running, made anew at each START and when END
     // waits: END waits only for the requests that came in since the START,
@@ -127,23 +140,40 @@ public final class RequestGate {
     // futures.
     private static final int FUTURE_SWEEP_STRIDE = 64;
 
-    // Reflective handles for Java 12+ CompletableFuture methods so keploy-sdk
-    // compiles against --release 8 (Java8ApiTest) while rewriting JDK 12+ apps.
+    // Reflective handles for Java 9+ / 12+ CompletableFuture & CompletionStage
+    // methods so keploy-sdk compiles against --release 8 (Java8ApiTest) while
+    // rewriting JDK 9+ / 12+ apps.
+    private static final Method CF_COMPLETE_ASYNC_1 =
+            findMethod(CompletableFuture.class, "completeAsync", Supplier.class);
+    private static final Method CF_COMPLETE_ASYNC_2 =
+            findMethod(CompletableFuture.class, "completeAsync", Supplier.class, Executor.class);
+    private static final Method CF_EXCEPTIONALLY_COMPOSE =
+            findMethod(CompletableFuture.class, "exceptionallyCompose", Function.class);
     private static final Method CF_EXCEPTIONALLY_ASYNC_1 =
-            findCfMethod("exceptionallyAsync", Function.class);
+            findMethod(CompletableFuture.class, "exceptionallyAsync", Function.class);
     private static final Method CF_EXCEPTIONALLY_ASYNC_2 =
-            findCfMethod("exceptionallyAsync", Function.class, Executor.class);
+            findMethod(CompletableFuture.class, "exceptionallyAsync", Function.class, Executor.class);
     private static final Method CF_EXCEPTIONALLY_COMPOSE_ASYNC_1 =
-            findCfMethod("exceptionallyComposeAsync", Function.class);
+            findMethod(CompletableFuture.class, "exceptionallyComposeAsync", Function.class);
     private static final Method CF_EXCEPTIONALLY_COMPOSE_ASYNC_2 =
-            findCfMethod("exceptionallyComposeAsync", Function.class, Executor.class);
+            findMethod(CompletableFuture.class, "exceptionallyComposeAsync", Function.class, Executor.class);
+    private static final Method CS_EXCEPTIONALLY_COMPOSE =
+            findMethod(CompletionStage.class, "exceptionallyCompose", Function.class);
+    private static final Method CS_EXCEPTIONALLY_ASYNC_1 =
+            findMethod(CompletionStage.class, "exceptionallyAsync", Function.class);
+    private static final Method CS_EXCEPTIONALLY_ASYNC_2 =
+            findMethod(CompletionStage.class, "exceptionallyAsync", Function.class, Executor.class);
+    private static final Method CS_EXCEPTIONALLY_COMPOSE_ASYNC_1 =
+            findMethod(CompletionStage.class, "exceptionallyComposeAsync", Function.class);
+    private static final Method CS_EXCEPTIONALLY_COMPOSE_ASYNC_2 =
+            findMethod(CompletionStage.class, "exceptionallyComposeAsync", Function.class, Executor.class);
 
     private RequestGate() {
     }
 
-    private static Method findCfMethod(String name, Class<?>... params) {
+    private static Method findMethod(Class<?> owner, String name, Class<?>... params) {
         try {
-            return CompletableFuture.class.getMethod(name, params);
+            return owner.getMethod(name, params);
         } catch (Throwable ignored) {
             return null;
         }
@@ -159,9 +189,36 @@ public final class RequestGate {
         }
     }
 
+    static Object enterUnarmed() {
+        noteUnarmedActivity();
+        UNARMED_IN_FLIGHT.increment();
+        return UNARMED_TOKEN;
+    }
+
+    static boolean isUnarmedToken(Object token) {
+        return token == UNARMED_TOKEN;
+    }
+
+    static void exitUnarmed() {
+        UNARMED_IN_FLIGHT.decrement();
+    }
+
+    static long unarmedInFlight() {
+        return UNARMED_IN_FLIGHT.sum();
+    }
+
+    static void noteExternalUntrackedTail(String reason) {
+        if (!armed) {
+            return;
+        }
+        externalUntrackedTailReason = reason == null || reason.isEmpty() ? "job" : reason;
+        externalUntrackedTailExpiresAtNanos = System.nanoTime() + untrackedTailWindowNanos;
+        externalUntrackedTailPending = true;
+    }
+
     static void arm() {
         if (!armed) {
-            if (unarmedEntered) {
+            if (unarmedEntered || UNARMED_IN_FLIGHT.sum() > 0) {
                 pendingArmedMidFlight = true;
             }
             armed = true;
@@ -173,6 +230,9 @@ public final class RequestGate {
         unarmedEntered = false;
         pendingArmedMidFlight = false;
         ARMED_MID_FLIGHT_CONSUMED.set(false);
+        externalUntrackedTailPending = false;
+        externalUntrackedTailExpiresAtNanos = 0L;
+        externalUntrackedTailReason = null;
         LINGERING.clear();
         current = new Window(null);
     }
@@ -194,14 +254,15 @@ public final class RequestGate {
 
     /**
      * Counts a request as running, in the window of the test running now.
-     * No-op returning {@code null} when Keploy is unarmed.
+     * When Keploy is unarmed, returns a zero-allocation sentinel token that
+     * tracks unarmed in-flight concurrency without allocating or mutating any
+     * window structures.
      *
      * @return the token to pass to {@link #exit(Object)} when it is done
      */
     public static Object enter() {
         if (!armed) {
-            noteUnarmedActivity();
-            return null;
+            return enterUnarmed();
         }
         Window window = current;
         Window outer = INSIDE.get();
@@ -224,6 +285,10 @@ public final class RequestGate {
      */
     public static void exit(Object token) {
         if (token == null) {
+            return;
+        }
+        if (token == UNARMED_TOKEN) {
+            exitUnarmed();
             return;
         }
         if (token instanceof Window) {
@@ -254,6 +319,15 @@ public final class RequestGate {
         return handInternal(executor, task, false);
     }
 
+    private static void markUntrackedExecutor(Window window, JobGate.Attribution job, Object executor, String fallback) {
+        String reason = "untracked-executor:" + (executor != null ? executor.getClass().getName() : fallback);
+        if (window != null) {
+            window.contaminate(reason);
+        } else if (job != null) {
+            JobGate.markUntracked(reason);
+        }
+    }
+
     private static Runnable handInternal(Object executor, Runnable task, boolean deferRelease) {
         if (!armed || task == null) {
             return task;
@@ -262,8 +336,8 @@ public final class RequestGate {
             if (OrderedPools.orders(executor)) {
                 Handed existing = (Handed) task;
                 existing.releaseIfPending();
-                if (existing.window != null && executor != null) {
-                    existing.window.contaminate("untracked-executor:" + executor.getClass().getName());
+                if (executor != null) {
+                    markUntrackedExecutor(existing.window, existing.job, executor, "unknown");
                 }
                 return existing.task;
             }
@@ -275,23 +349,21 @@ public final class RequestGate {
             return task;
         }
         if (task instanceof Comparable) {
-            if (window != null) {
-                window.contaminate("untracked-executor:"
-                        + (executor != null ? executor.getClass().getName() : "comparable"));
-            }
+            markUntrackedExecutor(window, job, executor, "comparable");
             return task;
         }
         if (OrderedPools.orders(executor)) {
-            if (window != null && executor != null) {
-                window.contaminate("untracked-executor:" + executor.getClass().getName());
+            if (executor != null) {
+                markUntrackedExecutor(window, job, executor, "unknown");
             }
             return task;
         }
         // A task that is a Future stays one, for the executor's cancel at
         // shutdown and its purge of cancelled tasks.
+        boolean defer = deferRelease && (window != null || job != null);
         Handed handed = task instanceof Future
-                ? new HandedFuture(window, job, task, deferRelease && window != null)
-                : new Handed(window, job, task, deferRelease && window != null);
+                ? new HandedFuture(window, job, task, defer)
+                : new Handed(window, job, task, defer);
         // Counted last, as enter() counts: a failed allocation (out of
         // memory) leaves nothing counted that no task would release.
         if (window != null) {
@@ -318,8 +390,8 @@ public final class RequestGate {
                 @SuppressWarnings("unchecked")
                 HandedCall<T> existing = (HandedCall<T>) task;
                 existing.releaseIfPending();
-                if (existing.window != null && executor != null) {
-                    existing.window.contaminate("untracked-executor:" + executor.getClass().getName());
+                if (executor != null) {
+                    markUntrackedExecutor(existing.window, existing.job, executor, "unknown");
                 }
                 return existing.task;
             }
@@ -331,15 +403,12 @@ public final class RequestGate {
             return task;
         }
         if (task instanceof Comparable) {
-            if (window != null) {
-                window.contaminate("untracked-executor:"
-                        + (executor != null ? executor.getClass().getName() : "comparable"));
-            }
+            markUntrackedExecutor(window, job, executor, "comparable");
             return task;
         }
         if (OrderedPools.orders(executor)) {
-            if (window != null && executor != null) {
-                window.contaminate("untracked-executor:" + executor.getClass().getName());
+            if (executor != null) {
+                markUntrackedExecutor(window, job, executor, "unknown");
             }
             return task;
         }
@@ -373,8 +442,8 @@ public final class RequestGate {
                 @SuppressWarnings("unchecked")
                 HandedSupplier<T> existing = (HandedSupplier<T>) supplier;
                 existing.releaseIfPending();
-                if (existing.window != null && executor != null) {
-                    existing.window.contaminate("untracked-executor:" + executor.getClass().getName());
+                if (executor != null) {
+                    markUntrackedExecutor(existing.window, existing.job, executor, "unknown");
                 }
                 return existing.task;
             }
@@ -386,19 +455,17 @@ public final class RequestGate {
             return supplier;
         }
         if (supplier instanceof Comparable) {
-            if (window != null) {
-                window.contaminate("untracked-executor:"
-                        + (executor != null ? executor.getClass().getName() : "comparable"));
-            }
+            markUntrackedExecutor(window, job, executor, "comparable");
             return supplier;
         }
         if (OrderedPools.orders(executor)) {
-            if (window != null && executor != null) {
-                window.contaminate("untracked-executor:" + executor.getClass().getName());
+            if (executor != null) {
+                markUntrackedExecutor(window, job, executor, "unknown");
             }
             return supplier;
         }
-        HandedSupplier<T> handed = new HandedSupplier<>(window, job, supplier, deferRelease && window != null);
+        boolean defer = deferRelease && (window != null || job != null);
+        HandedSupplier<T> handed = new HandedSupplier<>(window, job, supplier, defer);
         if (window != null) {
             window.running.incrementAndGet();
         }
@@ -598,7 +665,7 @@ public final class RequestGate {
         return cf;
     }
 
-    // --- CompletableFuture *Async instance method call-site wrappers ---
+    // --- CompletableFuture & CompletionStage instance method call-site wrappers ---
 
     private static Hand prepareCfStageHand(CompletableFuture<?> receiver, Executor explicitExecutor, boolean hasExecutor) {
         if (!armed) {
@@ -614,22 +681,18 @@ public final class RequestGate {
                 return null;
             }
             if (OrderedPools.orders(explicitExecutor)) {
-                if (window != null) {
-                    window.contaminate("untracked-executor:" + explicitExecutor.getClass().getName());
-                }
+                markUntrackedExecutor(window, job, explicitExecutor, "unknown");
                 return null;
             }
         } else {
             // Default executor: safe only for exact CompletableFuture.class
             // (a custom subclass could override defaultExecutor()).
             if (receiver != null && receiver.getClass() != CompletableFuture.class) {
-                if (window != null) {
-                    window.contaminate("untracked-executor:" + receiver.getClass().getName());
-                }
+                markUntrackedExecutor(window, job, receiver, "unknown");
                 return null;
             }
         }
-        StageHand hand = new StageHand(window, job, window != null);
+        StageHand hand = new StageHand(window, job, true);
         if (window != null) {
             window.running.incrementAndGet();
         }
@@ -639,11 +702,58 @@ public final class RequestGate {
         return hand;
     }
 
+    private static Hand prepareCfSyncHand(CompletableFuture<?> receiver, CompletionStage<?> other, boolean either) {
+        if (!armed || receiver == null) {
+            return null;
+        }
+        if (other == null) {
+            if (receiver.isDone()) {
+                return null;
+            }
+        } else {
+            boolean otherDone = other instanceof CompletableFuture && ((CompletableFuture<?>) other).isDone();
+            if (either ? (receiver.isDone() || otherDone) : (receiver.isDone() && otherDone)) {
+                return null;
+            }
+        }
+        Window window = INSIDE.get();
+        JobGate.Attribution job = window == null ? JobGate.runningAttribution() : null;
+        if (window == null && job == null) {
+            return null;
+        }
+        if (receiver.getClass() != CompletableFuture.class) {
+            markUntrackedExecutor(window, job, receiver, "unknown");
+            return null;
+        }
+        StageHand hand = new StageHand(window, job, true);
+        if (window != null) {
+            window.running.incrementAndGet();
+        }
+        return hand;
+    }
+
     private static <T> CompletableFuture<T> finishCfStage(CompletableFuture<T> out, Hand hand) {
         if (hand != null) {
             attachCompletionRelease(out, hand, null);
         }
         return out;
+    }
+
+    private static <T> Supplier<T> wrapSupplier(final Hand hand, final Supplier<? extends T> supplier) {
+        if (hand == null || supplier == null) {
+            return null;
+        }
+        return new Supplier<T>() {
+            @Override
+            public T get() {
+                Object outer = hand.enter();
+                try {
+                    return supplier.get();
+                } finally {
+                    hand.exit(outer);
+                }
+            }
+        };
     }
 
     private static <T, U> Function<T, U> wrapFunction(final Hand hand, final Function<? super T, ? extends U> fn) {
@@ -733,6 +843,66 @@ public final class RequestGate {
         };
     }
 
+    /**
+     * Call-site wrapper for {@code CompletableFuture.completeAsync(Supplier)}.
+     *
+     * @param <T> future result type
+     * @param cf target future
+     * @param supplier async supplier
+     * @return the target future
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletableFuture<T> completeAsync(CompletableFuture<T> cf,
+            Supplier<? extends T> supplier) {
+        Hand hand = supplier == null ? null : prepareCfStageHand(cf, null, false);
+        Supplier<? extends T> target = hand == null ? supplier : wrapSupplier(hand, supplier);
+        CompletableFuture<T> out;
+        try {
+            out = (CompletableFuture<T>) invokeCfReflect(CF_COMPLETE_ASYNC_1, cf, target);
+        } catch (Throwable t) {
+            if (hand != null) {
+                hand.releaseIfPending();
+            }
+            throw sneakyThrow(t);
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletableFuture.completeAsync(Supplier, Executor)}.
+     *
+     * @param <T> future result type
+     * @param cf target future
+     * @param supplier async supplier
+     * @param executor target executor
+     * @return the target future
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletableFuture<T> completeAsync(CompletableFuture<T> cf,
+            Supplier<? extends T> supplier, Executor executor) {
+        Hand hand = supplier == null ? null : prepareCfStageHand(cf, executor, true);
+        Supplier<? extends T> target = hand == null ? supplier : wrapSupplier(hand, supplier);
+        CompletableFuture<T> out;
+        try {
+            out = (CompletableFuture<T>) invokeCfReflect(CF_COMPLETE_ASYNC_2, cf, target, executor);
+        } catch (Throwable t) {
+            if (hand != null) {
+                hand.releaseIfPending();
+            }
+            throw sneakyThrow(t);
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenApplyAsync(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn stage function
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> thenApplyAsync(CompletableFuture<T> cf,
             Function<? super T, ? extends U> fn) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, null, false);
@@ -749,6 +919,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenApplyAsync(Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn stage function
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> thenApplyAsync(CompletableFuture<T> cf,
             Function<? super T, ? extends U> fn, Executor executor) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, executor, true);
@@ -765,6 +945,14 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAcceptAsync(Consumer)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage consumer
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> thenAcceptAsync(CompletableFuture<T> cf,
             Consumer<? super T> action) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, null, false);
@@ -781,6 +969,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAcceptAsync(Consumer, Executor)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage consumer
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> thenAcceptAsync(CompletableFuture<T> cf,
             Consumer<? super T> action, Executor executor) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, executor, true);
@@ -797,6 +994,14 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenRunAsync(Runnable)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage runnable
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> thenRunAsync(CompletableFuture<T> cf, Runnable action) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, null, false);
         if (hand == null) {
@@ -812,6 +1017,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenRunAsync(Runnable, Executor)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> thenRunAsync(CompletableFuture<T> cf, Runnable action,
             Executor executor) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, executor, true);
@@ -828,6 +1042,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenComposeAsync(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn composition function
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> thenComposeAsync(CompletableFuture<T> cf,
             Function<? super T, ? extends CompletionStage<U>> fn) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, null, false);
@@ -844,6 +1067,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenComposeAsync(Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn composition function
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> thenComposeAsync(CompletableFuture<T> cf,
             Function<? super T, ? extends CompletionStage<U>> fn, Executor executor) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, executor, true);
@@ -860,6 +1093,17 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenCombineAsync(CompletionStage, BiFunction)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn combiner function
+     * @return dependent future
+     */
     public static <T, U, V> CompletableFuture<V> thenCombineAsync(CompletableFuture<T> cf,
             CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn) {
         Hand hand = (other == null || fn == null) ? null : prepareCfStageHand(cf, null, false);
@@ -876,6 +1120,18 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenCombineAsync(CompletionStage, BiFunction, Executor)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn combiner function
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U, V> CompletableFuture<V> thenCombineAsync(CompletableFuture<T> cf,
             CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn,
             Executor executor) {
@@ -893,6 +1149,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAcceptBothAsync(CompletionStage, BiConsumer)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param cf target future
+     * @param other other stage
+     * @param action combiner consumer
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<Void> thenAcceptBothAsync(CompletableFuture<T> cf,
             CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, null, false);
@@ -909,6 +1175,17 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAcceptBothAsync(CompletionStage, BiConsumer, Executor)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param cf target future
+     * @param other other stage
+     * @param action combiner consumer
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<Void> thenAcceptBothAsync(CompletableFuture<T> cf,
             CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action, Executor executor) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, executor, true);
@@ -925,6 +1202,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterBothAsync(CompletionStage, Runnable)}.
+     *
+     * @param <T> first input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> runAfterBothAsync(CompletableFuture<T> cf,
             CompletionStage<?> other, Runnable action) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, null, false);
@@ -941,6 +1227,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterBothAsync(CompletionStage, Runnable, Executor)}.
+     *
+     * @param <T> first input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> runAfterBothAsync(CompletableFuture<T> cf,
             CompletionStage<?> other, Runnable action, Executor executor) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, executor, true);
@@ -957,6 +1253,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#applyToEitherAsync(CompletionStage, Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn stage function
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> applyToEitherAsync(CompletableFuture<T> cf,
             CompletionStage<? extends T> other, Function<? super T, U> fn) {
         Hand hand = (other == null || fn == null) ? null : prepareCfStageHand(cf, null, false);
@@ -973,6 +1279,17 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#applyToEitherAsync(CompletionStage, Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn stage function
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> applyToEitherAsync(CompletableFuture<T> cf,
             CompletionStage<? extends T> other, Function<? super T, U> fn, Executor executor) {
         Hand hand = (other == null || fn == null) ? null : prepareCfStageHand(cf, executor, true);
@@ -989,6 +1306,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#acceptEitherAsync(CompletionStage, Consumer)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage consumer
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> acceptEitherAsync(CompletableFuture<T> cf,
             CompletionStage<? extends T> other, Consumer<? super T> action) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, null, false);
@@ -1005,6 +1331,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#acceptEitherAsync(CompletionStage, Consumer, Executor)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage consumer
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> acceptEitherAsync(CompletableFuture<T> cf,
             CompletionStage<? extends T> other, Consumer<? super T> action, Executor executor) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, executor, true);
@@ -1021,6 +1357,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterEitherAsync(CompletionStage, Runnable)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> runAfterEitherAsync(CompletableFuture<T> cf,
             CompletionStage<?> other, Runnable action) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, null, false);
@@ -1037,6 +1382,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterEitherAsync(CompletionStage, Runnable, Executor)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<Void> runAfterEitherAsync(CompletableFuture<T> cf,
             CompletionStage<?> other, Runnable action, Executor executor) {
         Hand hand = (other == null || action == null) ? null : prepareCfStageHand(cf, executor, true);
@@ -1053,6 +1408,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#handleAsync(BiFunction)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn handler function
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> handleAsync(CompletableFuture<T> cf,
             BiFunction<? super T, Throwable, ? extends U> fn) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, null, false);
@@ -1069,6 +1433,16 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#handleAsync(BiFunction, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn handler function
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T, U> CompletableFuture<U> handleAsync(CompletableFuture<T> cf,
             BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
         Hand hand = fn == null ? null : prepareCfStageHand(cf, executor, true);
@@ -1085,6 +1459,14 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#whenCompleteAsync(BiConsumer)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param action completion consumer
+     * @return dependent future
+     */
     public static <T> CompletableFuture<T> whenCompleteAsync(CompletableFuture<T> cf,
             BiConsumer<? super T, ? super Throwable> action) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, null, false);
@@ -1101,6 +1483,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@link CompletableFuture#whenCompleteAsync(BiConsumer, Executor)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param action completion consumer
+     * @param executor target executor
+     * @return dependent future
+     */
     public static <T> CompletableFuture<T> whenCompleteAsync(CompletableFuture<T> cf,
             BiConsumer<? super T, ? super Throwable> action, Executor executor) {
         Hand hand = action == null ? null : prepareCfStageHand(cf, executor, true);
@@ -1117,6 +1508,14 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@code CompletableFuture.exceptionallyAsync(Function)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery function
+     * @return dependent future
+     */
     @SuppressWarnings("unchecked")
     public static <T> CompletableFuture<T> exceptionallyAsync(CompletableFuture<T> cf,
             Function<Throwable, ? extends T> fn) {
@@ -1134,6 +1533,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@code CompletableFuture.exceptionallyAsync(Function, Executor)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery function
+     * @param executor target executor
+     * @return dependent future
+     */
     @SuppressWarnings("unchecked")
     public static <T> CompletableFuture<T> exceptionallyAsync(CompletableFuture<T> cf,
             Function<Throwable, ? extends T> fn, Executor executor) {
@@ -1151,6 +1559,14 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@code CompletableFuture.exceptionallyComposeAsync(Function)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery composition function
+     * @return dependent future
+     */
     @SuppressWarnings("unchecked")
     public static <T> CompletableFuture<T> exceptionallyComposeAsync(CompletableFuture<T> cf,
             Function<Throwable, ? extends CompletionStage<T>> fn) {
@@ -1168,6 +1584,15 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    /**
+     * Call-site wrapper for {@code CompletableFuture.exceptionallyComposeAsync(Function, Executor)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery composition function
+     * @param executor target executor
+     * @return dependent future
+     */
     @SuppressWarnings("unchecked")
     public static <T> CompletableFuture<T> exceptionallyComposeAsync(CompletableFuture<T> cf,
             Function<Throwable, ? extends CompletionStage<T>> fn, Executor executor) {
@@ -1185,9 +1610,1153 @@ public final class RequestGate {
         return finishCfStage(out, hand);
     }
 
+    // --- CompletableFuture plain dependent stage wrappers (tracks external library futures) ---
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenApply(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn stage function
+     * @return dependent future
+     */
+    public static <T, U> CompletableFuture<U> thenApply(CompletableFuture<T> cf,
+            Function<? super T, ? extends U> fn) {
+        Hand hand = fn == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.thenApply(fn);
+        }
+        CompletableFuture<U> out;
+        try {
+            out = cf.thenApply(wrapFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAccept(Consumer)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage consumer
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<Void> thenAccept(CompletableFuture<T> cf,
+            Consumer<? super T> action) {
+        Hand hand = action == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.thenAccept(action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.thenAccept(wrapConsumer(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenRun(Runnable)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param action stage runnable
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<Void> thenRun(CompletableFuture<T> cf, Runnable action) {
+        Hand hand = action == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.thenRun(action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.thenRun(wrapStageRunnable(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenCompose(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn composition function
+     * @return dependent future
+     */
+    public static <T, U> CompletableFuture<U> thenCompose(CompletableFuture<T> cf,
+            Function<? super T, ? extends CompletionStage<U>> fn) {
+        Hand hand = fn == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.thenCompose(fn);
+        }
+        CompletableFuture<U> out;
+        try {
+            out = cf.thenCompose(wrapFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenCombine(CompletionStage, BiFunction)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn combiner function
+     * @return dependent future
+     */
+    public static <T, U, V> CompletableFuture<V> thenCombine(CompletableFuture<T> cf,
+            CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn) {
+        Hand hand = (other == null || fn == null) ? null : prepareCfSyncHand(cf, other, false);
+        if (hand == null) {
+            return cf.thenCombine(other, fn);
+        }
+        CompletableFuture<V> out;
+        try {
+            out = cf.thenCombine(other, wrapBiFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#thenAcceptBoth(CompletionStage, BiConsumer)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param cf target future
+     * @param other other stage
+     * @param action combiner consumer
+     * @return dependent future
+     */
+    public static <T, U> CompletableFuture<Void> thenAcceptBoth(CompletableFuture<T> cf,
+            CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
+        Hand hand = (other == null || action == null) ? null : prepareCfSyncHand(cf, other, false);
+        if (hand == null) {
+            return cf.thenAcceptBoth(other, action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.thenAcceptBoth(other, wrapBiConsumer(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterBoth(CompletionStage, Runnable)}.
+     *
+     * @param <T> first input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<Void> runAfterBoth(CompletableFuture<T> cf,
+            CompletionStage<?> other, Runnable action) {
+        Hand hand = (other == null || action == null) ? null : prepareCfSyncHand(cf, other, false);
+        if (hand == null) {
+            return cf.runAfterBoth(other, action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.runAfterBoth(other, wrapStageRunnable(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#applyToEither(CompletionStage, Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param other other stage
+     * @param fn stage function
+     * @return dependent future
+     */
+    public static <T, U> CompletableFuture<U> applyToEither(CompletableFuture<T> cf,
+            CompletionStage<? extends T> other, Function<? super T, U> fn) {
+        Hand hand = (other == null || fn == null) ? null : prepareCfSyncHand(cf, other, true);
+        if (hand == null) {
+            return cf.applyToEither(other, fn);
+        }
+        CompletableFuture<U> out;
+        try {
+            out = cf.applyToEither(other, wrapFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#acceptEither(CompletionStage, Consumer)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage consumer
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<Void> acceptEither(CompletableFuture<T> cf,
+            CompletionStage<? extends T> other, Consumer<? super T> action) {
+        Hand hand = (other == null || action == null) ? null : prepareCfSyncHand(cf, other, true);
+        if (hand == null) {
+            return cf.acceptEither(other, action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.acceptEither(other, wrapConsumer(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#runAfterEither(CompletionStage, Runnable)}.
+     *
+     * @param <T> input type
+     * @param cf target future
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<Void> runAfterEither(CompletableFuture<T> cf,
+            CompletionStage<?> other, Runnable action) {
+        Hand hand = (other == null || action == null) ? null : prepareCfSyncHand(cf, other, true);
+        if (hand == null) {
+            return cf.runAfterEither(other, action);
+        }
+        CompletableFuture<Void> out;
+        try {
+            out = cf.runAfterEither(other, wrapStageRunnable(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#handle(BiFunction)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param cf target future
+     * @param fn handler function
+     * @return dependent future
+     */
+    public static <T, U> CompletableFuture<U> handle(CompletableFuture<T> cf,
+            BiFunction<? super T, Throwable, ? extends U> fn) {
+        Hand hand = fn == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.handle(fn);
+        }
+        CompletableFuture<U> out;
+        try {
+            out = cf.handle(wrapBiFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#whenComplete(BiConsumer)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param action completion consumer
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<T> whenComplete(CompletableFuture<T> cf,
+            BiConsumer<? super T, ? super Throwable> action) {
+        Hand hand = action == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.whenComplete(action);
+        }
+        CompletableFuture<T> out;
+        try {
+            out = cf.whenComplete(wrapBiConsumer(hand, action));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletableFuture#exceptionally(Function)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery function
+     * @return dependent future
+     */
+    public static <T> CompletableFuture<T> exceptionally(CompletableFuture<T> cf,
+            Function<Throwable, ? extends T> fn) {
+        Hand hand = fn == null ? null : prepareCfSyncHand(cf, null, false);
+        if (hand == null) {
+            return cf.exceptionally(fn);
+        }
+        CompletableFuture<T> out;
+        try {
+            out = cf.exceptionally(wrapFunction(hand, fn));
+        } catch (Throwable t) {
+            hand.releaseIfPending();
+            throw t;
+        }
+        return finishCfStage(out, hand);
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletableFuture.exceptionallyCompose(Function)}.
+     *
+     * @param <T> result type
+     * @param cf target future
+     * @param fn recovery composition function
+     * @return dependent future
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletableFuture<T> exceptionallyCompose(CompletableFuture<T> cf,
+            Function<Throwable, ? extends CompletionStage<T>> fn) {
+        Hand hand = fn == null ? null : prepareCfSyncHand(cf, null, false);
+        Function<Throwable, ? extends CompletionStage<T>> target = hand == null ? fn : wrapFunction(hand, fn);
+        CompletableFuture<T> out;
+        try {
+            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE, cf, target);
+        } catch (Throwable t) {
+            if (hand != null) {
+                hand.releaseIfPending();
+            }
+            throw sneakyThrow(t);
+        }
+        return finishCfStage(out, hand);
+    }
+
+    // --- CompletionStage *Async and plain dependent call-site wrappers ---
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenApplyAsync(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn stage function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenApplyAsync(CompletionStage<T> stage,
+            Function<? super T, ? extends U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenApplyAsync((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenApplyAsync(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenApplyAsync(Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn stage function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenApplyAsync(CompletionStage<T> stage,
+            Function<? super T, ? extends U> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenApplyAsync((CompletableFuture<T>) stage, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenApplyAsync(fn, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAcceptAsync(Consumer)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenAcceptAsync(CompletionStage<T> stage,
+            Consumer<? super T> action) {
+        if (stage instanceof CompletableFuture) {
+            return thenAcceptAsync((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAcceptAsync(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAcceptAsync(Consumer, Executor)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage consumer
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenAcceptAsync(CompletionStage<T> stage,
+            Consumer<? super T> action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenAcceptAsync((CompletableFuture<T>) stage, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAcceptAsync(action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenRunAsync(Runnable)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenRunAsync(CompletionStage<T> stage, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return thenRunAsync((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenRunAsync(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenRunAsync(Runnable, Executor)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenRunAsync(CompletionStage<T> stage, Runnable action,
+            Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenRunAsync((CompletableFuture<T>) stage, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenRunAsync(action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenComposeAsync(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn composition function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenComposeAsync(CompletionStage<T> stage,
+            Function<? super T, ? extends CompletionStage<U>> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenComposeAsync((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenComposeAsync(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenComposeAsync(Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn composition function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenComposeAsync(CompletionStage<T> stage,
+            Function<? super T, ? extends CompletionStage<U>> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenComposeAsync((CompletableFuture<T>) stage, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenComposeAsync(fn, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenCombineAsync(CompletionStage, BiFunction)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn combiner function
+     * @return dependent stage
+     */
+    public static <T, U, V> CompletionStage<V> stageThenCombineAsync(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenCombineAsync((CompletableFuture<T>) stage, other, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenCombineAsync(other, fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenCombineAsync(CompletionStage, BiFunction, Executor)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn combiner function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U, V> CompletionStage<V> stageThenCombineAsync(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn,
+            Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenCombineAsync((CompletableFuture<T>) stage, other, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenCombineAsync(other, fn, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAcceptBothAsync(CompletionStage, BiConsumer)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action combiner consumer
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<Void> stageThenAcceptBothAsync(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
+        if (stage instanceof CompletableFuture) {
+            return thenAcceptBothAsync((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAcceptBothAsync(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAcceptBothAsync(CompletionStage, BiConsumer, Executor)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action combiner consumer
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<Void> stageThenAcceptBothAsync(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return thenAcceptBothAsync((CompletableFuture<T>) stage, other, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAcceptBothAsync(other, action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterBothAsync(CompletionStage, Runnable)}.
+     *
+     * @param <T> first input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterBothAsync(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterBothAsync((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterBothAsync(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterBothAsync(CompletionStage, Runnable, Executor)}.
+     *
+     * @param <T> first input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterBothAsync(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterBothAsync((CompletableFuture<T>) stage, other, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterBothAsync(other, action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#applyToEitherAsync(CompletionStage, Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn stage function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageApplyToEitherAsync(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Function<? super T, U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return applyToEitherAsync((CompletableFuture<T>) stage, other, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.applyToEitherAsync(other, fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#applyToEitherAsync(CompletionStage, Function, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn stage function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageApplyToEitherAsync(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Function<? super T, U> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return applyToEitherAsync((CompletableFuture<T>) stage, other, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.applyToEitherAsync(other, fn, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#acceptEitherAsync(CompletionStage, Consumer)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageAcceptEitherAsync(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Consumer<? super T> action) {
+        if (stage instanceof CompletableFuture) {
+            return acceptEitherAsync((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.acceptEitherAsync(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#acceptEitherAsync(CompletionStage, Consumer, Executor)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage consumer
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageAcceptEitherAsync(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Consumer<? super T> action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return acceptEitherAsync((CompletableFuture<T>) stage, other, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.acceptEitherAsync(other, action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterEitherAsync(CompletionStage, Runnable)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterEitherAsync(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterEitherAsync((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterEitherAsync(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterEitherAsync(CompletionStage, Runnable, Executor)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterEitherAsync(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterEitherAsync((CompletableFuture<T>) stage, other, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterEitherAsync(other, action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#handleAsync(BiFunction)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn handler function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageHandleAsync(CompletionStage<T> stage,
+            BiFunction<? super T, Throwable, ? extends U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return handleAsync((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.handleAsync(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#handleAsync(BiFunction, Executor)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn handler function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageHandleAsync(CompletionStage<T> stage,
+            BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return handleAsync((CompletableFuture<T>) stage, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.handleAsync(fn, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#whenCompleteAsync(BiConsumer)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param action completion consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<T> stageWhenCompleteAsync(CompletionStage<T> stage,
+            BiConsumer<? super T, ? super Throwable> action) {
+        if (stage instanceof CompletableFuture) {
+            return whenCompleteAsync((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.whenCompleteAsync(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#whenCompleteAsync(BiConsumer, Executor)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param action completion consumer
+     * @param executor target executor
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<T> stageWhenCompleteAsync(CompletionStage<T> stage,
+            BiConsumer<? super T, ? super Throwable> action, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return whenCompleteAsync((CompletableFuture<T>) stage, action, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.whenCompleteAsync(action, executor);
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletionStage.exceptionallyAsync(Function)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery function
+     * @return dependent stage
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletionStage<T> stageExceptionallyAsync(CompletionStage<T> stage,
+            Function<Throwable, ? extends T> fn) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionallyAsync((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        try {
+            return (CompletionStage<T>) invokeCfReflect(CS_EXCEPTIONALLY_ASYNC_1, stage, fn);
+        } catch (Throwable t) {
+            throw sneakyThrow(t);
+        }
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletionStage.exceptionallyAsync(Function, Executor)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletionStage<T> stageExceptionallyAsync(CompletionStage<T> stage,
+            Function<Throwable, ? extends T> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionallyAsync((CompletableFuture<T>) stage, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        try {
+            return (CompletionStage<T>) invokeCfReflect(CS_EXCEPTIONALLY_ASYNC_2, stage, fn, executor);
+        } catch (Throwable t) {
+            throw sneakyThrow(t);
+        }
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletionStage.exceptionallyComposeAsync(Function)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery composition function
+     * @return dependent stage
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletionStage<T> stageExceptionallyComposeAsync(CompletionStage<T> stage,
+            Function<Throwable, ? extends CompletionStage<T>> fn) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionallyComposeAsync((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        try {
+            return (CompletionStage<T>) invokeCfReflect(CS_EXCEPTIONALLY_COMPOSE_ASYNC_1, stage, fn);
+        } catch (Throwable t) {
+            throw sneakyThrow(t);
+        }
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletionStage.exceptionallyComposeAsync(Function, Executor)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery composition function
+     * @param executor target executor
+     * @return dependent stage
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletionStage<T> stageExceptionallyComposeAsync(CompletionStage<T> stage,
+            Function<Throwable, ? extends CompletionStage<T>> fn, Executor executor) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionallyComposeAsync((CompletableFuture<T>) stage, fn, executor);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        try {
+            return (CompletionStage<T>) invokeCfReflect(CS_EXCEPTIONALLY_COMPOSE_ASYNC_2, stage, fn, executor);
+        } catch (Throwable t) {
+            throw sneakyThrow(t);
+        }
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenApply(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn stage function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenApply(CompletionStage<T> stage,
+            Function<? super T, ? extends U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenApply((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenApply(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAccept(Consumer)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenAccept(CompletionStage<T> stage,
+            Consumer<? super T> action) {
+        if (stage instanceof CompletableFuture) {
+            return thenAccept((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAccept(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenRun(Runnable)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageThenRun(CompletionStage<T> stage, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return thenRun((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenRun(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenCompose(Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn composition function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageThenCompose(CompletionStage<T> stage,
+            Function<? super T, ? extends CompletionStage<U>> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenCompose((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenCompose(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenCombine(CompletionStage, BiFunction)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param <V> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn combiner function
+     * @return dependent stage
+     */
+    public static <T, U, V> CompletionStage<V> stageThenCombine(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiFunction<? super T, ? super U, ? extends V> fn) {
+        if (stage instanceof CompletableFuture) {
+            return thenCombine((CompletableFuture<T>) stage, other, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenCombine(other, fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#thenAcceptBoth(CompletionStage, BiConsumer)}.
+     *
+     * @param <T> first input type
+     * @param <U> second input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action combiner consumer
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<Void> stageThenAcceptBoth(CompletionStage<T> stage,
+            CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
+        if (stage instanceof CompletableFuture) {
+            return thenAcceptBoth((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.thenAcceptBoth(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterBoth(CompletionStage, Runnable)}.
+     *
+     * @param <T> first input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterBoth(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterBoth((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterBoth(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#applyToEither(CompletionStage, Function)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param other other stage
+     * @param fn stage function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageApplyToEither(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Function<? super T, U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return applyToEither((CompletableFuture<T>) stage, other, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.applyToEither(other, fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#acceptEither(CompletionStage, Consumer)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageAcceptEither(CompletionStage<T> stage,
+            CompletionStage<? extends T> other, Consumer<? super T> action) {
+        if (stage instanceof CompletableFuture) {
+            return acceptEither((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.acceptEither(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#runAfterEither(CompletionStage, Runnable)}.
+     *
+     * @param <T> input type
+     * @param stage target stage
+     * @param other other stage
+     * @param action stage runnable
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<Void> stageRunAfterEither(CompletionStage<T> stage,
+            CompletionStage<?> other, Runnable action) {
+        if (stage instanceof CompletableFuture) {
+            return runAfterEither((CompletableFuture<T>) stage, other, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.runAfterEither(other, action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#handle(BiFunction)}.
+     *
+     * @param <T> input type
+     * @param <U> output type
+     * @param stage target stage
+     * @param fn handler function
+     * @return dependent stage
+     */
+    public static <T, U> CompletionStage<U> stageHandle(CompletionStage<T> stage,
+            BiFunction<? super T, Throwable, ? extends U> fn) {
+        if (stage instanceof CompletableFuture) {
+            return handle((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.handle(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#whenComplete(BiConsumer)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param action completion consumer
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<T> stageWhenComplete(CompletionStage<T> stage,
+            BiConsumer<? super T, ? super Throwable> action) {
+        if (stage instanceof CompletableFuture) {
+            return whenComplete((CompletableFuture<T>) stage, action);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.whenComplete(action);
+    }
+
+    /**
+     * Call-site wrapper for {@link CompletionStage#exceptionally(Function)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery function
+     * @return dependent stage
+     */
+    public static <T> CompletionStage<T> stageExceptionally(CompletionStage<T> stage,
+            Function<Throwable, ? extends T> fn) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionally((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        return stage.exceptionally(fn);
+    }
+
+    /**
+     * Call-site wrapper for {@code CompletionStage.exceptionallyCompose(Function)}.
+     *
+     * @param <T> result type
+     * @param stage target stage
+     * @param fn recovery composition function
+     * @return dependent stage
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> CompletionStage<T> stageExceptionallyCompose(CompletionStage<T> stage,
+            Function<Throwable, ? extends CompletionStage<T>> fn) {
+        if (stage instanceof CompletableFuture) {
+            return exceptionallyCompose((CompletableFuture<T>) stage, fn);
+        }
+        noteUntrackedAsync("untracked-async:completion-stage");
+        try {
+            return (CompletionStage<T>) invokeCfReflect(CS_EXCEPTIONALLY_COMPOSE, stage, fn);
+        } catch (Throwable t) {
+            throw sneakyThrow(t);
+        }
+    }
+
     private static Object invokeCfReflect(Method method, Object target, Object... args) throws Throwable {
         if (method == null) {
-            throw new NoSuchMethodError("CompletableFuture async method unavailable on this JDK");
+            throw new NoSuchMethodError("CompletableFuture/CompletionStage method unavailable on this JDK");
         }
         try {
             return method.invoke(target, args);
@@ -1203,55 +2772,148 @@ public final class RequestGate {
 
     // --- Untracked async call-site pass-through contamination helpers ---
 
-    private static void contaminateIfInRequest(String reason) {
-        if (!armed) {
+    /**
+     * Records an untracked async hand-off occurring inside an active request
+     * window or scheduled/listener job run without wrapping the task.
+     *
+     * @param reason contamination reason label
+     */
+    public static void noteUntrackedAsync(String reason) {
+        if (!armed || reason == null || reason.isEmpty()) {
             return;
         }
         Window window = INSIDE.get();
         if (window != null) {
             window.contaminate(reason);
+            return;
+        }
+        if (JobGate.runningAttribution() != null) {
+            JobGate.markUntracked(reason);
         }
     }
 
+    /**
+     * Checks whether {@code target} is a {@link Thread} instance before a
+     * non-{@code java.lang.Thread} {@code start()} call and flags an untracked
+     * thread start if so.
+     *
+     * @param target receiver of {@code start()}
+     */
+    public static void noteIfThread(Object target) {
+        if (target instanceof Thread) {
+            noteUntrackedAsync("untracked-async:thread-start");
+        }
+    }
+
+    /**
+     * Pass-through call-site wrapper for {@link ScheduledExecutorService#schedule(Runnable, long, TimeUnit)}.
+     *
+     * @param executor target scheduled executor
+     * @param command task to schedule
+     * @param delay execution delay
+     * @param unit time unit of delay
+     * @return scheduled future
+     */
     public static ScheduledFuture<?> schedule(ScheduledExecutorService executor, Runnable command,
             long delay, TimeUnit unit) {
-        contaminateIfInRequest("untracked-async:schedule");
+        noteUntrackedAsync("untracked-async:schedule");
         return executor.schedule(command, delay, unit);
     }
 
+    /**
+     * Pass-through call-site wrapper for {@link ScheduledExecutorService#schedule(Callable, long, TimeUnit)}.
+     *
+     * @param <V> result type
+     * @param executor target scheduled executor
+     * @param callable task to schedule
+     * @param delay execution delay
+     * @param unit time unit of delay
+     * @return scheduled future
+     */
     public static <V> ScheduledFuture<V> schedule(ScheduledExecutorService executor, Callable<V> callable,
             long delay, TimeUnit unit) {
-        contaminateIfInRequest("untracked-async:schedule");
+        noteUntrackedAsync("untracked-async:schedule");
         return executor.schedule(callable, delay, unit);
     }
 
+    /**
+     * Pass-through call-site wrapper for
+     * {@link ScheduledExecutorService#scheduleAtFixedRate(Runnable, long, long, TimeUnit)}.
+     *
+     * @param executor target scheduled executor
+     * @param command task to schedule
+     * @param initialDelay initial delay
+     * @param period execution period
+     * @param unit time unit
+     * @return scheduled future
+     */
     public static ScheduledFuture<?> scheduleAtFixedRate(ScheduledExecutorService executor, Runnable command,
             long initialDelay, long period, TimeUnit unit) {
-        contaminateIfInRequest("untracked-async:schedule");
+        noteUntrackedAsync("untracked-async:schedule");
         return executor.scheduleAtFixedRate(command, initialDelay, period, unit);
     }
 
+    /**
+     * Pass-through call-site wrapper for
+     * {@link ScheduledExecutorService#scheduleWithFixedDelay(Runnable, long, long, TimeUnit)}.
+     *
+     * @param executor target scheduled executor
+     * @param command task to schedule
+     * @param initialDelay initial delay
+     * @param delay delay between runs
+     * @param unit time unit
+     * @return scheduled future
+     */
     public static ScheduledFuture<?> scheduleWithFixedDelay(ScheduledExecutorService executor, Runnable command,
             long initialDelay, long delay, TimeUnit unit) {
-        contaminateIfInRequest("untracked-async:schedule");
+        noteUntrackedAsync("untracked-async:schedule");
         return executor.scheduleWithFixedDelay(command, initialDelay, delay, unit);
     }
 
+    /**
+     * Pass-through call-site wrapper for {@link ExecutorService#invokeAny(Collection)}.
+     *
+     * @param <T> result type
+     * @param executor target executor service
+     * @param tasks tasks to invoke
+     * @return result of one completed task
+     * @throws InterruptedException if interrupted while waiting
+     * @throws ExecutionException if no task completes successfully
+     */
     public static <T> T invokeAny(ExecutorService executor, Collection<? extends Callable<T>> tasks)
             throws InterruptedException, ExecutionException {
-        contaminateIfInRequest("untracked-async:invokeAny");
+        noteUntrackedAsync("untracked-async:invokeAny");
         return executor.invokeAny(tasks);
     }
 
+    /**
+     * Pass-through call-site wrapper for
+     * {@link ExecutorService#invokeAny(Collection, long, TimeUnit)}.
+     *
+     * @param <T> result type
+     * @param executor target executor service
+     * @param tasks tasks to invoke
+     * @param timeout maximum wait time
+     * @param unit time unit of timeout
+     * @return result of one completed task
+     * @throws InterruptedException if interrupted while waiting
+     * @throws ExecutionException if no task completes successfully
+     * @throws TimeoutException if timeout elapses before any task completes
+     */
     public static <T> T invokeAny(ExecutorService executor, Collection<? extends Callable<T>> tasks,
             long timeout, TimeUnit unit)
             throws InterruptedException, ExecutionException, TimeoutException {
-        contaminateIfInRequest("untracked-async:invokeAny");
+        noteUntrackedAsync("untracked-async:invokeAny");
         return executor.invokeAny(tasks, timeout, unit);
     }
 
+    /**
+     * Pass-through call-site wrapper for {@link Thread#start()}.
+     *
+     * @param thread thread to start
+     */
     public static void startThread(Thread thread) {
-        contaminateIfInRequest("untracked-async:thread-start");
+        noteUntrackedAsync("untracked-async:thread-start");
         thread.start();
     }
 
@@ -1514,53 +3176,97 @@ public final class RequestGate {
     }
 
     // open(testId, prevActiveTestId) opens a fresh test window, records
-    // armed-mid-flight if unarmed traffic occurred prior to arming, and marks
-    // the new window contaminated ("tail:<prevTestId>") if the previous test
-    // was cut, unclosed, or any prior window still has running > 0.
+    // armed-mid-flight while any unarmed request/job remains in flight (or
+    // once after unarmed traffic occurred prior to arming), and marks the new
+    // window contaminated ("tail:<prevTestId>") if the previous test was cut,
+    // unclosed, had an untracked async hand-off, or any prior window still has
+    // running > 0.
     static void open(String testId, String prevActiveTestId) {
         arm();
         drainDeadHands();
-        Window prev = current;
+        long now = System.nanoTime();
         Window next = new Window(testId);
-        if ((pendingArmedMidFlight || unarmedEntered)
+        if (UNARMED_IN_FLIGHT.sum() > 0) {
+            pendingArmedMidFlight = false;
+            ARMED_MID_FLIGHT_CONSUMED.set(true);
+            next.contaminate("armed-mid-flight");
+        } else if ((pendingArmedMidFlight || unarmedEntered)
                 && ARMED_MID_FLIGHT_CONSUMED.compareAndSet(false, true)) {
             pendingArmedMidFlight = false;
             next.contaminate("armed-mid-flight");
         }
+        // Swap current BEFORE inspecting prev so no request can enter prev
+        // after we check prev.running.
+        Window prev = current;
+        current = next;
         if (prev != null) {
             prev.sweepCancelledFutures();
-            if (prev.running.get() > 0) {
+            boolean prevRunning = prev.running.get() > 0;
+            boolean prevUntracked = prev.hadUntrackedAsync;
+            if (prevRunning || prevUntracked) {
                 if (prev.testId == null && prevActiveTestId != null && !prevActiveTestId.isEmpty()) {
                     prev.fallbackId = prevActiveTestId;
                 }
-                retainLingering(prev);
+                if (prevUntracked && prev.untrackedTailExpiresAtNanos == 0L) {
+                    prev.untrackedTailExpiresAtNanos = now + untrackedTailWindowNanos;
+                }
+                retainLingering(prev, now);
             }
         }
         if (prevActiveTestId != null && !prevActiveTestId.isEmpty()) {
             next.contaminate("tail:" + prevActiveTestId);
         }
+        if (externalUntrackedTailPending || (externalUntrackedTailExpiresAtNanos != 0L
+                && (now - externalUntrackedTailExpiresAtNanos) < 0L)) {
+            String extReason = externalUntrackedTailReason;
+            next.contaminate("tail:" + (extReason != null && !extReason.isEmpty() ? extReason : "job"));
+            externalUntrackedTailPending = false;
+            if (externalUntrackedTailExpiresAtNanos != 0L && (now - externalUntrackedTailExpiresAtNanos) >= 0L) {
+                externalUntrackedTailExpiresAtNanos = 0L;
+            }
+        }
         for (Window lingering : LINGERING) {
             lingering.sweepCancelledFutures();
             boolean stillRunning = lingering.running.get() > 0;
             boolean reportCut = lingering.wasCut && !lingering.cutReportedOnce;
-            if (stillRunning || reportCut) {
+            boolean untrackedActive = lingering.hadUntrackedAsync
+                    && (!lingering.untrackedTailReportedOnce
+                            || (now - lingering.untrackedTailExpiresAtNanos) < 0L);
+            if (stillRunning || reportCut || untrackedActive) {
                 next.contaminate("tail:" + lingering.label());
-                lingering.cutReportedOnce = true;
+                if (reportCut) {
+                    lingering.cutReportedOnce = true;
+                }
+                if (lingering.hadUntrackedAsync) {
+                    lingering.untrackedTailReportedOnce = true;
+                }
             }
-            if (!stillRunning) {
+            boolean cutDone = !lingering.wasCut || lingering.cutReportedOnce;
+            boolean untrackedDone = !lingering.hadUntrackedAsync
+                    || (lingering.untrackedTailReportedOnce
+                            && (now - lingering.untrackedTailExpiresAtNanos) >= 0L);
+            if (!stillRunning && cutDone && untrackedDone) {
                 LINGERING.remove(lingering);
             }
         }
-        current = next;
     }
 
-    private static void retainLingering(Window window) {
+    private static void retainLingering(Window window, long now) {
         if (LINGERING.size() >= MAX_LINGERING) {
             for (Window existing : LINGERING) {
                 existing.sweepCancelledFutures();
-                if (existing.running.get() <= 0 && (!existing.wasCut || existing.cutReportedOnce)) {
+                boolean cutDone = !existing.wasCut || existing.cutReportedOnce;
+                boolean untrackedDone = !existing.hadUntrackedAsync
+                        || (existing.untrackedTailReportedOnce
+                                && (now - existing.untrackedTailExpiresAtNanos) >= 0L);
+                if (existing.running.get() <= 0 && cutDone && untrackedDone) {
                     LINGERING.remove(existing);
                 }
+            }
+            // Strictly bound memory if 64+ windows are already stuck lingering;
+            // those 64 entries already mark every subsequent window "tail:...".
+            if (LINGERING.size() >= MAX_LINGERING) {
+                return;
             }
         }
         LINGERING.add(window);
@@ -1582,8 +3288,9 @@ public final class RequestGate {
 
     // awaitWindow closes the current window, optionally waits up to
     // timeoutNanos for its requests/tasks to finish, retains the window in
-    // LINGERING if cut or still running, and returns its outcome (drained,
-    // waited, enteredCount, and accumulated contaminations).
+    // LINGERING if cut, still running, or carrying an untracked async hand-off,
+    // and returns its outcome (drained, waited, enteredCount, and accumulated
+    // contaminations).
     static WindowOutcome awaitWindow(long timeoutNanos, boolean wait) {
         drainDeadHands();
         Window window = current;
@@ -1591,12 +3298,21 @@ public final class RequestGate {
         window.sweepCancelledFutures();
         int initialRunning = window.running.get();
         if (!wait) {
-            if (initialRunning > 0) {
-                retainLingering(window);
+            long now = System.nanoTime();
+            if (window.hadUntrackedAsync) {
+                window.untrackedTailExpiresAtNanos = now + untrackedTailWindowNanos;
+            }
+            if (initialRunning > 0 || window.hadUntrackedAsync) {
+                retainLingering(window, now);
             }
             return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations());
         }
         if (initialRunning <= 0) {
+            if (window.hadUntrackedAsync) {
+                long now = System.nanoTime();
+                window.untrackedTailExpiresAtNanos = now + untrackedTailWindowNanos;
+                retainLingering(window, now);
+            }
             return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations());
         }
         boolean drained = false;
@@ -1629,9 +3345,15 @@ public final class RequestGate {
         } finally {
             window.waiter = null;
         }
-        if (!drained) {
-            window.wasCut = true;
-            retainLingering(window);
+        if (!drained || window.hadUntrackedAsync) {
+            long now = System.nanoTime();
+            if (!drained) {
+                window.wasCut = true;
+            }
+            if (window.hadUntrackedAsync) {
+                window.untrackedTailExpiresAtNanos = now + untrackedTailWindowNanos;
+            }
+            retainLingering(window, now);
         }
         return new WindowOutcome(drained, true, window.enteredCount.get(), window.contaminations());
     }
@@ -1662,6 +3384,9 @@ public final class RequestGate {
         private volatile Thread waiter;
         private volatile boolean wasCut;
         private volatile boolean cutReportedOnce;
+        private volatile boolean hadUntrackedAsync;
+        private volatile long untrackedTailExpiresAtNanos;
+        private volatile boolean untrackedTailReportedOnce;
         // Pending submitted tasks keyed by Hand (self-removed on release in
         // O(1), plus periodically swept on track() for cancelled futures so
         // windows without an END cannot grow unboundedly).
@@ -1688,6 +3413,9 @@ public final class RequestGate {
         private void contaminate(String reason) {
             if (reason == null || reason.isEmpty()) {
                 return;
+            }
+            if (reason.startsWith("untracked-")) {
+                hadUntrackedAsync = true;
             }
             if (contamCount.get() < JobGate.KEPT && contamSet.add(reason)) {
                 if (contamCount.incrementAndGet() <= JobGate.KEPT) {
@@ -1880,6 +3608,9 @@ public final class RequestGate {
         volatile HandRef executorRef;
         // Weak key in PENDING_BY_FUTURE for O(1) eager removal on start/release.
         volatile WeakIdentityKey futureKey;
+        // JobGate token kept alive across CompletableFuture postComplete() when
+        // window == null && job != null && deferRelease.
+        volatile Object deferredJobToken;
         private volatile int state;
 
         Hand(Window window, JobGate.Attribution job, boolean deferRelease) {
@@ -1905,20 +3636,28 @@ public final class RequestGate {
         }
 
         private void finishRelease() {
-            clearFutureKey();
-            window.untrack(this);
-            HandRef ref = executorRef;
-            if (ref != null) {
-                ref.released = true;
-                executorRef = null;
-                ref.set.remove(ref);
+            if (window != null) {
+                clearFutureKey();
+                window.untrack(this);
+                HandRef ref = executorRef;
+                if (ref != null) {
+                    ref.released = true;
+                    executorRef = null;
+                    ref.set.remove(ref);
+                }
+                done(window);
+            } else {
+                Object jt = deferredJobToken;
+                if (jt != null) {
+                    deferredJobToken = null;
+                    JobGate.exit(jt);
+                }
             }
-            done(window);
         }
 
         // release marks this task done unconditionally (non-deferred exit).
         final void release() {
-            if (window == null) {
+            if (window == null && job == null) {
                 return;
             }
             for (;;) {
@@ -1937,7 +3676,7 @@ public final class RequestGate {
         // callback (registered immediately before returning the CF, so LIFO
         // postComplete pops caller-registered synchronous dependents first).
         final void onFutureCompleted() {
-            if (window == null) {
+            if (window == null && job == null) {
                 return;
             }
             if (!deferRelease) {
@@ -1968,7 +3707,7 @@ public final class RequestGate {
         // already-running task waits for its finally block's exit() so the
         // window stays open while app code is still executing.
         final void releaseIfPending() {
-            if (window == null) {
+            if (window == null && job == null) {
                 return;
             }
             for (;;) {
@@ -1985,14 +3724,36 @@ public final class RequestGate {
 
         final Object enter() {
             if (window == null) {
-                return JobGate.enterAs(job);
+                for (;;) {
+                    int s = state;
+                    if ((s & FLAG_STARTED) != 0) {
+                        break;
+                    }
+                    int next = (s & ~FLAG_RELEASED) | FLAG_STARTED;
+                    if (STATE.compareAndSet(this, s, next)) {
+                        break;
+                    }
+                }
+                Object jt = JobGate.enterAs(job);
+                if (deferRelease) {
+                    deferredJobToken = jt;
+                }
+                return jt;
             }
             for (;;) {
                 int s = state;
                 if ((s & FLAG_STARTED) != 0) {
                     break;
                 }
-                if (STATE.compareAndSet(this, s, s | FLAG_STARTED)) {
+                if ((s & FLAG_RELEASED) != 0) {
+                    // Late start after an earlier pending release (e.g.
+                    // shutdownNow race or early cf.complete()): re-acquire the
+                    // window permit so exit() releases it cleanly when done.
+                    if (STATE.compareAndSet(this, s, (s & ~FLAG_RELEASED) | FLAG_STARTED)) {
+                        window.running.incrementAndGet();
+                        break;
+                    }
+                } else if (STATE.compareAndSet(this, s, s | FLAG_STARTED)) {
                     break;
                 }
             }
@@ -2004,8 +3765,28 @@ public final class RequestGate {
 
         final void exit(Object outer) {
             if (window == null) {
-                JobGate.exit(outer);
-                return;
+                if (!deferRelease) {
+                    JobGate.exit(outer);
+                    return;
+                }
+                JobGate.detachThread(outer);
+                for (;;) {
+                    int s = state;
+                    if ((s & FLAG_RELEASED) != 0) {
+                        return;
+                    }
+                    int next = s | FLAG_EXITED;
+                    boolean doRelease = (next & FLAG_CF_DONE) != 0;
+                    if (doRelease) {
+                        next |= FLAG_RELEASED;
+                    }
+                    if (STATE.compareAndSet(this, s, next)) {
+                        if (doRelease) {
+                            finishRelease();
+                        }
+                        return;
+                    }
+                }
             }
             if (outer == null) {
                 INSIDE.remove();

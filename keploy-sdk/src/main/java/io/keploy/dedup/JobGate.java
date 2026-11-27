@@ -93,8 +93,7 @@ public final class JobGate {
      */
     public static Object enter(Object job, String kind) {
         if (!RequestGate.isArmed()) {
-            RequestGate.noteUnarmedActivity();
-            return null;
+            return RequestGate.enterUnarmed();
         }
         Run run = null;
         try {
@@ -114,9 +113,10 @@ public final class JobGate {
     // task handed off directly from a scheduled job or listener starts a fresh
     // handedJobMaxNanos budget when it begins running (so queue wait time in a
     // busy pool does not eat into its budget); chained hops inherit the first
-    // hop's original deadline and skip entering once expired so a
-    // self-resubmitting loop cannot extend attribution forever.
-    // Never throws, as enter.
+    // hop's original deadline. Even if a chained hop starts after its deadline,
+    // it is still tracked as an expired Run ("job-tail:<name>") until exit()
+    // runs so overlapping windows are honestly flagged while runningAttribution()
+    // stops propagating further.
     static Object enterAs(Attribution attribution) {
         if (attribution == null || !RequestGate.isArmed()) {
             return null;
@@ -124,21 +124,50 @@ public final class JobGate {
         Run run = null;
         try {
             long now = System.nanoTime();
-            long deadline;
-            if (attribution.hasDeadline) {
-                if ((now - attribution.expiresAtNanos) >= 0) {
-                    return null;
-                }
-                deadline = attribution.expiresAtNanos;
-            } else {
-                deadline = now + handedJobMaxNanos;
-            }
+            long deadline = attribution.hasDeadline
+                    ? attribution.expiresAtNanos
+                    : now + handedJobMaxNanos;
             run = new Run(attribution.name, CURRENT.get(), true, deadline);
             begin(run);
         } catch (Throwable t) {
             // As in enter: the task runs on, and a run counted is handed back.
         }
         return run;
+    }
+
+    // markUntracked records an untracked async hand-off originated by a job's
+    // run (e.g., an unknown executor) on the currently open window (if any)
+    // and requests tail contamination on the immediately following window.
+    static void markUntracked(String reason) {
+        if (reason == null || reason.isEmpty() || !RequestGate.isArmed()) {
+            return;
+        }
+        Window active = window;
+        if (active != null) {
+            active.mark(reason);
+        }
+        RequestGate.noteExternalUntrackedTail(reason);
+    }
+
+    // detachThread restores CURRENT without removing the Run from RUNNING, so
+    // a CompletableFuture's synchronous dependent stages keep JobGate tracking
+    // active until whenComplete calls exit(token).
+    static void detachThread(Object token) {
+        if (token instanceof Run) {
+            Run run = (Run) token;
+            if (CURRENT.get() != run) {
+                return;
+            }
+            Run back = run.outer;
+            while (back != null && back.over) {
+                back = back.outer;
+            }
+            if (back == null) {
+                CURRENT.remove();
+            } else {
+                CURRENT.set(back);
+            }
+        }
     }
 
     // begin counts run as going on, in the window open now if any, and as
@@ -150,7 +179,7 @@ public final class JobGate {
         CURRENT.set(run);
         Window active = window;
         if (active != null) {
-            active.mark(run.name);
+            active.mark(run.isExpired(System.nanoTime()) ? "job-tail:" + run.name : run.name);
         }
     }
 
@@ -206,6 +235,10 @@ public final class JobGate {
      */
     public static void exit(Object token) {
         if (token == null) {
+            return;
+        }
+        if (RequestGate.isUnarmedToken(token)) {
+            RequestGate.exitUnarmed();
             return;
         }
         if (token instanceof Run) {

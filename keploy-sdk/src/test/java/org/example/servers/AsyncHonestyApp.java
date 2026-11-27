@@ -18,9 +18,14 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinTask;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -53,7 +58,27 @@ public final class AsyncHonestyApp {
         t.setDaemon(true);
         return t;
     });
-    private static final ExecutorService SERIALIZABLE_ONLY_POOL = new SerializableOnlyExecutor();
+    private static final ExecutorService SERIALIZABLE_ONLY_POOL = new SerializableOnlyExecutor(false);
+    private static final ExecutorService ASYNC_SERIALIZABLE_POOL = new SerializableOnlyExecutor(true);
+    private static final ConcreteCustomPool CONCRETE_POOL = new ConcreteCustomPool();
+    // Simulates an external library's event loop (e.g. HttpClient/Netty/AWS SDK)
+    // started outside any request, completing CompletableFutures asynchronously.
+    private static final LinkedBlockingQueue<Runnable> EXTERNAL_LIBRARY_LOOP = new LinkedBlockingQueue<>();
+
+    static {
+        Thread externalLoop = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    EXTERNAL_LIBRARY_LOOP.take().run();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "fake-external-http-loop");
+        externalLoop.setDaemon(true);
+        externalLoop.start();
+    }
 
     private AsyncHonestyApp() {
     }
@@ -170,6 +195,49 @@ public final class AsyncHonestyApp {
                             return "ok";
                         };
                 SERIALIZABLE_ONLY_POOL.submit(serializableCall);
+            } else if ("/unknown-serializable-async".equals(path)) {
+                final long delay = ms;
+                Runnable serializableTask = (Runnable & Serializable) () -> {
+                    sleepQuietly(delay);
+                    AsyncTail.ran();
+                };
+                ASYNC_SERIALIZABLE_POOL.execute(serializableTask);
+            } else if ("/external-cf-dependent".equals(path)) {
+                // Simulates an external library future (e.g., HttpClient.sendAsync)
+                // completed on an external event-loop thread, with app code attaching
+                // a plain .thenAccept(audit) dependent.
+                final CompletableFuture<String> externalFuture = new CompletableFuture<>();
+                EXTERNAL_LIBRARY_LOOP.offer(() -> {
+                    sleepQuietly(25);
+                    externalFuture.complete("http-200");
+                });
+                externalFuture.thenAccept(v -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("/completion-stage-async".equals(path)) {
+                CompletionStage<String> stage = CompletableFuture.completedFuture("seed");
+                stage.thenApplyAsync(v -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                    return v + "-stage";
+                }, PLAIN_POOL);
+            } else if ("/concrete-pool".equals(path)) {
+                CONCRETE_POOL.execute(() -> AsyncTail.ran());
+            } else if ("/subclassed-thread".equals(path)) {
+                MyWorkerThread t = new MyWorkerThread(() -> AsyncTail.ran());
+                t.setDaemon(true);
+                t.start();
+            } else if ("/fork-join-fork".equals(path)) {
+                ForkJoinTask.adapt(() -> AsyncTail.ran()).fork();
+            } else if ("/completion-service".equals(path)) {
+                ExecutorCompletionService<String> ecs = new ExecutorCompletionService<>(PLAIN_POOL);
+                ecs.submit(() -> {
+                    AsyncTail.ran();
+                    return "ecs";
+                });
+            } else if ("/method-ref".equals(path)) {
+                Collections.<Runnable>singletonList(() -> AsyncTail.ran()).forEach(PLAIN_POOL::execute);
             } else if ("/untracked-schedule".equals(path)) {
                 SCHED.schedule(() -> AsyncTail.ran(), 1, TimeUnit.MILLISECONDS);
             } else if ("/untracked-thread".equals(path)) {
@@ -187,17 +255,45 @@ public final class AsyncHonestyApp {
         }
     }
 
+    public static final class ConcreteCustomPool extends ThreadPoolExecutor {
+        public ConcreteCustomPool() {
+            super(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), r -> {
+                Thread t = new Thread(r, "app-concrete-pool");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+    }
+
+    public static final class MyWorkerThread extends Thread {
+        public MyWorkerThread(Runnable r) {
+            super(r, "app-my-worker-thread");
+        }
+    }
+
     /**
      * Hazelcast/Ignite-style custom ExecutorService that requires tasks to be
      * {@link Serializable} (throws if wrapped in a non-Serializable wrapper).
      */
     public static final class SerializableOnlyExecutor extends AbstractExecutorService {
+        private final boolean async;
+
+        public SerializableOnlyExecutor(boolean async) {
+            this.async = async;
+        }
+
         @Override
         public void execute(Runnable command) {
             if (!(command instanceof Serializable)) {
                 throw new IllegalStateException("Expected Serializable task, got " + command.getClass().getName());
             }
-            command.run();
+            if (async) {
+                Thread t = new Thread(command, "serializable-async");
+                t.setDaemon(true);
+                t.start();
+            } else {
+                command.run();
+            }
         }
 
         @Override

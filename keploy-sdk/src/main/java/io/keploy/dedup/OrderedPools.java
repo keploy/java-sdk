@@ -77,9 +77,12 @@ final class OrderedPools {
     // not initialized, as their execute and submit do.
     private static final String SPRING_POOL = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
     private static final String SPRING_SCHEDULER = "org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler";
+    private static final String SPRING_CONCURRENT = "org.springframework.scheduling.concurrent.ConcurrentTaskExecutor";
     private static final String SPRING_SIMPLE_ASYNC = "org.springframework.core.task.SimpleAsyncTaskExecutor";
     private static final String SPRING_TASK_EXECUTOR_ADAPTER =
             "org.springframework.core.task.support.TaskExecutorAdapter";
+    private static final String SPRING_ASYNC_ASPECT =
+            "org.springframework.aop.interceptor.AsyncExecutionAspectSupport";
     private static final String JDK_FINALIZABLE_DELEGATED =
             "java.util.concurrent.Executors$FinalizableDelegatedExecutorService";
     private static final String JDK_AUTO_SHUTDOWN_DELEGATED =
@@ -128,6 +131,51 @@ final class OrderedPools {
             return NONE;
         }
     };
+
+    // Whether a Spring executor subclass overrides execute/submit/doExecute
+    // (outside Spring's own executor base classes), which may cast or inspect
+    // the task before delegating to the inner pool.
+    private static final ClassValue<Boolean> OVERRIDES_SPRING_SUBMIT = new ClassValue<Boolean>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+                String name = c.getName();
+                if (isKnownSpringBaseClass(name)) {
+                    break;
+                }
+                if (declares(c, "execute", Runnable.class)
+                        || declares(c, "execute", Runnable.class, long.class)
+                        || declares(c, "submit", Runnable.class)
+                        || declares(c, "submit", Callable.class)
+                        || declares(c, "submitListenable", Runnable.class)
+                        || declares(c, "submitListenable", Callable.class)
+                        || declares(c, "submitCompletable", Runnable.class)
+                        || declares(c, "submitCompletable", Callable.class)
+                        || declares(c, "doExecute", Runnable.class)) {
+                    return Boolean.TRUE;
+                }
+            }
+            return Boolean.FALSE;
+        }
+    };
+
+    private static boolean isKnownSpringBaseClass(String name) {
+        return SPRING_POOL.equals(name)
+                || SPRING_SCHEDULER.equals(name)
+                || SPRING_CONCURRENT.equals(name)
+                || SPRING_SIMPLE_ASYNC.equals(name)
+                || SPRING_TASK_EXECUTOR_ADAPTER.equals(name)
+                || SPRING_ASYNC_ASPECT.equals(name);
+    }
+
+    private static boolean isSpringExecutorHierarchy(Class<?> cls) {
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            if (isKnownSpringBaseClass(c.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // Whether a ThreadPoolExecutor subclass overrides beforeExecute,
     // afterExecute, newTaskFor, execute, submit, or (for
@@ -250,24 +298,33 @@ final class OrderedPools {
         if (JDK_DELEGATED.equals(className) || JDK_DELEGATED_SCHEDULED.equals(className)) {
             return readDelegated(executor, depth);
         }
-        Object pool = POOL.get(cls);
-        if (pool != NONE) {
-            return readViaPoolMethod(executor, pool, SPRING_POOL);
-        }
-        if (SPRING_SIMPLE_ASYNC.equals(className)) {
-            return false;
-        }
-        Object scheduled = SCHEDULED_POOL.get(cls);
-        if (scheduled != NONE) {
-            return readViaPoolMethod(executor, scheduled, SPRING_SCHEDULER);
-        }
-        Object concurrent = CONCURRENT_EXECUTOR.get(cls);
-        if (concurrent != NONE) {
-            return readViaConcurrentExecutor(executor, concurrent, depth);
-        }
-        Object adapterField = ADAPTER_FIELD.get(cls);
-        if (adapterField != NONE) {
-            return readViaAdapterField(executor, adapterField, depth);
+        if (isSpringExecutorHierarchy(cls)) {
+            Object pool = POOL.get(cls);
+            if (pool instanceof String) {
+                return readViaPoolMethod(executor, pool, SPRING_POOL);
+            }
+            if (Boolean.TRUE.equals(OVERRIDES_SPRING_SUBMIT.get(cls))) {
+                return uncounted(executor, "it is a Spring executor subclass (" + className
+                        + ") that overrides execute/submit/doExecute");
+            }
+            if (pool != NONE) {
+                return readViaPoolMethod(executor, pool, SPRING_POOL);
+            }
+            if (SPRING_SIMPLE_ASYNC.equals(className)) {
+                return false;
+            }
+            Object scheduled = SCHEDULED_POOL.get(cls);
+            if (scheduled != NONE) {
+                return readViaPoolMethod(executor, scheduled, SPRING_SCHEDULER);
+            }
+            Object concurrent = CONCURRENT_EXECUTOR.get(cls);
+            if (concurrent != NONE) {
+                return readViaConcurrentExecutor(executor, concurrent, depth);
+            }
+            Object adapterField = ADAPTER_FIELD.get(cls);
+            if (adapterField != NONE) {
+                return readViaAdapterField(executor, adapterField, depth);
+            }
         }
         if (requireVerified) {
             return uncounted(executor, "its executor class is not on the verified safe allow-list");

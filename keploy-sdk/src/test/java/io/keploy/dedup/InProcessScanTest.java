@@ -1072,7 +1072,10 @@ public class InProcessScanTest {
             long began = System.nanoTime();
             assertEquals(TAKEN, send("END test-set-0/test-1"));
             assertTrue(System.nanoTime() - began < TimeUnit.MILLISECONDS.toNanos(1500));
-            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP + "\":[1]}}",
+            // stream entered before start() (while unarmed) and is still in flight,
+            // so END does not wait for it but marks the window armed-mid-flight.
+            assertEquals("{\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"" + SHOP
+                    + "\":[1]},\"contaminated\":[\"armed-mid-flight\"]}",
                     data.next());
         }
     }

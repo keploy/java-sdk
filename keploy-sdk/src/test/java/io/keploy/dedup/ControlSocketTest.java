@@ -51,10 +51,11 @@ import org.newsclub.net.unix.AFUNIXSocketChannel;
  * The unix control socket Keploy sends START and END on. Keploy fires its first
  * test as soon as the app answers its health check, so the socket must listen
  * by the time start() (premain, before the app's main) returns. Every command
- * the SDK reads gets one answer line before the close: "ACK proto=2" if it was
- * taken, "IGNORED proto=2" if not. Keploy reads a close with no answer from an
- * SDK that says proto=2 as a command not taken, so only a connection closed
- * with nothing sent may go unanswered.
+ * the SDK reads gets one answer line before the close:
+ * "ACK proto=3 caps=windowCut=...,contaminated=...,classMismatch=...,background=...,asyncExecutors=...,listenerContamination=..."
+ * if it was taken, "IGNORED proto=3" if not. Keploy reads a close with no
+ * answer from an SDK that says proto&gt;=2 as a command not taken, so only a
+ * connection closed with nothing sent may go unanswered.
  *
  * <p>The answers are compared with literals, not the SDK's constants: Keploy
  * reads the words, so a change to them must fail here.
