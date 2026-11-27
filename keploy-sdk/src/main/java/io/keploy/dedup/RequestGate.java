@@ -3,7 +3,6 @@ package io.keploy.dedup;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -119,28 +118,25 @@ public final class RequestGate {
     private static final int MAX_UNTRACKED_HANDLES = 64;
     private static final long UNARMED_HANDOFF_THROTTLE_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     // Short grace for a Thread subclass registered right before start() while
-    // still in Thread.State.NEW, and for one-shot TimerTasks when TimerTask.state
-    // cannot be read reflectively (JDK 16+ without --add-opens java.base/java.util).
+    // still in Thread.State.NEW.
     private static final long HANDLE_START_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
-    private static final long HANDLE_TIMER_ONESHOT_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
-    // Weakly-keyed sets of cancelled TimerTasks and Timers populated by rewritten
-    // TimerTask.cancel() / Timer.cancel() call sites so cancelled timers stop
-    // contaminating immediately even on JDK 16+ without --add-opens.
-    private static final ConcurrentHashMap<WeakIdentityKey, Boolean> CANCELLED_TIMER_TASKS =
+    // Weakly-keyed maps of cancelled TimerTasks and Timers populated by rewritten
+    // TimerTask.cancel() / Timer.cancel() call sites (zero JDK-internal reflection,
+    // so no JDK 9-15 illegal-access warning when Keploy is absent).
+    private static final ConcurrentHashMap<WeakIdentityKey, TimerCancelInfo> CANCELLED_TIMER_TASKS =
             new ConcurrentHashMap<>();
     private static final ReferenceQueue<Object> DEAD_TIMER_TASK_KEYS = new ReferenceQueue<>();
-    private static final ConcurrentHashMap<WeakIdentityKey, Boolean> CANCELLED_TIMERS =
+    private static final ConcurrentHashMap<WeakIdentityKey, Long> CANCELLED_TIMERS =
             new ConcurrentHashMap<>();
     private static final ReferenceQueue<Object> DEAD_TIMER_KEYS = new ReferenceQueue<>();
-    private static final Field TIMER_TASK_STATE_FIELD = findTimerTaskStateField();
 
-    private static Field findTimerTaskStateField() {
-        try {
-            Field f = TimerTask.class.getDeclaredField("state");
-            f.setAccessible(true);
-            return f;
-        } catch (Throwable ignored) {
-            return null;
+    private static final class TimerCancelInfo {
+        final boolean cancelledBeforeRun;
+        final long cancelledAtNanos;
+
+        TimerCancelInfo(boolean cancelledBeforeRun, long cancelledAtNanos) {
+            this.cancelledBeforeRun = cancelledBeforeRun;
+            this.cancelledAtNanos = cancelledAtNanos;
         }
     }
 
@@ -3103,8 +3099,9 @@ public final class RequestGate {
     }
 
     /**
-     * Records cancellation of a {@link Timer} so tracked {@link TimerTask}
-     * handles scheduled on it stop driving tail contamination immediately.
+     * Records cancellation of a {@link Timer} with timestamp so tasks that had
+     * not started stop driving tail contamination immediately, while any
+     * already-running body stays covered for {@code untrackedTailWindowNanos}.
      *
      * @param timer cancelled timer
      */
@@ -3113,22 +3110,26 @@ public final class RequestGate {
             return;
         }
         drainDeadTimerKeys();
-        CANCELLED_TIMERS.put(new WeakIdentityKey(timer, DEAD_TIMER_KEYS), Boolean.TRUE);
+        CANCELLED_TIMERS.putIfAbsent(new WeakIdentityKey(timer, DEAD_TIMER_KEYS), Long.valueOf(System.nanoTime()));
     }
 
     /**
-     * Records cancellation when {@code target} is a {@link TimerTask} so its
-     * tracked handle stops driving tail contamination immediately even on
-     * JDK 16+ without {@code --add-opens java.base/java.util}.
+     * Records the result of {@link TimerTask#cancel()} when {@code target} is a
+     * {@link TimerTask}: {@code cancelled == true} means the task was still
+     * scheduled (not yet fired for a one-shot task), whereas {@code false}
+     * means it had already fired (and its {@code run()} body may still be
+     * executing, so tail protection is kept for {@code untrackedTailWindowNanos}).
      *
      * @param target receiver of {@code cancel()}
+     * @param cancelled return value of {@code cancel()}
      */
-    public static void noteIfTimerTaskCancelled(Object target) {
+    public static void noteTimerTaskCancelResult(Object target, boolean cancelled) {
         if (!(target instanceof TimerTask) || !armed) {
             return;
         }
         drainDeadTimerTaskKeys();
-        CANCELLED_TIMER_TASKS.put(new WeakIdentityKey(target, DEAD_TIMER_TASK_KEYS), Boolean.TRUE);
+        CANCELLED_TIMER_TASKS.putIfAbsent(new WeakIdentityKey(target, DEAD_TIMER_TASK_KEYS),
+                new TimerCancelInfo(cancelled, System.nanoTime()));
     }
 
     private static void drainDeadTimerTaskKeys() {
@@ -3143,32 +3144,20 @@ public final class RequestGate {
         }
     }
 
-    private static boolean isTimerTaskCancelled(TimerTask task) {
+    private static TimerCancelInfo timerTaskCancelInfo(TimerTask task) {
         if (task == null || CANCELLED_TIMER_TASKS.isEmpty()) {
-            return false;
+            return null;
         }
         drainDeadTimerTaskKeys();
-        return CANCELLED_TIMER_TASKS.containsKey(new LookupKey(task));
+        return CANCELLED_TIMER_TASKS.get(new LookupKey(task));
     }
 
-    private static boolean isTimerCancelled(Timer timer) {
+    private static Long timerCancelledAtNanos(Timer timer) {
         if (timer == null || CANCELLED_TIMERS.isEmpty()) {
-            return false;
+            return null;
         }
         drainDeadTimerKeys();
-        return CANCELLED_TIMERS.containsKey(new LookupKey(timer));
-    }
-
-    private static int readTimerTaskState(TimerTask task) {
-        Field f = TIMER_TASK_STATE_FIELD;
-        if (f == null || task == null) {
-            return -1;
-        }
-        try {
-            return f.getInt(task);
-        } catch (Throwable ignored) {
-            return -1;
-        }
+        return CANCELLED_TIMERS.get(new LookupKey(timer));
     }
 
     private static long safeScheduledExecutionTime(TimerTask task) {
@@ -4060,6 +4049,37 @@ public final class RequestGate {
         return awaitWindow(timeoutNanos, true).drained;
     }
 
+    private static boolean hasActiveLingering(long now) {
+        if (UNARMED_IN_FLIGHT.sum() > 0) {
+            return true;
+        }
+        if (lastUnarmedHandOffNanos != 0L && (now - lastUnarmedHandOffNanos) < untrackedTailWindowNanos) {
+            return true;
+        }
+        if (externalUntrackedTailPending
+                || sweepUntrackedHandles(EXTERNAL_UNTRACKED_HANDLES, now)
+                || (externalUntrackedTailExpiresAtNanos != 0L
+                        && (now - externalUntrackedTailExpiresAtNanos) < 0L)) {
+            return true;
+        }
+        for (Window lingering : LINGERING) {
+            lingering.sweepCancelledFutures();
+            boolean lingeringExpired = lingering.lingeringSinceNanos != 0L
+                    && (now - lingering.lingeringSinceNanos) >= maxLingeringNanos;
+            boolean aliveHandles = lingering.hasAliveUntrackedHandles(now);
+            boolean stillRunning = lingering.executing.get() > 0
+                    || aliveHandles
+                    || (!lingeringExpired && (lingering.running.get() > 0 || lingering.untrackedHandlesOverflowed));
+            boolean untrackedActive = lingering.hasBlindUntrackedAsync
+                    && (!lingering.untrackedTailReportedOnce
+                            || (now - lingering.untrackedTailExpiresAtNanos) < 0L);
+            if (stillRunning || untrackedActive) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // awaitWindow closes the current window, optionally waits up to
     // timeoutNanos for its requests/tasks to finish, retains the window in
     // LINGERING if cut, still running, carrying a blind untracked async
@@ -4080,7 +4100,7 @@ public final class RequestGate {
                 retainLingering(window, now);
             }
             return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations(),
-                    window.hadUntrackedAsync);
+                    hasActiveLingering(now));
         }
         if (initialRunning <= 0) {
             long now = System.nanoTime();
@@ -4092,7 +4112,7 @@ public final class RequestGate {
                 retainLingering(window, now);
             }
             return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations(),
-                    window.hadUntrackedAsync);
+                    hasActiveLingering(now));
         }
         boolean drained = false;
         // Set before the count is read again: an exit that takes the count
@@ -4137,7 +4157,7 @@ public final class RequestGate {
             retainLingering(window, now);
         }
         return new WindowOutcome(drained, true, window.enteredCount.get(), window.contaminations(),
-                window.hadUntrackedAsync);
+                hasActiveLingering(now));
     }
 
     static final class WindowOutcome {
@@ -4145,15 +4165,19 @@ public final class RequestGate {
         final boolean waited;
         final int enteredCount;
         final List<String> contaminations;
-        final boolean hadUntrackedAsync;
+        // True when this window OR any older lingering window still has active
+        // async work, live untracked handles, or an active blind untracked tail
+        // at END — meaning probes from a test's tail may land in the gap after
+        // END and must NOT be emitted as BACKGROUND.
+        final boolean tailActiveAtEnd;
 
         WindowOutcome(boolean drained, boolean waited, int enteredCount, List<String> contaminations,
-                boolean hadUntrackedAsync) {
+                boolean tailActiveAtEnd) {
             this.drained = drained;
             this.waited = waited;
             this.enteredCount = enteredCount;
             this.contaminations = contaminations;
-            this.hadUntrackedAsync = hadUntrackedAsync;
+            this.tailActiveAtEnd = tailActiveAtEnd;
         }
     }
 
@@ -4166,14 +4190,16 @@ public final class RequestGate {
         private final boolean timerPeriodic;
         private final long timerExpectedFireAtNanos;
         private final long timerPeriodMillis;
+        private final long timerInitialScheduledExecMillis;
         private volatile boolean observedAlive;
 
         private UntrackedHandle(Object target, boolean alreadyStarted, long registeredAtNanos) {
-            this(target, null, alreadyStarted, registeredAtNanos, false, 0L, 0L);
+            this(target, null, alreadyStarted, registeredAtNanos, false, 0L, 0L, 0L);
         }
 
         private UntrackedHandle(Object target, Timer timer, boolean alreadyStarted, long registeredAtNanos,
-                boolean timerPeriodic, long timerExpectedFireAtNanos, long timerPeriodMillis) {
+                boolean timerPeriodic, long timerExpectedFireAtNanos, long timerPeriodMillis,
+                long timerInitialScheduledExecMillis) {
             this.ref = new WeakReference<Object>(target);
             this.timerRef = timer == null ? null : new WeakReference<Timer>(timer);
             this.alreadyStarted = alreadyStarted;
@@ -4181,6 +4207,7 @@ public final class RequestGate {
             this.timerPeriodic = timerPeriodic;
             this.timerExpectedFireAtNanos = timerExpectedFireAtNanos;
             this.timerPeriodMillis = timerPeriodMillis;
+            this.timerInitialScheduledExecMillis = timerInitialScheduledExecMillis;
         }
 
         private static UntrackedHandle forTimerTask(Timer timer, TimerTask task, long delayMillis,
@@ -4192,7 +4219,8 @@ public final class RequestGate {
             }
             long expectedFire = now + delayNanos;
             long safePeriodMs = periodMillis > 0L ? periodMillis : 1L;
-            return new UntrackedHandle(task, timer, true, now, periodic, expectedFire, safePeriodMs);
+            long initialExec = safeScheduledExecutionTime(task);
+            return new UntrackedHandle(task, timer, true, now, periodic, expectedFire, safePeriodMs, initialExec);
         }
 
         private boolean isActive(long now) {
@@ -4219,22 +4247,42 @@ public final class RequestGate {
             }
             if (target instanceof TimerTask) {
                 TimerTask task = (TimerTask) target;
-                if (isTimerTaskCancelled(task)) {
-                    return false;
+                TimerCancelInfo cancelInfo = timerTaskCancelInfo(task);
+                if (cancelInfo != null) {
+                    if (cancelInfo.cancelledBeforeRun) {
+                        if (!timerPeriodic) {
+                            // One-shot TimerTask.cancel() returned true => still SCHEDULED,
+                            // never fired and will never run.
+                            return false;
+                        }
+                        // Periodic TimerTask.cancel() returned true: drop immediately ONLY
+                        // if scheduledExecutionTime() never advanced (cancelled before its
+                        // first tick); otherwise a tick's run() body may still be executing.
+                        long curExec = safeScheduledExecutionTime(task);
+                        if (curExec == timerInitialScheduledExecMillis
+                                && (cancelInfo.cancelledAtNanos - timerExpectedFireAtNanos) < 0L) {
+                            return false;
+                        }
+                    }
+                    // Cancelled after firing (or while a body may still be executing):
+                    // keep active for untrackedTailWindowNanos from cancellation, then drop.
+                    return (now - cancelInfo.cancelledAtNanos) < untrackedTailWindowNanos;
                 }
                 Timer t = timerRef == null ? null : timerRef.get();
-                if (t != null && isTimerCancelled(t)) {
-                    return false;
+                Long timerCancelledAt = t == null ? null : timerCancelledAtNanos(t);
+                if (timerCancelledAt != null) {
+                    boolean cancelledBeforeFirstFire = (timerCancelledAt.longValue() - timerExpectedFireAtNanos) < 0L
+                            && (!timerPeriodic || safeScheduledExecutionTime(task) == timerInitialScheduledExecMillis);
+                    if (cancelledBeforeFirstFire) {
+                        return false;
+                    }
+                    return (now - timerCancelledAt.longValue()) < untrackedTailWindowNanos;
                 }
-                int state = readTimerTaskState(task);
-                if (state >= 0) {
-                    // java.util.TimerTask states: VIRGIN=0, SCHEDULED=1, EXECUTED=2, CANCELLED=3
-                    return state == 1;
-                }
-                // Fallback when TimerTask.state cannot be read reflectively (JDK 16+ without --add-opens):
                 if (!timerPeriodic) {
-                    long grace = Math.min(HANDLE_TIMER_ONESHOT_GRACE_NANOS, untrackedTailWindowNanos);
-                    return (now - timerExpectedFireAtNanos) < grace;
+                    // One-shot TimerTask not cancelled before fire: TimerThread sets
+                    // state=EXECUTED before calling run(), so keep active for the full
+                    // untrackedTailWindowNanos measured from expected fire time.
+                    return (now - timerExpectedFireAtNanos) < untrackedTailWindowNanos;
                 }
                 if ((now - timerExpectedFireAtNanos) < 0L) {
                     return true;
@@ -4243,7 +4291,8 @@ public final class RequestGate {
                 if (execMillis <= 0L) {
                     return (now - registeredAtNanos) < maxLingeringNanos;
                 }
-                long slackMillis = Math.max(timerPeriodMillis * 2L, 150L);
+                long tailWindowMs = TimeUnit.NANOSECONDS.toMillis(untrackedTailWindowNanos);
+                long slackMillis = Math.max(timerPeriodMillis * 2L, tailWindowMs);
                 return System.currentTimeMillis() <= execMillis + timerPeriodMillis + slackMillis;
             }
             return false;

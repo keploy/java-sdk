@@ -919,8 +919,7 @@ final class ServerEntries implements ClassFileTransformer {
     }
 
     private static boolean isTwoArgExecutorSubmit(String mname, String desc) {
-        return "submit".equals(mname)
-                && "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;".equals(desc);
+        return "submit".equals(mname) && desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)");
     }
 
     private static boolean isForkJoinTaskSubmission(String owner, String mname, String desc) {
@@ -1384,7 +1383,17 @@ final class ServerEntries implements ClassFileTransformer {
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfUntrackedSubmit",
                                         "(Ljava/lang/Object;)V", false);
                             } else if (isTwoArgExecutorSubmit(mname, desc)) {
-                                emitUntrackedFlag("untracked-executor:" + owner.replace('/', '.'));
+                                // Stack: [..., recv, runnable, result] (all cat-1 refs).
+                                // Inspect recv at runtime without locals so Guava/Netty
+                                // submit(Runnable, T) returning subtype futures are caught
+                                // while non-executor helpers are ignored.
+                                changed[0] = true;
+                                ensureExtraStack(2);
+                                super.visitInsn(Opcodes.DUP2_X1);
+                                super.visitInsn(Opcodes.POP2);
+                                super.visitInsn(Opcodes.DUP_X2);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfUntrackedSubmit",
+                                        "(Ljava/lang/Object;)V", false);
                             } else if (isForkJoinTaskSubmission(owner, mname, desc)) {
                                 emitUntrackedFlag("untracked-async:forkjoin-task");
                             } else if (isTimerSchedule(owner, mname, desc)) {
@@ -1419,14 +1428,18 @@ final class ServerEntries implements ClassFileTransformer {
                                         "(Ljava/lang/Object;)V", false);
                             } else if (opcode == Opcodes.INVOKEVIRTUAL
                                     && "cancel".equals(mname) && "()Z".equals(desc)) {
-                                // Track TimerTask.cancel() calls so cancelled TimerTasks stop
-                                // driving tail contamination immediately even on JDK 16+ without
-                                // --add-opens java.base/java.util.
+                                // Track TimerTask.cancel() along with its boolean return value
+                                // (true => cancelled before firing; false => already fired/running):
+                                // [recv] -> DUP -> [recv, recv] -> INVOKEVIRTUAL -> [recv, z]
+                                // -> DUP_X1 -> [z, recv, z] -> INVOKESTATIC -> [z].
                                 changed[0] = true;
-                                ensureExtraStack(1);
+                                ensureExtraStack(2);
                                 super.visitInsn(Opcodes.DUP);
-                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfTimerTaskCancelled",
-                                        "(Ljava/lang/Object;)V", false);
+                                super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                                super.visitInsn(Opcodes.DUP_X1);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteTimerTaskCancelResult",
+                                        "(Ljava/lang/Object;Z)V", false);
+                                return;
                             }
                         }
                         super.visitMethodInsn(opcode, owner, mname, desc, isInterface);

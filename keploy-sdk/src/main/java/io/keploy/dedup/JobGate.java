@@ -82,6 +82,19 @@ public final class JobGate {
         return RUNNING.size();
     }
 
+    static boolean hasExpiredRunning() {
+        if (RUNNING.isEmpty()) {
+            return false;
+        }
+        long now = System.nanoTime();
+        for (Run run : RUNNING) {
+            if (run.isExpired(now)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Counts a job's run as going on, in the window of the test running now
      * if one is open. Never throws: the job runs whatever happens here.

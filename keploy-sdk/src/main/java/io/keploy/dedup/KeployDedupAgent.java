@@ -187,6 +187,9 @@ public final class KeployDedupAgent {
     // Resync barrier command over TCP: "NOP <token>" -> "ACK <token>", bare
     // "NOP" -> "ACK". Does not touch activeTestId, lastEndedTestId, or probes.
     static final String NOP_COMMAND = "NOP";
+    // Optional test-only failure injector for connect-time HELLO guard verification.
+    static volatile RuntimeException testHelloFailure;
+
     // Protocol version declared in the dynamic HELLO frame sent immediately on
     // TCP connect and on unix ACK proto=3 caps=... replies.
     static final int TCP_PROTOCOL_VERSION = 3;
@@ -1030,7 +1033,7 @@ public final class KeployDedupAgent {
         // receiver may ask between an END and a START). Like activeTestId,
         // only the worker thread uses it.
         private String lastEndedTestId;
-        private boolean lastEndedHadUntrackedAsync;
+        private boolean lastEndedMayEmitTail;
         // The between-tests hits the last START cleared, for a receiver that
         // asked for them: made into a record and sent once that START's
         // answer is written and its connection closed, off the time Keploy
@@ -1214,9 +1217,9 @@ public final class KeployDedupAgent {
                 String prevActive = activeTestId;
                 activeTestId = "";
                 String after = lastEndedTestId;
-                boolean prevUntracked = lastEndedHadUntrackedAsync;
+                boolean prevMayEmitTail = lastEndedMayEmitTail;
                 lastEndedTestId = null;
-                lastEndedHadUntrackedAsync = false;
+                lastEndedMayEmitTail = false;
                 // Warm up app classes once before the first measured window so
                 // one-time <clinit> lines aren't charged to the first test.
                 collector.warmup();
@@ -1231,10 +1234,10 @@ public final class KeployDedupAgent {
                 // first test it is the app's start and the warmup, and after
                 // a START with no END, or an END not taken, that test's own
                 // hits. Also suppress gaps that may hold a previous test's
-                // async/cut/job tail so those probes are never calibrated as
+                // async/cut/job tail so those probes are not emitted as
                 // background.
                 if (after != null && !cleared.isEmpty() && publisher.backgroundAsked()) {
-                    if (prevUntracked || suppressBackground[0]) {
+                    if (prevMayEmitTail || suppressBackground[0]) {
                         publisher.noteBackgroundLost();
                     } else {
                         pendingBackground = new BackgroundWindow(after, command.testId, cleared);
@@ -1247,7 +1250,7 @@ public final class KeployDedupAgent {
             // taken (another test's id, its hits lost, its send failed), what
             // the next START clears may be a test's own hits.
             lastEndedTestId = null;
-            lastEndedHadUntrackedAsync = false;
+            lastEndedMayEmitTail = false;
             if (!command.testId.equals(activeTestId)) {
                 log(Level.SEVERE,
                         "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -1280,7 +1283,7 @@ public final class KeployDedupAgent {
                 // test's own late hits: not a window, as after an END not
                 // taken.
                 lastEndedTestId = cut ? null : command.testId;
-                lastEndedHadUntrackedAsync = !cut && outcome.hadUntrackedAsync;
+                lastEndedMayEmitTail = !cut && (outcome.tailActiveAtEnd || JobGate.hasExpiredRunning());
                 return true;
             } catch (Exception e) {
                 // Not ACK for the same reason: nothing reached Keploy.
@@ -1389,7 +1392,7 @@ public final class KeployDedupAgent {
         // every START and every END until its record is sent, so what the next
         // START clears ran strictly between two tests.
         private String lastEndedTestId;
-        private boolean lastEndedHadUntrackedAsync;
+        private boolean lastEndedMayEmitTail;
         // Opt-in per TCP connection via "BACKGROUND" command so older collectors
         // never receive unexpected BACKGROUND frames.
         private boolean backgroundRequested;
@@ -1413,6 +1416,10 @@ public final class KeployDedupAgent {
         }
 
         private String helloFrame() {
+            RuntimeException injected = testHelloFailure;
+            if (injected != null) {
+                throw injected;
+            }
             return computeCapabilities(collector).toHelloFrame(collector.helloBuildId());
         }
 
@@ -1475,7 +1482,7 @@ public final class KeployDedupAgent {
             synchronized (testCaseLock) {
                 activeTestId = "";
                 lastEndedTestId = null;
-                lastEndedHadUntrackedAsync = false;
+                lastEndedMayEmitTail = false;
                 backgroundRequested = false;
                 ackWithId = false;
                 lastHelloSent = null;
@@ -1495,7 +1502,7 @@ public final class KeployDedupAgent {
                 synchronized (testCaseLock) {
                     try {
                         maybeSendUpdatedHello(out);
-                    } catch (RuntimeException e) {
+                    } catch (RuntimeException | LinkageError e) {
                         log(Level.FINE, "Failed to compute connect-time HELLO; falling back to minimal HELLO", e);
                         String fallback = buildHelloFrame("", "", "", "", "", "",
                                 false, false, false, false, true, true, false, false);
@@ -1571,9 +1578,9 @@ public final class KeployDedupAgent {
                     String prevActive = activeTestId;
                     activeTestId = "";
                     String after = lastEndedTestId;
-                    boolean prevUntracked = lastEndedHadUntrackedAsync;
+                    boolean prevMayEmitTail = lastEndedMayEmitTail;
                     lastEndedTestId = null;
-                    lastEndedHadUntrackedAsync = false;
+                    lastEndedMayEmitTail = false;
                     boolean reset;
                     List<ProbeScan.Hit> cleared = new ArrayList<>();
                     boolean[] suppressBackground = {false};
@@ -1599,7 +1606,7 @@ public final class KeployDedupAgent {
                     }
                     try {
                         maybeSendUpdatedHello(out);
-                    } catch (RuntimeException e) {
+                    } catch (RuntimeException | LinkageError e) {
                         log(Level.FINE, "Failed to refresh HELLO before START ACK for " + command.testId, e);
                     }
                     ack(out, command.testId);
@@ -1608,7 +1615,7 @@ public final class KeployDedupAgent {
                     // test's START barrier. Suppress gaps that may hold a
                     // previous test's async/cut/job tail and count them in lost.
                     if (reset && after != null && !cleared.isEmpty() && backgroundRequested) {
-                        if (prevUntracked || suppressBackground[0]) {
+                        if (prevMayEmitTail || suppressBackground[0]) {
                             backgroundLost++;
                         } else {
                             writeBackgroundFrame(out, after, command.testId, cleared);
@@ -1622,7 +1629,7 @@ public final class KeployDedupAgent {
                     // after an END not taken or cut, what the next START clears
                     // may hold this test's own hits.
                     lastEndedTestId = null;
-                    lastEndedHadUntrackedAsync = false;
+                    lastEndedMayEmitTail = false;
                     if (!command.testId.equals(activeTestId)) {
                         log(Level.SEVERE,
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -1643,13 +1650,16 @@ public final class KeployDedupAgent {
                     // exception would shift the collector onto the next test's frames.
                     TestCoverage coverage;
                     boolean cut;
-                    boolean hadUntrackedAsync;
+                    boolean tailActiveAtEnd;
                     try {
                         RequestGate.WindowOutcome outcome = collector.awaitRequests(command.testId, phases);
                         cut = !outcome.drained;
-                        hadUntrackedAsync = outcome.hadUntrackedAsync;
+                        tailActiveAtEnd = outcome.tailActiveAtEnd;
                         TestCoverage raw = collector.capture(phases);
                         List<String> jobContams = JobGate.close();
+                        if (!tailActiveAtEnd && JobGate.hasExpiredRunning()) {
+                            tailActiveAtEnd = true;
+                        }
                         boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
                                 && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0
                                 && jobContams.isEmpty();
@@ -1676,7 +1686,7 @@ public final class KeployDedupAgent {
                     // runtime error computing HELLO can never suppress COV before ACK.
                     try {
                         maybeSendUpdatedHello(out);
-                    } catch (RuntimeException e) {
+                    } catch (RuntimeException | LinkageError e) {
                         log(Level.FINE, "Failed to refresh HELLO before COV for " + command.testId, e);
                     }
                     try {
@@ -1692,7 +1702,7 @@ public final class KeployDedupAgent {
                         // at the ACK.
                         writeLine(out, cov);
                         lastEndedTestId = cut ? null : command.testId;
-                        lastEndedHadUntrackedAsync = !cut && hadUntrackedAsync;
+                        lastEndedMayEmitTail = !cut && tailActiveAtEnd;
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building

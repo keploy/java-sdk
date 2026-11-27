@@ -79,7 +79,8 @@ final class OrderedPools {
             "org.springframework.core.task.SyncTaskExecutor",
             "com.google.common.util.concurrent.DirectExecutor",
             "com.google.common.util.concurrent.MoreExecutors$DirectExecutor",
-            "com.google.common.util.concurrent.DirectExecutorService")));
+            "com.google.common.util.concurrent.DirectExecutorService",
+            "com.google.common.util.concurrent.MoreExecutors$DirectExecutorService")));
 
     private static final String SPRING_ASYNC_TASK_EXECUTOR =
             "org.springframework.core.task.AsyncTaskExecutor";
