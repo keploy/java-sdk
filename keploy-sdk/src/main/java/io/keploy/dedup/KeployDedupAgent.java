@@ -152,12 +152,27 @@ public final class KeployDedupAgent {
     // Permanently drops windowCut (and asyncExecutors) to false in HELLO and
     // Unix ACK caps; reset only by tests.
     static volatile boolean observedNoServerEntry;
+    // Latched true once an executor or async method reference targeting a real
+    // untracked executor/async API is captured outside any active request
+    // window or tracked job (e.g. stored in a field during startup and invoked
+    // later inside requests). Permanently drops asyncExecutors to false in
+    // HELLO and Unix ACK caps; reset only by tests.
+    static volatile boolean observedPreCapturedUntrackedExecutor;
 
     private static void noteObservedNoServerEntry(String testId) {
         if (!observedNoServerEntry) {
             observedNoServerEntry = true;
-            log(Level.INFO, "Keploy dedup: " + testId + " recorded coverage probes with no counted server request"
-                    + " entry; latching windowCut=false for this JVM", null);
+            log(Level.INFO, "Keploy dedup: " + testId + " saw an HTTP server whose requests the SDK cannot count,"
+                    + " so window cuts are not trusted for the rest of this run", null);
+        }
+    }
+
+    static void noteObservedPreCapturedUntrackedExecutor(String target) {
+        if (!observedPreCapturedUntrackedExecutor) {
+            observedPreCapturedUntrackedExecutor = true;
+            log(Level.INFO, "Keploy dedup: saw an executor method reference (" + target
+                    + ") created outside any tracked request, so background async work cannot be tracked"
+                    + " reliably for the rest of this run", null);
         }
     }
     // The answer to a command not taken (a START that could not clear the
@@ -329,11 +344,14 @@ public final class KeployDedupAgent {
     private static Capabilities computeCapabilities(CoverageCollector collector) {
         boolean agentAttached = transformerAdded;
         boolean endWaitActive = collector.endWaitMillis > 0;
-        // Base windowCut on ServerEntries being installed with endWait > 0
-        // (and no uncounted server / hook failure) rather than !countsNone(),
-        // so Jetty/Undertow cold-start pods honestly declare windowCut=true
-        // before their first request loads HttpChannel/Connectors. Runtime
-        // probes with enteredCount==0 still fail closed via "no-server-entry".
+        // Base windowCut on ServerEntries being installed (transformerAdded)
+        // with endWait > 0 and no uncounted server or hook failure rather than
+        // !countsNone(), so Jetty/Undertow cold-start pods honestly declare
+        // windowCut=true before their first request loads HttpChannel/Connectors.
+        // If runtime probes are later recorded with enteredCount==0 (and no job
+        // contamination), observedNoServerEntry permanently latches false for
+        // windowCut (and asyncExecutors) for the rest of the JVM, refreshing
+        // TCP HELLO before that COV and Unix ACK caps on that and later replies.
         boolean serverEntriesInstalled = agentAttached && endWaitActive
                 && !ServerEntries.hasUncountedServer()
                 && !ServerEntries.hadServerHookFailure()
@@ -344,12 +362,18 @@ public final class KeployDedupAgent {
         boolean background = collector.probeScan() != null;
         boolean appOnlyActive = collector.coverageIndex.entries == null
                 || collector.coverageIndex.appOnly;
+        // Also fail closed via observedPreCapturedUntrackedExecutor if an
+        // executor or async method reference targeting a real untracked
+        // executor/async API is captured outside any active request window or
+        // tracked job (e.g. stored in a field at startup and invoked later on
+        // the request path), refreshing TCP HELLO and Unix ACK caps.
         boolean asyncExecutors = serverEntriesInstalled
                 && executorCallSitesEnabled
                 && !isAsyncCallSitesTurnedOff()
                 && appOnlyActive
                 && !ServerEntries.wasJpmsGuardTriggered()
-                && !ServerEntries.hadAppRewriteFailure();
+                && !ServerEntries.hadAppRewriteFailure()
+                && !observedPreCapturedUntrackedExecutor;
         boolean listenerContamination = agentAttached
                 && !ServerEntries.hadListenerHookFailure()
                 && !ServerEntries.hasUnhookedConsumer();

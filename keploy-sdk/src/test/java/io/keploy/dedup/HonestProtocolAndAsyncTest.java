@@ -108,6 +108,7 @@ public class HonestProtocolAndAsyncTest {
     private boolean savedTransformerAdded;
     private boolean savedExecutorCallSitesEnabled;
     private boolean savedObservedNoServerEntry;
+    private boolean savedObservedPreCapturedUntrackedExecutor;
     private Set<String> savedCounted;
     private Set<String> savedUncounted;
     private long savedHandedJobMaxNanos;
@@ -119,12 +120,14 @@ public class HonestProtocolAndAsyncTest {
         savedTransformerAdded = KeployDedupAgent.transformerAdded;
         savedExecutorCallSitesEnabled = KeployDedupAgent.executorCallSitesEnabled;
         savedObservedNoServerEntry = KeployDedupAgent.observedNoServerEntry;
+        savedObservedPreCapturedUntrackedExecutor = KeployDedupAgent.observedPreCapturedUntrackedExecutor;
         savedCounted = ServerEntries.snapshotCounted();
         savedUncounted = ServerEntries.snapshotUncounted();
         savedHandedJobMaxNanos = JobGate.handedJobMaxNanos;
         savedControlSocketPath = KeployDedupAgent.controlSocketPath;
         savedDataSocketPath = KeployDedupAgent.dataSocketPath;
         KeployDedupAgent.observedNoServerEntry = false;
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
         ServerEntries.restoreUncounted(Collections.<String>emptySet());
         ServerEntries.setHookStatusForTests(false, false, false);
         RequestGate.disarm();
@@ -142,6 +145,7 @@ public class HonestProtocolAndAsyncTest {
         KeployDedupAgent.transformerAdded = savedTransformerAdded;
         KeployDedupAgent.executorCallSitesEnabled = savedExecutorCallSitesEnabled;
         KeployDedupAgent.observedNoServerEntry = savedObservedNoServerEntry;
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor = savedObservedPreCapturedUntrackedExecutor;
         ServerEntries.restoreCounted(savedCounted);
         ServerEntries.restoreUncounted(savedUncounted);
         ServerEntries.setHookStatusForTests(false, false, false);
@@ -261,7 +265,7 @@ public class HonestProtocolAndAsyncTest {
                 h8.get("listenerContamination").getAsBoolean());
         ServerEntries.setHookStatusForTests(false, false, false);
 
-        // Case 8b (S4): Unhooked consumer (e.g. KafkaStreams) -> listenerContamination must be false.
+        // Case 8b: Unhooked consumer (e.g. KafkaStreams) -> listenerContamination must be false.
         ServerEntries entries = new ServerEntries(true);
         entries.transform(getClass().getClassLoader(), "org/apache/kafka/streams/KafkaStreams", null, null,
                 generatePlainClass("org/apache/kafka/streams/KafkaStreams"));
@@ -270,7 +274,7 @@ public class HonestProtocolAndAsyncTest {
                 h8b.get("listenerContamination").getAsBoolean());
         ServerEntries.setHookStatusForTests(false, false, false);
 
-        // Case 8c (S5): Uncounted servers (gRPC, Vert.x, Micronaut, JDK HttpServer) -> windowCut & asyncExecutors false.
+        // Case 8c: Uncounted servers (gRPC, Vert.x, Micronaut, JDK HttpServer) -> windowCut & asyncExecutors false.
         for (String srv : new String[] {
                 "io/grpc/netty/NettyServer",
                 "io/vertx/core/http/impl/HttpServerImpl",
@@ -285,7 +289,7 @@ public class HonestProtocolAndAsyncTest {
         }
         ServerEntries.restoreUncounted(Collections.<String>emptySet());
 
-        // Case 8d (Nit): App rewrite failure -> asyncExecutors must be false.
+        // Case 8d: App rewrite failure -> asyncExecutors must be false.
         ServerEntries.setHookStatusForTests(false, false, false, true);
         JsonObject h8d = parseHello(connectAndReadHello(true));
         assertFalse("app rewrite failure must declare asyncExecutors=false",
@@ -1392,7 +1396,7 @@ public class HonestProtocolAndAsyncTest {
             assertFalse(beforeExp.get(0).startsWith("job-tail:"));
 
             // Wait past handedJobMaxNanos while the worker is STILL EXECUTING:
-            // Protocol Blocker 3 requires marking overlapping windows with "job-tail:<name>"
+            // overlapping windows must be marked with "job-tail:<name>"
             // until exit() actually runs!
             Thread.sleep(100);
             JobGate.open();
@@ -1500,7 +1504,7 @@ public class HonestProtocolAndAsyncTest {
                 new LinkedBlockingQueue<Runnable>());
         ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
         try {
-            // 1. Reproduce plg-87's exact bug: supplyAsync(fast, pool).thenAccept(slowAudit)
+            // 1. Fast supplier with slow synchronous dependent: supplyAsync(fast, pool).thenAccept(slowAudit)
             //    registered before completion MUST hold window permit until slowAudit finishes!
             CountDownLatch supplierDone = new CountDownLatch(1);
             CountDownLatch auditStarted = new CountDownLatch(1);
@@ -1721,7 +1725,7 @@ public class HonestProtocolAndAsyncTest {
             assertEquals("unarmed PENDING_BY_FUTURE stays 0", 0, RequestGate.pendingByFutureSize());
             RequestGate.exit(reqTok);
 
-            // B3: Long-running job started BEFORE arming stays in flight across Tests 1 AND 2 ->
+            // Long-running job started BEFORE arming stays in flight across Tests 1 AND 2 ->
             // BOTH Test 1 AND Test 2 MUST be marked "armed-mid-flight"!
             RequestGate.open("first-armed", null);
             assertTrue(RequestGate.isArmed());
@@ -1770,16 +1774,16 @@ public class HonestProtocolAndAsyncTest {
     public void shadedAndRelocatedPackagesAreSkippedOnlyInPrefixModeAndVendorIsNotSkipped() {
         ServerEntries prefixed = new ServerEntries(true, Collections.<String>emptySet(), "com/acme/");
         assertTrue(prefixed.shouldRewriteExecutorCalls("com/acme/service/OrderService"));
-        assertTrue("app package /vendor/ must NOT be skipped (S6)",
+        assertTrue("app package /vendor/ must NOT be skipped",
                 prefixed.shouldRewriteExecutorCalls("com/acme/vendor/VendorService"));
-        assertTrue("app package /shadow/ must NOT be skipped (S6)",
+        assertTrue("app package /shadow/ must NOT be skipped",
                 prefixed.shouldRewriteExecutorCalls("com/acme/shadow/ShadowService"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/shaded/io/grpc/Channel"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/internal/shaded/Foo"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/relocated/netty/Loop"));
         assertFalse(prefixed.shouldRewriteExecutorCalls("com/acme/repackaged/Pool"));
 
-        // S6: In exact appClasses index mode, shaded filter does NOT drop indexed app classes.
+        // In exact appClasses index mode, shaded filter does NOT drop indexed app classes.
         ServerEntries indexed = new ServerEntries(true,
                 new HashSet<>(Arrays.asList("com/acme/shaded/AppClass", "com/acme/vendor/VendorService")), null);
         assertTrue(indexed.shouldRewriteExecutorCalls("com/acme/shaded/AppClass"));
@@ -1787,15 +1791,15 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void untrackedTailsJobDeferredCfSpringSubclassFailClosedAndB2BytecodeForms() throws Exception {
+    public void untrackedTailsJobDeferredCfSpringSubclassFailClosedAndBytecodeForms() throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
         long savedTailWindow = RequestGate.untrackedTailWindowNanos;
         try {
-            // B1: Untracked async hand-off marks current window AND immediately following window
-            //     "tail:<id>" until untrackedTailWindowNanos elapses.
+            // Untracked async hand-off marks current window AND immediately following window
+            // "tail:<id>" until untrackedTailWindowNanos elapses.
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(120);
-            RequestGate.open("b1-untracked", null);
+            RequestGate.open("untracked-tail-1", null);
             Object req1 = RequestGate.enter();
             try {
                 RequestGate.noteUntrackedAsync("untracked-executor:com.acme.CustomPool");
@@ -1805,23 +1809,23 @@ public class HonestProtocolAndAsyncTest {
             RequestGate.WindowOutcome out1 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertEquals(Collections.singletonList("untracked-executor:com.acme.CustomPool"), out1.contaminations);
 
-            RequestGate.open("b1-next", null);
+            RequestGate.open("untracked-tail-next", null);
             RequestGate.WindowOutcome out2 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertEquals("next window immediately after untracked hand-off must carry tail",
-                    Collections.singletonList("tail:b1-untracked"), out2.contaminations);
+                    Collections.singletonList("tail:untracked-tail-1"), out2.contaminations);
 
             Thread.sleep(160);
-            RequestGate.open("b1-after-expiry", null);
+            RequestGate.open("untracked-tail-after-expiry", null);
             RequestGate.WindowOutcome out3 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertEquals("clean after untracked tail window expires",
                     Collections.<String>emptyList(), out3.contaminations);
 
-            // S1: Job-originated CompletableFuture.supplyAsync().thenAccept(audit) keeps JobGate run
-            //     active until audit finishes, and job-originated unknown executor flags contamination!
+            // Job-originated CompletableFuture.supplyAsync().thenAccept(audit) keeps JobGate run
+            // active until audit finishes, and job-originated unknown executor flags contamination!
             CountDownLatch gateSupplier = new CountDownLatch(1);
             CountDownLatch auditEntered = new CountDownLatch(1);
             CountDownLatch auditRelease = new CountDownLatch(1);
-            RequestGate.open("s1-arm", null);
+            RequestGate.open("job-cf-arm", null);
             JobGate.open();
             Object jt = JobGate.enter(new Object(), "scheduled");
             CompletableFuture<Void> jobChain;
@@ -1861,7 +1865,7 @@ public class HonestProtocolAndAsyncTest {
             }
             assertEquals("JobGate run exits once job CF dependent completes", 0, JobGate.activeRunCount());
 
-            // S1b: Job-originated unknown executor flags active JobGate window AND next RequestGate window!
+            // Job-originated unknown executor flags active JobGate window AND next RequestGate window!
             Object unknownExec = new Object();
             JobGate.open();
             Object jt2 = JobGate.enter(new Object(), "quartz");
@@ -1874,14 +1878,14 @@ public class HonestProtocolAndAsyncTest {
             List<String> jobContams = JobGate.close();
             assertTrue("job window must contain untracked-executor: " + jobContams,
                     jobContams.contains("untracked-executor:java.lang.Object"));
-            RequestGate.open("s1-after-job-unknown", null);
+            RequestGate.open("after-job-unknown", null);
             RequestGate.WindowOutcome afterJobUnknown = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertTrue("next request window carries tail from job untracked hand-off: "
                     + afterJobUnknown.contaminations,
                     afterJobUnknown.contaminations.contains("tail:untracked-executor:java.lang.Object"));
 
-            // S3: App subclass of ThreadPoolTaskExecutor overriding execute() MUST fail closed,
-            //     and arbitrary non-Spring class with getThreadPoolExecutor() MUST fail closed!
+            // App subclass of ThreadPoolTaskExecutor overriding execute() MUST fail closed,
+            // and arbitrary non-Spring class with getThreadPoolExecutor() MUST fail closed!
             org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor overridingSpring =
                     new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor() {
                         private static final long serialVersionUID = 1L;
@@ -1893,7 +1897,7 @@ public class HonestProtocolAndAsyncTest {
                     };
             overridingSpring.initialize();
             try {
-                assertTrue("Spring subclass overriding execute() must fail closed (S3)",
+                assertTrue("Spring subclass overriding execute() must fail closed",
                         OrderedPools.orders(overridingSpring));
             } finally {
                 overridingSpring.shutdown();
@@ -1904,12 +1908,12 @@ public class HonestProtocolAndAsyncTest {
                     return pool;
                 }
             };
-            assertTrue("non-Spring class with getThreadPoolExecutor() must fail closed (S3)",
+            assertTrue("non-Spring class with getThreadPoolExecutor() must fail closed",
                     OrderedPools.orders(nonSpringWithPoolMethod));
 
-            // B2: Non-Thread start() must NOT false-positive, while Thread subclass start() DOES flag.
+            // Non-Thread start() must NOT false-positive, while Thread subclass start() DOES flag.
             RequestGate.disarm();
-            RequestGate.open("b2-start-check", null);
+            RequestGate.open("non-thread-start-check", null);
             Object reqStart = RequestGate.enter();
             try {
                 RequestGate.noteIfThread(new Object());
@@ -1921,7 +1925,7 @@ public class HonestProtocolAndAsyncTest {
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // B2 + S4: Direct raw KafkaConsumer.poll in an app class flips hasUnhookedConsumer()!
+            // Direct raw KafkaConsumer.poll in an app class flips hasUnhookedConsumer()!
             ServerEntries.setHookStatusForTests(false, false, false, false);
             assertFalse(ServerEntries.hasUnhookedConsumer());
             ClassWriter kafkaApp = new ClassWriter(ClassWriter.COMPUTE_MAXS);
@@ -1941,7 +1945,7 @@ public class HonestProtocolAndAsyncTest {
             pollMv.visitEnd();
             kafkaApp.visitEnd();
             ServerEntries.wrapExecutorCalls(kafkaApp.toByteArray());
-            assertTrue("direct KafkaConsumer.poll in app class must flag unhooked consumer (S4)",
+            assertTrue("direct KafkaConsumer.poll in app class must flag unhooked consumer",
                     ServerEntries.hasUnhookedConsumer());
             ServerEntries.setHookStatusForTests(false, false, false, false);
         } finally {
@@ -1951,7 +1955,7 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void minimalStageNoUoeMinimalFutureTrackedAbandonedStageGcAndR3Regressions() throws Exception {
+    public void minimalStageNoUoeMinimalFutureTrackedAbandonedStageGcAndConsumerScanChecks() throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
         ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
@@ -1959,10 +1963,10 @@ public class HonestProtocolAndAsyncTest {
         long savedMaxLingering = RequestGate.maxLingeringNanos;
         long savedJobMax = JobGate.handedJobMaxNanos;
         try {
-            // NB1: JDK 9+ MinimalStage (completedStage / failedStage / minimalCompletionStage)
-            //      throws UnsupportedOperationException on isDone(). Rewritten plain dependents
-            //      MUST NEVER throw UOE either outside or inside a request!
-            RequestGate.open("nb1-minimal-stage", null);
+            // JDK 9+ MinimalStage (completedStage / failedStage / minimalCompletionStage)
+            // throws UnsupportedOperationException on isDone(). Rewritten plain dependents
+            // MUST NEVER throw UOE either outside or inside a request!
+            RequestGate.open("minimal-stage-check", null);
             try {
                 Method completedStageM = CompletableFuture.class.getMethod("completedStage", Object.class);
                 Method failedStageM = CompletableFuture.class.getMethod("failedStage", Throwable.class);
@@ -2003,16 +2007,16 @@ public class HonestProtocolAndAsyncTest {
                 } finally {
                     RequestGate.exit(req);
                 }
-                RequestGate.WindowOutcome nb1Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-                assertTrue("MinimalStage dependents must drain cleanly", nb1Out.drained);
-                assertEquals("MinimalStage must not spuriously contaminate: " + nb1Out.contaminations,
-                        Collections.<String>emptyList(), nb1Out.contaminations);
+                RequestGate.WindowOutcome minimalStageOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+                assertTrue("MinimalStage dependents must drain cleanly", minimalStageOut.drained);
+                assertEquals("MinimalStage must not spuriously contaminate: " + minimalStageOut.contaminations,
+                        Collections.<String>emptyList(), minimalStageOut.contaminations);
             } catch (NoSuchMethodException java8Skip) {
                 // Java 8 has no completedStage/minimalCompletionStage.
             }
 
-            // SF3: CompletableFuture subclass inheriting thenAccept/whenComplete (like JDK HttpClient's
-            //      MinimalFuture) IS tracked instead of flagged; subclass overriding thenAccept fails closed!
+            // CompletableFuture subclass inheriting thenAccept/whenComplete (like JDK HttpClient's
+            // MinimalFuture) IS tracked instead of flagged; subclass overriding thenAccept fails closed!
             class MinimalFutureLike<T> extends CompletableFuture<T> {
                 @SuppressWarnings("unused")
                 public CompletableFuture<T> newIncompleteFuture() {
@@ -2025,59 +2029,59 @@ public class HonestProtocolAndAsyncTest {
                     return super.thenAccept(action);
                 }
             }
-            RequestGate.open("sf3-minimal-future", null);
-            Object reqSf3 = RequestGate.enter();
+            RequestGate.open("minimal-future-sub", null);
+            Object reqMinimal = RequestGate.enter();
             MinimalFutureLike<String> httpCf = new MinimalFutureLike<>();
             AtomicBoolean auditRan = new AtomicBoolean();
             try {
                 RequestGate.thenAccept(httpCf, v -> auditRan.set(true));
                 assertEquals("MinimalFuture-like subclass must be tracked", 2, RequestGate.running());
             } finally {
-                RequestGate.exit(reqSf3);
+                RequestGate.exit(reqMinimal);
             }
             assertEquals("window still waits for MinimalFuture-like dependent", 1, RequestGate.running());
             httpCf.complete("200");
             assertTrue(auditRan.get());
-            RequestGate.WindowOutcome sf3Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue(sf3Out.drained);
+            RequestGate.WindowOutcome minimalOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue(minimalOut.drained);
             assertEquals("MinimalFuture-like dependent must NOT contaminate",
-                    Collections.<String>emptyList(), sf3Out.contaminations);
+                    Collections.<String>emptyList(), minimalOut.contaminations);
 
-            RequestGate.open("sf3-override-cf", null);
-            Object reqSf3b = RequestGate.enter();
+            RequestGate.open("override-cf-sub", null);
+            Object reqOverride = RequestGate.enter();
             try {
                 RequestGate.thenAccept(new OverridingCf<String>(), v -> { });
             } finally {
-                RequestGate.exit(reqSf3b);
+                RequestGate.exit(reqOverride);
             }
-            RequestGate.WindowOutcome sf3bOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue("CF subclass overriding thenAccept must fail closed: " + sf3bOut.contaminations,
-                    sf3bOut.contaminations.stream().anyMatch(s -> s.startsWith("untracked-executor:")));
+            RequestGate.WindowOutcome overrideOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("CF subclass overriding thenAccept must fail closed: " + overrideOut.contaminations,
+                    overrideOut.contaminations.stream().anyMatch(s -> s.startsWith("untracked-executor:")));
 
-            // SF1: Abandoned plain dependent whose future is GC'd releases its permit via DEAD_HANDS,
-            //      AND a stuck strongly-referenced future stops poisoning windows after maxLingeringNanos.
+            // Abandoned plain dependent whose future is GC'd releases its permit via DEAD_HANDS,
+            // AND a stuck strongly-referenced future stops poisoning windows after maxLingeringNanos.
             RequestGate.disarm();
-            RequestGate.open("sf1-gc", null);
-            Object reqSf1 = RequestGate.enter();
+            RequestGate.open("abandoned-cf-gc", null);
+            Object reqGc = RequestGate.enter();
             try {
                 CompletableFuture<String> abandoned = new CompletableFuture<>();
                 RequestGate.thenAccept(abandoned, v -> { });
                 assertEquals(2, RequestGate.running());
                 abandoned = null;
             } finally {
-                RequestGate.exit(reqSf1);
+                RequestGate.exit(reqGc);
             }
             long gcDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (RequestGate.running() > 0 && System.nanoTime() < gcDeadline) {
                 System.gc();
                 Thread.sleep(20);
             }
-            assertEquals("GC'd abandoned plain-dependent future must release window permit (SF1)",
+            assertEquals("GC'd abandoned plain-dependent future must release window permit",
                     0, RequestGate.running());
 
             RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(100);
             CompletableFuture<String> neverCompletes = new CompletableFuture<>();
-            RequestGate.open("sf1-stuck", null);
+            RequestGate.open("stuck-cf", null);
             Object reqStuck = RequestGate.enter();
             try {
                 RequestGate.thenAccept(neverCompletes, v -> { });
@@ -2085,36 +2089,36 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqStuck);
             }
             assertFalse("stuck future cuts window", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(30)));
-            RequestGate.open("sf1-while-stuck", null);
-            assertEquals(Collections.singletonList("tail:sf1-stuck"),
+            RequestGate.open("while-stuck", null);
+            assertEquals(Collections.singletonList("tail:stuck-cf"),
                     RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
             Thread.sleep(140);
-            RequestGate.open("sf1-after-bound", null);
-            assertEquals("stuck lingering window must stop poisoning after maxLingeringNanos (SF1)",
+            RequestGate.open("after-stuck-bound", null);
+            assertEquals("stuck lingering window must stop poisoning after maxLingeringNanos",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
             RequestGate.maxLingeringNanos = savedMaxLingering;
 
-            // SF2: Runtime receiver check for hooked Spring executor vs custom TaskExecutor +
-            //      TaskScheduler.schedule / Timer.schedule / ForkJoinPool.execute(ForkJoinTask) / Guava.
+            // Runtime receiver check for hooked Spring executor vs custom TaskExecutor +
+            // TaskScheduler.schedule / Timer.schedule / ForkJoinPool.execute(ForkJoinTask) / Guava.
             RequestGate.disarm();
             org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springExec =
                     new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
             springExec.initialize();
             try {
                 ServerEntries.markSpringExecutorHookedForTests(springExec.getClass().getName());
-                RequestGate.open("sf2-spring-ok", null);
+                RequestGate.open("spring-hooked-ok", null);
                 Object reqSp = RequestGate.enter();
                 try {
                     RequestGate.noteIfUntrackedExecutor(springExec);
                 } finally {
                     RequestGate.exit(reqSp);
                 }
-                assertEquals("hooked & verified Spring executor must NOT false-positive (SF2)",
+                assertEquals("hooked & verified Spring executor must NOT false-positive",
                         Collections.<String>emptyList(),
                         RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-                RequestGate.open("sf2-custom-task-exec", null);
+                RequestGate.open("custom-task-exec", null);
                 Object reqCustom = RequestGate.enter();
                 org.springframework.core.task.TaskExecutor customTe = r -> r.run();
                 try {
@@ -2123,17 +2127,17 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.exit(reqCustom);
                 }
                 RequestGate.WindowOutcome customOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-                assertTrue("unhooked TaskExecutor impl must be flagged by runtime class (SF2): "
+                assertTrue("unhooked TaskExecutor impl must be flagged by runtime class: "
                         + customOut.contaminations,
                         customOut.contaminations.contains("untracked-executor:" + customTe.getClass().getName()));
             } finally {
                 springExec.shutdown();
             }
 
-            // SF4: schedule(r, delay, unit) extends untracked tail window by delay!
+            // schedule(r, delay, unit) extends untracked tail window by delay!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(50);
-            RequestGate.open("sf4-sched", null);
+            RequestGate.open("sched-delay-check", null);
             Object reqSched = RequestGate.enter();
             try {
                 RequestGate.schedule(stpe, () -> { }, 300, TimeUnit.MILLISECONDS);
@@ -2142,18 +2146,18 @@ public class HonestProtocolAndAsyncTest {
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(100); // past 50ms base window, still inside 350ms delay-extended tail!
-            RequestGate.open("sf4-during-delay", null);
-            assertEquals("scheduled delay must keep next window contaminated past base tail (SF4)",
-                    Collections.singletonList("tail:sf4-sched"),
+            RequestGate.open("sched-during-delay", null);
+            assertEquals("scheduled delay must keep next window contaminated past base tail",
+                    Collections.singletonList("tail:sched-delay-check"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             RequestGate.untrackedTailWindowNanos = savedTailWindow;
 
-            // SF5: Expired job hop that fans out to an unverified executor flags job-tail on active & next window,
-            //      and on a verified executor propagates expired Attribution through gen 2 & gen 3!
+            // Expired job hop that fans out to an unverified executor flags job-tail on active & next window,
+            // and on a verified executor propagates expired Attribution through gen 2 & gen 3!
             RequestGate.disarm();
             JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(40);
-            RequestGate.open("sf5-arm", null);
-            Object unknownExecSf5 = new Object();
+            RequestGate.open("expired-hop-arm", null);
+            Object unknownExecHop = new Object();
             Runnable hop1;
             Object jTok = JobGate.enter(new Object(), "scheduled");
             try {
@@ -2166,22 +2170,22 @@ public class HonestProtocolAndAsyncTest {
                     assertNull("hop1 expired so running() is null", JobGate.running());
                     assertNotNull("hop1 expiredRunningName() still knows job", JobGate.expiredRunningName());
                     JobGate.open();
-                    RequestGate.hand(unknownExecSf5, () -> { });
+                    RequestGate.hand(unknownExecHop, () -> { });
                 });
             } finally {
                 JobGate.exit(jTok);
             }
             hop1.run();
-            List<String> sf5JobContams = JobGate.close();
-            assertTrue("expired hop unverified fan-out must mark JobGate window job-tail (SF5): " + sf5JobContams,
-                    sf5JobContams.stream().anyMatch(s -> s.startsWith("job-tail:")));
-            RequestGate.open("sf5-next", null);
-            RequestGate.WindowOutcome sf5Next = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue("expired hop unverified fan-out must mark next RequestGate window tail:job-tail (SF5): "
-                    + sf5Next.contaminations,
-                    sf5Next.contaminations.stream().anyMatch(s -> s.startsWith("tail:job-tail:")));
+            List<String> expiredJobContams = JobGate.close();
+            assertTrue("expired hop unverified fan-out must mark JobGate window job-tail: " + expiredJobContams,
+                    expiredJobContams.stream().anyMatch(s -> s.startsWith("job-tail:")));
+            RequestGate.open("expired-hop-next", null);
+            RequestGate.WindowOutcome expiredHopNext = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("expired hop unverified fan-out must mark next RequestGate window tail:job-tail: "
+                    + expiredHopNext.contaminations,
+                    expiredHopNext.contaminations.stream().anyMatch(s -> s.startsWith("tail:job-tail:")));
 
-            // SF6: Unarmed hand-off made while unarmed keeps marking armed-mid-flight within tail window!
+            // Unarmed hand-off made while unarmed keeps marking armed-mid-flight within tail window!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(200);
             Object unarmedReq = RequestGate.enter();
@@ -2189,16 +2193,16 @@ public class HonestProtocolAndAsyncTest {
             RequestGate.execute(pool, unarmedDone::countDown);
             RequestGate.exit(unarmedReq);
             assertTrue(unarmedDone.await(5, TimeUnit.SECONDS));
-            RequestGate.open("sf6-w1", null);
+            RequestGate.open("unarmed-tail-w1", null);
             assertEquals(Collections.singletonList("armed-mid-flight"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
-            RequestGate.open("sf6-w2", null);
-            assertEquals("unarmed hand-off keeps marking armed-mid-flight within tail window (SF6)",
+            RequestGate.open("unarmed-tail-w2", null);
+            assertEquals("unarmed hand-off keeps marking armed-mid-flight within tail window",
                     Collections.singletonList("armed-mid-flight"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             RequestGate.untrackedTailWindowNanos = savedTailWindow;
 
-            // SF7: Expanded unhooked consumers + read-only scan works even with empty appClasses!
+            // Expanded unhooked consumers + read-only scan works even with empty appClasses!
             for (String consumerCls : new String[] {
                     "org/springframework/data/redis/listener/RedisMessageListenerContainer",
                     "software/amazon/awssdk/services/sqs/DefaultSqsAsyncClient",
@@ -2208,7 +2212,7 @@ public class HonestProtocolAndAsyncTest {
                 ServerEntries.setHookStatusForTests(false, false, false, false);
                 new ServerEntries(true).transform(getClass().getClassLoader(), consumerCls, null, null,
                         generatePlainClass(consumerCls));
-                assertTrue(consumerCls + " must flip hasUnhookedConsumer (SF7)",
+                assertTrue(consumerCls + " must flip hasUnhookedConsumer",
                         ServerEntries.hasUnhookedConsumer());
             }
             // Read-only raw JMS setMessageListener scan with NO appClasses / callsites off:
@@ -2231,14 +2235,14 @@ public class HonestProtocolAndAsyncTest {
                     new ServerEntries(true, Collections.<String>emptySet(), null)
                             .transform(getClass().getClassLoader(), "com/acme/RawJmsApp", null, null,
                                     jmsApp.toByteArray()));
-            assertTrue("raw JMS setMessageListener must be detected even with callsites off (SF7)",
+            assertTrue("raw JMS setMessageListener must be detected even with callsites off",
                     ServerEntries.hasUnhookedConsumer());
             ServerEntries.setHookStatusForTests(false, false, false, false);
 
-            // SF8: Exact indexed app classes under org/springframework/samples/... must NOT be dropped!
+            // Exact indexed app classes under org/springframework/samples/... must NOT be dropped!
             ServerEntries petclinic = new ServerEntries(true,
                     Collections.singleton("org/springframework/samples/petclinic/owner/OwnerController"), null);
-            assertTrue("indexed PetClinic class under org/springframework/samples must be rewritten (SF8)",
+            assertTrue("indexed PetClinic class under org/springframework/samples must be rewritten",
                     petclinic.shouldRewriteExecutorCalls(
                             "org/springframework/samples/petclinic/owner/OwnerController"));
         } finally {
@@ -2251,7 +2255,7 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void r4RegressionsExecutingPastMaxLingeringLiveUntrackedHandlesMultiHopExpiredJobAndBytecodeFlagSites()
+    public void executingPastMaxLingeringLiveUntrackedHandlesMultiHopExpiredJobAndBytecodeFlagSites()
             throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
@@ -2262,25 +2266,25 @@ public class HonestProtocolAndAsyncTest {
         long savedMaxLingering = RequestGate.maxLingeringNanos;
         long savedJobMax = JobGate.handedJobMaxNanos;
         try {
-            // SF-A: Actively executing task running PAST maxLingeringNanos MUST keep marking tail:<id>
-            //       until it actually exits, then clear cleanly!
+            // Actively executing task running PAST maxLingeringNanos MUST keep marking tail:<id>
+            // until it actually exits, then clear cleanly!
             RequestGate.disarm();
             RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(50);
             CountDownLatch taskStarted = new CountDownLatch(1);
             CountDownLatch taskRelease = new CountDownLatch(1);
-            RequestGate.open("sfa-active", null);
-            Object reqSfa = RequestGate.enter();
+            RequestGate.open("exec-active", null);
+            Object reqActive = RequestGate.enter();
             try {
                 RequestGate.execute(pool, latchTask(taskStarted, taskRelease));
             } finally {
-                RequestGate.exit(reqSfa);
+                RequestGate.exit(reqActive);
             }
             assertTrue(taskStarted.await(5, TimeUnit.SECONDS));
             assertFalse("cut while task executes", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(20)));
             Thread.sleep(100); // Well past 50ms maxLingeringNanos while task is STILL executing!
-            RequestGate.open("sfa-past-cap", null);
-            assertEquals("actively executing task past maxLingeringNanos must STILL flag tail (SF-A)",
-                    Collections.singletonList("tail:sfa-active"),
+            RequestGate.open("exec-past-cap", null);
+            assertEquals("actively executing task past maxLingeringNanos must STILL flag tail",
+                    Collections.singletonList("tail:exec-active"),
                     RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
             taskRelease.countDown();
             long drainDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -2288,21 +2292,21 @@ public class HonestProtocolAndAsyncTest {
                 Thread.sleep(5);
             }
             Thread.sleep(20);
-            RequestGate.open("sfa-after-exit", null);
+            RequestGate.open("exec-after-exit", null);
             assertEquals("clean after actively executing task finishes",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
             RequestGate.maxLingeringNanos = savedMaxLingering;
 
-            // SF-B: Untracked Thread.start() and periodic ScheduledFuture stay flagged past base tail
-            //       for as long as Thread.isAlive() / !ScheduledFuture.isDone()!
+            // Untracked Thread.start() and periodic ScheduledFuture stay flagged past base tail
+            // for as long as Thread.isAlive() / !ScheduledFuture.isDone()!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
             CountDownLatch rawStarted = new CountDownLatch(1);
             CountDownLatch rawRelease = new CountDownLatch(1);
-            Thread rawThread = new Thread(latchTask(rawStarted, rawRelease), "sfb-live-thread");
+            Thread rawThread = new Thread(latchTask(rawStarted, rawRelease), "live-raw-thread");
             rawThread.setDaemon(true);
-            RequestGate.open("sfb-thread", null);
+            RequestGate.open("live-thread", null);
             Object reqT = RequestGate.enter();
             try {
                 RequestGate.startThread(rawThread);
@@ -2312,24 +2316,24 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(rawStarted.await(5, TimeUnit.SECONDS));
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             // Consume one-time report first so the next window depends strictly on Thread.isAlive().
-            RequestGate.open("sfb-thread-consume-once", null);
+            RequestGate.open("live-thread-consume-once", null);
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(80); // Past 30ms base tail while rawThread.isAlive() is STILL true!
-            RequestGate.open("sfb-thread-still-alive", null);
-            assertEquals("live raw thread must keep marking tail past base window (SF-B)",
-                    Collections.singletonList("tail:sfb-thread"),
+            RequestGate.open("live-thread-still-alive", null);
+            assertEquals("live raw thread must keep marking tail past base window",
+                    Collections.singletonList("tail:live-thread"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             rawRelease.countDown();
             rawThread.join(5000);
-            RequestGate.open("sfb-thread-dead", null);
+            RequestGate.open("live-thread-dead", null);
             assertEquals("clean once raw thread terminates",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // SF-B periodic ScheduledFuture:
+            // Periodic ScheduledFuture:
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
-            RequestGate.open("sfb-periodic", null);
+            RequestGate.open("periodic-sched", null);
             Object reqP = RequestGate.enter();
             ScheduledFuture<?> periodic;
             try {
@@ -2339,25 +2343,25 @@ public class HonestProtocolAndAsyncTest {
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             // Consume one-time report first so the next window depends strictly on !ScheduledFuture.isDone().
-            RequestGate.open("sfb-periodic-consume-once", null);
+            RequestGate.open("periodic-sched-consume-once", null);
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(100); // Past 30ms base tail + 45ms delay/period while periodic is still uncancelled!
-            RequestGate.open("sfb-periodic-alive", null);
-            assertEquals("uncancelled periodic ScheduledFuture keeps marking tail (SF-B)",
-                    Collections.singletonList("tail:sfb-periodic"),
+            RequestGate.open("periodic-sched-alive", null);
+            assertEquals("uncancelled periodic ScheduledFuture keeps marking tail",
+                    Collections.singletonList("tail:periodic-sched"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             periodic.cancel(false);
-            RequestGate.open("sfb-periodic-cancelled", null);
+            RequestGate.open("periodic-sched-cancelled", null);
             assertEquals("clean once periodic ScheduledFuture is cancelled",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             RequestGate.untrackedTailWindowNanos = savedTailWindow;
 
-            // SF-C: Multi-hop expired self-resubmitting job loop (gen 1 -> gen 2 -> gen 3) on verified
-            //       executor MUST stay marked job-tail across ALL generations until it stops!
+            // Multi-hop expired self-resubmitting job loop (gen 1 -> gen 2 -> gen 3) on verified
+            // executor MUST stay marked job-tail across ALL generations until it stops!
             RequestGate.disarm();
             JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(35);
-            RequestGate.open("sfc-arm", null);
+            RequestGate.open("multihop-arm", null);
             CountDownLatch gen3Entered = new CountDownLatch(1);
             CountDownLatch gen3Release = new CountDownLatch(1);
             CountDownLatch gen1Exited = new CountDownLatch(1);
@@ -2410,74 +2414,76 @@ public class HonestProtocolAndAsyncTest {
             JobGate.open();
             List<String> gen3Contams = JobGate.close();
             gen3Release.countDown();
-            assertTrue("gen 3 of expired self-resubmitting loop must STILL carry job-tail (SF-C): " + gen3Contams,
+            assertTrue("gen 3 of expired self-resubmitting loop must STILL carry job-tail: " + gen3Contams,
                     gen3Contams.stream().anyMatch(s -> s.startsWith("job-tail:")));
             long jobDrain = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (JobGate.activeRunCount() > 0 && System.nanoTime() < jobDrain) {
                 Thread.sleep(5);
             }
 
-            // SF-E: Real bytecode-rewritten call sites via ServerEntries.wrapExecutorCalls for
-            //       TaskExecutor interface, TaskScheduler.schedule, Timer.schedule,
-            //       ForkJoinPool.execute(ForkJoinTask), and ListenableFuture.addListener!
-            byte[] sfEBytes = ServerEntries.wrapExecutorCalls(generateSfEBytecodeClass("com/acme/SfECallSites"));
-            assertNotNull("SfECallSites must be rewritten by ServerEntries.wrapExecutorCalls", sfEBytes);
-            Class<?> sfEClass = new ByteLoader(getClass().getClassLoader()).define("com.acme.SfECallSites", sfEBytes);
+            // Real bytecode-rewritten call sites via ServerEntries.wrapExecutorCalls for
+            // TaskExecutor interface, TaskScheduler.schedule, Timer.schedule,
+            // ForkJoinPool.execute(ForkJoinTask), and ListenableFuture.addListener!
+            byte[] asyncSiteBytes = ServerEntries.wrapExecutorCalls(
+                    generateAsyncFlagSiteBytecodeClass("com/acme/AsyncFlagCallSites"));
+            assertNotNull("AsyncFlagCallSites must be rewritten by ServerEntries.wrapExecutorCalls", asyncSiteBytes);
+            Class<?> asyncSiteClass = new ByteLoader(getClass().getClassLoader())
+                    .define("com.acme.AsyncFlagCallSites", asyncSiteBytes);
 
-            // SF-E.1: TaskExecutor interface with hooked+verified ThreadPoolTaskExecutor (CLEAN)
-            //         vs unhooked custom TaskExecutor (FLAGGED).
+            // 1. TaskExecutor interface with hooked+verified ThreadPoolTaskExecutor (CLEAN)
+            //    vs unhooked custom TaskExecutor (FLAGGED).
             org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springTe =
                     new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
             springTe.initialize();
             try {
                 ServerEntries.markSpringExecutorHookedForTests(springTe.getClass().getName());
                 RequestGate.disarm();
-                RequestGate.open("sfe-spring-te", null);
+                RequestGate.open("spring-te-check", null);
                 Object r1 = RequestGate.enter();
                 CountDownLatch teRan = new CountDownLatch(1);
                 try {
-                    sfEClass.getMethod("callTaskExecutor",
+                    asyncSiteClass.getMethod("callTaskExecutor",
                             org.springframework.core.task.TaskExecutor.class, Runnable.class)
                             .invoke(null, springTe, (Runnable) teRan::countDown);
                 } finally {
                     RequestGate.exit(r1);
                 }
                 assertTrue(teRan.await(5, TimeUnit.SECONDS));
-                assertEquals("rewritten TaskExecutor.execute on hooked Spring pool must stay clean (SF-E)",
+                assertEquals("rewritten TaskExecutor.execute on hooked Spring pool must stay clean",
                         Collections.<String>emptyList(),
                         RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
                 RequestGate.disarm();
-                RequestGate.open("sfe-custom-te", null);
+                RequestGate.open("custom-te-check", null);
                 Object r2 = RequestGate.enter();
                 org.springframework.core.task.TaskExecutor customTe = r -> r.run();
                 try {
-                    sfEClass.getMethod("callTaskExecutor",
+                    asyncSiteClass.getMethod("callTaskExecutor",
                             org.springframework.core.task.TaskExecutor.class, Runnable.class)
                             .invoke(null, customTe, (Runnable) () -> { });
                 } finally {
                     RequestGate.exit(r2);
                 }
                 List<String> customTeContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
-                assertTrue("rewritten TaskExecutor.execute on unhooked impl must flag (SF-E): " + customTeContams,
+                assertTrue("rewritten TaskExecutor.execute on unhooked impl must flag: " + customTeContams,
                         customTeContams.contains("untracked-executor:" + customTe.getClass().getName()));
             } finally {
                 ServerEntries.unmarkSpringExecutorHookedForTests(springTe.getClass().getName());
                 springTe.shutdown();
             }
 
-            // SF-E.2: Spring TaskScheduler.schedule(Runnable, Date) flags AND tracks returned ScheduledFuture!
+            // 2. Spring TaskScheduler.schedule(Runnable, Date) flags AND tracks returned ScheduledFuture!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
             org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler springTs =
                     new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
             springTs.initialize();
             try {
-                RequestGate.open("sfe-task-scheduler", null);
+                RequestGate.open("task-scheduler-check", null);
                 Object rTs = RequestGate.enter();
                 ScheduledFuture<?> tsFut;
                 try {
-                    tsFut = (ScheduledFuture<?>) sfEClass.getMethod("callTaskScheduler",
+                    tsFut = (ScheduledFuture<?>) asyncSiteClass.getMethod("callTaskScheduler",
                             org.springframework.scheduling.TaskScheduler.class, Runnable.class, java.util.Date.class)
                             .invoke(null, springTs, (Runnable) () -> { },
                                     new java.util.Date(System.currentTimeMillis() + 5000));
@@ -2485,15 +2491,15 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.exit(rTs);
                 }
                 List<String> tsContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
-                assertTrue("rewritten TaskScheduler.schedule must flag (SF-E): " + tsContams,
+                assertTrue("rewritten TaskScheduler.schedule must flag: " + tsContams,
                         tsContams.contains("untracked-async:schedule"));
                 // Consume one-time report first so the next window depends strictly on !ScheduledFuture.isDone().
-                RequestGate.open("sfe-ts-consume-once", null);
+                RequestGate.open("ts-consume-once", null);
                 RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
                 Thread.sleep(60); // Past 30ms base tail while ScheduledFuture is still pending!
-                RequestGate.open("sfe-ts-alive", null);
-                assertEquals("TaskScheduler ScheduledFuture keeps tail active until cancelled (SF-B/SF-E)",
-                        Collections.singletonList("tail:sfe-task-scheduler"),
+                RequestGate.open("ts-alive", null);
+                assertEquals("TaskScheduler ScheduledFuture keeps tail active until cancelled",
+                        Collections.singletonList("tail:task-scheduler-check"),
                         RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
                 tsFut.cancel(false);
             } finally {
@@ -2501,13 +2507,13 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.untrackedTailWindowNanos = savedTailWindow;
             }
 
-            // SF-E.3: Timer.schedule(TimerTask, long) flags untracked-async:timer!
+            // 3. Timer.schedule(TimerTask, long) flags untracked-async:timer!
             RequestGate.disarm();
-            RequestGate.open("sfe-timer", null);
+            RequestGate.open("timer-flag-check", null);
             Object rTimer = RequestGate.enter();
             CountDownLatch timerRan = new CountDownLatch(1);
             try {
-                sfEClass.getMethod("callTimer", java.util.Timer.class, java.util.TimerTask.class, long.class)
+                asyncSiteClass.getMethod("callTimer", java.util.Timer.class, java.util.TimerTask.class, long.class)
                         .invoke(null, timer, new java.util.TimerTask() {
                             @Override
                             public void run() {
@@ -2518,38 +2524,38 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(rTimer);
             }
             assertTrue(timerRan.await(5, TimeUnit.SECONDS));
-            assertTrue("rewritten Timer.schedule must flag untracked-async:timer (SF-E)",
+            assertTrue("rewritten Timer.schedule must flag untracked-async:timer",
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:timer"));
 
-            // SF-E.4: ForkJoinPool.execute(ForkJoinTask) flags untracked-async:forkjoin-task!
+            // 4. ForkJoinPool.execute(ForkJoinTask) flags untracked-async:forkjoin-task!
             RequestGate.disarm();
-            RequestGate.open("sfe-fjp", null);
+            RequestGate.open("fjp-flag-check", null);
             Object rFjp = RequestGate.enter();
             CountDownLatch fjpRan = new CountDownLatch(1);
             try {
-                sfEClass.getMethod("callFjpTask", java.util.concurrent.ForkJoinPool.class,
+                asyncSiteClass.getMethod("callFjpTask", java.util.concurrent.ForkJoinPool.class,
                         java.util.concurrent.ForkJoinTask.class)
                         .invoke(null, fjp, java.util.concurrent.ForkJoinTask.adapt(fjpRan::countDown));
             } finally {
                 RequestGate.exit(rFjp);
             }
             assertTrue(fjpRan.await(5, TimeUnit.SECONDS));
-            assertTrue("rewritten ForkJoinPool.execute(ForkJoinTask) must flag (SF-E)",
+            assertTrue("rewritten ForkJoinPool.execute(ForkJoinTask) must flag",
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:forkjoin-task"));
 
-            // SF-E.5: Guava ListenableFuture.addListener(Runnable, Executor) flags untracked-async:guava-future!
+            // 5. Guava ListenableFuture.addListener(Runnable, Executor) flags untracked-async:guava-future!
             RequestGate.disarm();
-            RequestGate.open("sfe-guava", null);
+            RequestGate.open("guava-flag-check", null);
             Object rGuava = RequestGate.enter();
             try {
-                sfEClass.getMethod("callGuavaListener", FakeListenableFuture.class, Runnable.class, Executor.class)
+                asyncSiteClass.getMethod("callGuavaListener", FakeListenableFuture.class, Runnable.class, Executor.class)
                         .invoke(null, (FakeListenableFuture) (r, e) -> r.run(), (Runnable) () -> { }, pool);
             } finally {
                 RequestGate.exit(rGuava);
             }
-            assertTrue("rewritten addListener(Runnable, Executor) must flag untracked-async:guava-future (SF-E)",
+            assertTrue("rewritten addListener(Runnable, Executor) must flag untracked-async:guava-future",
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:guava-future"));
         } finally {
@@ -2567,7 +2573,7 @@ public class HonestProtocolAndAsyncTest {
         void addListener(Runnable listener, Executor executor);
     }
 
-    private static byte[] generateSfEBytecodeClass(String className) {
+    private static byte[] generateAsyncFlagSiteBytecodeClass(String className) {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object", null);
         emitDefaultCtor(cw);
@@ -2642,7 +2648,7 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
-    public void r5RegressionsLateStartContaminatesCurrentWindowTimerDelayAndPeriodicMultiHopScheduledRetryAndBranchyFrames()
+    public void lateStartContaminatesCurrentWindowTimerDelayAndPeriodicMultiHopScheduledRetryAndBranchyFrames()
             throws Exception {
         ThreadPoolExecutor singlePool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
@@ -2654,10 +2660,10 @@ public class HonestProtocolAndAsyncTest {
         long savedTailWindow = RequestGate.untrackedTailWindowNanos;
         long savedMaxLingering = RequestGate.maxLingeringNanos;
         try {
-            // SF-1: A queued task from an old window A whose idle permit expired
-            //       and was dropped from LINGERING MUST immediately contaminate
-            //       the CURRENT open window M when it finally starts executing
-            //       (even if it both starts and exits completely inside M)!
+            // A queued task from an old window A whose idle permit expired
+            // and was dropped from LINGERING MUST immediately contaminate
+            // the CURRENT open window M when it finally starts executing
+            // (even if it both starts and exits completely inside M)!
             RequestGate.disarm();
             RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(50);
             CountDownLatch blockerRunning = new CountDownLatch(1);
@@ -2667,7 +2673,7 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(blockerRunning.await(5, TimeUnit.SECONDS));
 
             CountDownLatch lateTaskDone = new CountDownLatch(1);
-            RequestGate.open("sf1-late", null);
+            RequestGate.open("late-start-orig", null);
             Object reqA = RequestGate.enter();
             try {
                 RequestGate.execute(singlePool, lateTaskDone::countDown);
@@ -2677,32 +2683,32 @@ public class HonestProtocolAndAsyncTest {
             assertFalse("A is cut while late task sits queued", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(15)));
             Thread.sleep(90); // Past 50ms maxLingeringNanos while executing == 0.
             // First open past cap reports cut once & drops A from LINGERING.
-            RequestGate.open("sf1-dropper", null);
+            RequestGate.open("late-start-dropper", null);
             RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(20), true);
 
             // Open window M: A is already gone from LINGERING so M opens clean!
-            RequestGate.open("sf1-target-m", null);
+            RequestGate.open("late-start-target-m", null);
             // Release blocker so A's late task starts AND completes inside M!
             releaseBlocker.countDown();
             assertTrue("late task completed inside M", lateTaskDone.await(5, TimeUnit.SECONDS));
             List<String> mContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
-            assertTrue("window M open when late task ran must be flagged tail:sf1-late (SF-1): " + mContams,
-                    mContams.contains("tail:sf1-late"));
+            assertTrue("window M open when late task ran must be flagged tail:late-start-orig: " + mContams,
+                    mContams.contains("tail:late-start-orig"));
             RequestGate.maxLingeringNanos = savedMaxLingering;
 
-            // SF-2: Rewritten java.util.Timer one-shot (delay-aware tail) and
-            //       periodic scheduleAtFixedRate (weak TimerTask liveness).
+            // Rewritten java.util.Timer one-shot (delay-aware tail) and
+            // periodic scheduleAtFixedRate (weak TimerTask liveness).
             byte[] timerBytes = ServerEntries.wrapExecutorCalls(generateTimerAndBranchyClass("com/acme/TimerAndBranchy"));
             assertNotNull("TimerAndBranchy must be rewritten by ServerEntries.wrapExecutorCalls", timerBytes);
             Class<?> timerClass = new ByteLoader(getClass().getClassLoader())
                     .define("com.acme.TimerAndBranchy", timerBytes);
 
-            // SF-2a: One-shot Timer.schedule(TimerTask, long delay) past 30ms base tail
-            //        remains flagged through delay + base tail!
+            // One-shot Timer.schedule(TimerTask, long delay) past 30ms base tail
+            // remains flagged through delay + base tail!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
             CountDownLatch oneShotRan = new CountDownLatch(1);
-            RequestGate.open("sf2-timer-oneshot", null);
+            RequestGate.open("timer-oneshot", null);
             Object reqT1 = RequestGate.enter();
             try {
                 timerClass.getMethod("scheduleOneShot", java.util.Timer.class, java.util.TimerTask.class, long.class)
@@ -2719,20 +2725,20 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:timer"));
             // Consume one-time report first so the next window proves delay-extended expiry (> 30ms base tail).
-            RequestGate.open("sf2-timer-oneshot-consume-once", null);
+            RequestGate.open("timer-oneshot-consume-once", null);
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(75); // Past 30ms base tail, well before 180ms + 30ms extended tail!
-            RequestGate.open("sf2-timer-oneshot-next", null);
-            assertEquals("one-shot Timer delay must extend tail past base window (SF-2)",
-                    Collections.singletonList("tail:sf2-timer-oneshot"),
+            RequestGate.open("timer-oneshot-next", null);
+            assertEquals("one-shot Timer delay must extend tail past base window",
+                    Collections.singletonList("tail:timer-oneshot"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             assertTrue(oneShotRan.await(5, TimeUnit.SECONDS));
 
-            // SF-2b: Periodic Timer.scheduleAtFixedRate(TimerTask, long, long) stays
-            //        flagged past base tail + delay + period while scheduled!
+            // Periodic Timer.scheduleAtFixedRate(TimerTask, long, long) stays
+            // flagged past base tail + delay + period while scheduled!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
-            RequestGate.open("sf2-timer-periodic", null);
+            RequestGate.open("timer-periodic", null);
             Object reqT2 = RequestGate.enter();
             try {
                 timerClass.getMethod("schedulePeriodic", java.util.Timer.class, long.class, long.class)
@@ -2744,18 +2750,18 @@ public class HonestProtocolAndAsyncTest {
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:timer"));
             // Consume one-time report first so the next window depends strictly on periodic TimerTask liveness.
-            RequestGate.open("sf2-timer-periodic-consume-once", null);
+            RequestGate.open("timer-periodic-consume-once", null);
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(100); // Past 30ms + 5ms + 25ms tail while TimerTask is still in Timer's queue!
-            RequestGate.open("sf2-timer-periodic-alive", null);
-            assertEquals("periodic TimerTask held by Timer queue keeps tail active (SF-2)",
-                    Collections.singletonList("tail:sf2-timer-periodic"),
+            RequestGate.open("timer-periodic-alive", null);
+            assertEquals("periodic TimerTask held by Timer queue keeps tail active",
+                    Collections.singletonList("tail:timer-periodic"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             periodicTimer.cancel();
 
-            // SF-3: Multi-hop self-rescheduling retry loop on ScheduledThreadPoolExecutor
-            //       (gen 1 -> gen 2 -> downstream workerPool.execute) propagates window
-            //       context across hops without making END wait for delayed tasks!
+            // Multi-hop self-rescheduling retry loop on ScheduledThreadPoolExecutor
+            // (gen 1 -> gen 2 -> downstream workerPool.execute) propagates window
+            // context across hops without making END wait for delayed tasks!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
             CountDownLatch gen1Done = new CountDownLatch(1);
@@ -2763,8 +2769,8 @@ public class HonestProtocolAndAsyncTest {
             CountDownLatch gen2Release = new CountDownLatch(1);
             CountDownLatch downstreamStarted = new CountDownLatch(1);
             CountDownLatch downstreamRelease = new CountDownLatch(1);
-            RequestGate.open("sf3-retry", null);
-            Object reqS3 = RequestGate.enter();
+            RequestGate.open("sched-retry", null);
+            Object reqSchedRetry = RequestGate.enter();
             try {
                 RequestGate.schedule(stpe, () -> {
                     // Gen 1 finishes quickly after scheduling Gen 2 with a 120ms delay.
@@ -2780,27 +2786,27 @@ public class HonestProtocolAndAsyncTest {
                     gen1Done.countDown();
                 }, 10, TimeUnit.MILLISECONDS);
             } finally {
-                RequestGate.exit(reqS3);
+                RequestGate.exit(reqSchedRetry);
             }
-            RequestGate.WindowOutcome sf3Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue("END must not block on delayed scheduled task (SF-3)", sf3Out.drained);
-            assertTrue("SF-3 flags untracked-async:schedule", sf3Out.contaminations.contains("untracked-async:schedule"));
+            RequestGate.WindowOutcome retryOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("END must not block on delayed scheduled task", retryOut.drained);
+            assertTrue("flags untracked-async:schedule", retryOut.contaminations.contains("untracked-async:schedule"));
             assertTrue("gen 1 completed", gen1Done.await(5, TimeUnit.SECONDS));
             // Consume one-time report first so the next window proves gen-2 ScheduledFuture / delay tracking!
-            RequestGate.open("sf3-gen2-consume-once", null);
+            RequestGate.open("sched-retry-consume-once", null);
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(50); // Past gen 1 completion + 30ms base tail while gen 2 is still pending!
-            RequestGate.open("sf3-while-gen2-pending", null);
-            assertEquals("gen 2 scheduled via propagated context keeps tail active past gen 1 base tail (SF-3)",
-                    Collections.singletonList("tail:sf3-retry"),
+            RequestGate.open("sched-retry-gen2-pending", null);
+            assertEquals("gen 2 scheduled via propagated context keeps tail active past gen 1 base tail",
+                    Collections.singletonList("tail:sched-retry"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             assertTrue("gen 2 started", gen2Started.await(5, TimeUnit.SECONDS));
             gen2Release.countDown();
             assertTrue("downstream workerPool task started from gen 2", downstreamStarted.await(5, TimeUnit.SECONDS));
             Thread.sleep(50); // Past 30ms base tail after gen 2 exited while downstream workerPool task still runs!
-            RequestGate.open("sf3-while-downstream-running", null);
-            assertEquals("downstream workerPool task launched by gen 2 keeps tail:sf3-retry (SF-3)",
-                    Collections.singletonList("tail:sf3-retry"),
+            RequestGate.open("sched-retry-downstream", null);
+            assertEquals("downstream workerPool task launched by gen 2 keeps tail:sched-retry",
+                    Collections.singletonList("tail:sched-retry"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             downstreamRelease.countDown();
 
@@ -2812,7 +2818,7 @@ public class HonestProtocolAndAsyncTest {
             springTs.initialize();
             try {
                 RequestGate.disarm();
-                RequestGate.open("sf5-branchy", null);
+                RequestGate.open("branchy-schedule", null);
                 Object reqBr = RequestGate.enter();
                 ScheduledFuture<?> brFut;
                 try {
@@ -2935,30 +2941,30 @@ public class HonestProtocolAndAsyncTest {
 
     public static final class CustomWorkerThread extends Thread {
         public CustomWorkerThread(Runnable r) {
-            super(r, "r9-custom-thread");
+            super(r, "custom-worker-thread");
             setDaemon(true);
         }
     }
 
     @Test(timeout = 60000)
-    public void r9DeltaRegressionsNonExecutorSyncHelperTrackedHandleLivenessInlineExecutorsAndBackgroundSuppression()
+    public void nonExecutorSyncHelperTrackedHandleLivenessInlineExecutorsAndBackgroundSuppression()
             throws Exception {
         ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
         java.util.Timer timer = new java.util.Timer(true);
         long savedTailWindow = RequestGate.untrackedTailWindowNanos;
         try {
-            // Blocker 2: Bytecode-rewritten plain synchronous helper TxHelper.execute(Runnable)
+            // Bytecode-rewritten plain synchronous helper TxHelper.execute(Runnable)
             // and TxHelper.submit(Runnable) (NOT implementing Executor/ExecutorService) MUST NOT
             // contaminate the current window or any subsequent window!
-            byte[] callerRaw = generateTxHelperAndTimerCancelCaller("com/acme/R9DeltaCaller");
+            byte[] callerRaw = generateTxHelperAndTimerCancelCaller("com/acme/SyncHelperAndTimerCaller");
             byte[] callerRewritten = ServerEntries.wrapExecutorCalls(callerRaw);
-            assertNotNull("R9DeltaCaller must be rewritten by ServerEntries.wrapExecutorCalls", callerRewritten);
+            assertNotNull("SyncHelperAndTimerCaller must be rewritten by ServerEntries.wrapExecutorCalls", callerRewritten);
             Class<?> caller = new ByteLoader(getClass().getClassLoader())
-                    .define("com.acme.R9DeltaCaller", callerRewritten);
+                    .define("com.acme.SyncHelperAndTimerCaller", callerRewritten);
 
             RequestGate.disarm();
-            RequestGate.open("b2-sync-helper", null);
-            Object reqB2 = RequestGate.enter();
+            RequestGate.open("sync-helper", null);
+            Object reqSync = RequestGate.enter();
             AtomicBoolean execRan = new AtomicBoolean(false);
             AtomicBoolean submitRan = new AtomicBoolean(false);
             try {
@@ -2968,20 +2974,20 @@ public class HonestProtocolAndAsyncTest {
                                 (Runnable) () -> execRan.set(true),
                                 (Runnable) () -> submitRan.set(true));
             } finally {
-                RequestGate.exit(reqB2);
+                RequestGate.exit(reqSync);
             }
             assertTrue("TxHelper.execute ran", execRan.get());
             assertTrue("TxHelper.submit ran", submitRan.get());
-            assertEquals("non-Executor TxHelper.execute/submit must NOT contaminate current window (B2)",
+            assertEquals("non-Executor TxHelper.execute/submit must NOT contaminate current window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
-            RequestGate.open("b2-next-window", null);
-            assertEquals("non-Executor TxHelper.execute/submit must NOT taint subsequent window (B2)",
+            RequestGate.open("sync-helper-next", null);
+            assertEquals("non-Executor TxHelper.execute/submit must NOT taint subsequent window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // Positive control for B2: a real custom Executor/ExecutorService still gets flagged!
-            RequestGate.open("b2-real-custom-exec", null);
+            // Positive control: a real custom Executor/ExecutorService still gets flagged!
+            RequestGate.open("real-custom-exec", null);
             Object reqCustomExec = RequestGate.enter();
             Executor customExec = r -> r.run();
             try {
@@ -2993,10 +2999,10 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("real custom Executor must still be flagged: " + customExecOut.contaminations,
                     customExecOut.contaminations.contains("untracked-executor:" + customExec.getClass().getName()));
 
-            // Should-Fix 1(a): Request schedules a 30s timeout and cancels it before returning ->
+            // Request schedules a 30s timeout and cancels it before returning ->
             // next request MUST be CLEAN (no 32s tail: taint)!
             RequestGate.disarm();
-            RequestGate.open("sf1a-timeout", null);
+            RequestGate.open("cancelled-timeout", null);
             Object reqTimeout = RequestGate.enter();
             try {
                 ScheduledFuture<?> timeout = RequestGate.schedule(stpe, () -> { }, 30, TimeUnit.SECONDS);
@@ -3004,20 +3010,20 @@ public class HonestProtocolAndAsyncTest {
             } finally {
                 RequestGate.exit(reqTimeout);
             }
-            RequestGate.WindowOutcome sf1aOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            RequestGate.WindowOutcome timeoutOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertTrue("originating window still notes schedule",
-                    sf1aOut.contaminations.contains("untracked-async:schedule"));
-            RequestGate.open("sf1a-next-clean", null);
-            assertEquals("cancelled 30s timeout must NOT taint subsequent window (SF1a)",
+                    timeoutOut.contaminations.contains("untracked-async:schedule"));
+            RequestGate.open("cancelled-timeout-next", null);
+            assertEquals("cancelled 30s timeout must NOT taint subsequent window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // Should-Fix 1(b): Thread.start() + join() before response -> next request MUST be CLEAN!
+            // Thread.start() + join() before response -> next request MUST be CLEAN!
             RequestGate.disarm();
-            RequestGate.open("sf1b-thread-join", null);
+            RequestGate.open("thread-join", null);
             Object reqJoin = RequestGate.enter();
             try {
-                Thread t = new Thread(() -> { }, "sf1b-joined");
+                Thread t = new Thread(() -> { }, "joined-worker");
                 RequestGate.startThread(t);
                 t.join(5000);
                 assertFalse("thread terminated before END", t.isAlive());
@@ -3025,14 +3031,14 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqJoin);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            RequestGate.open("sf1b-next-clean", null);
-            assertEquals("joined Thread.start() must NOT leave 2s tail taint on next window (SF1b)",
+            RequestGate.open("thread-join-next", null);
+            assertEquals("joined Thread.start() must NOT leave 2s tail taint on next window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
             // Also verify bytecode-rewritten Thread subclass start() + join() before response -> CLEAN!
             RequestGate.disarm();
-            RequestGate.open("sf1b-subthread-join", null);
+            RequestGate.open("subthread-join", null);
             Object reqSubJoin = RequestGate.enter();
             try {
                 CustomWorkerThread sub = new CustomWorkerThread(() -> { });
@@ -3043,16 +3049,16 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqSubJoin);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            RequestGate.open("sf1b-subthread-next-clean", null);
-            assertEquals("joined Thread subclass must NOT taint next window (SF1b)",
+            RequestGate.open("subthread-join-next", null);
+            assertEquals("joined Thread subclass must NOT taint next window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // Should-Fix 1(c) + B1:
+            // TimerTask cancellation & running-body liveness:
             // (i) Periodic TimerTask cancelled BEFORE first fire (retained strongly in a field) -> CLEAN immediately!
             RequestGate.disarm();
             java.util.TimerTask retainedTask = new NoopTimerTask();
-            RequestGate.open("sf1c-timer-cancel", null);
+            RequestGate.open("timer-cancel-before-fire", null);
             Object reqTimer = RequestGate.enter();
             try {
                 caller.getMethod("scheduleAndCancelPeriodic", java.util.Timer.class, java.util.TimerTask.class)
@@ -3060,16 +3066,16 @@ public class HonestProtocolAndAsyncTest {
             } finally {
                 RequestGate.exit(reqTimer);
             }
-            RequestGate.WindowOutcome sf1cOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            RequestGate.WindowOutcome timerCancelOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertTrue("originating window notes untracked-async:timer",
-                    sf1cOut.contaminations.contains("untracked-async:timer"));
-            RequestGate.open("sf1c-next-clean", null);
-            assertEquals("cancelled periodic TimerTask retained in a field must NOT taint next window (SF1c)",
+                    timerCancelOut.contaminations.contains("untracked-async:timer"));
+            RequestGate.open("timer-cancel-next", null);
+            assertEquals("cancelled periodic TimerTask retained in a field must NOT taint next window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             assertNotNull("keep strong reference alive past assertion", retainedTask);
 
-            // (ii) B1 regression: One-shot TimerTask(delay=0) with a 300ms body STILL RUNNING
+            // (ii) One-shot TimerTask(delay=0) with a 300ms body STILL RUNNING
             //      at +100ms MUST contaminate t2 (never dropped at 50ms or on state=EXECUTED)!
             RequestGate.disarm();
             CountDownLatch bodyStarted = new CountDownLatch(1);
@@ -3085,7 +3091,7 @@ public class HonestProtocolAndAsyncTest {
                     }
                 }
             };
-            RequestGate.open("b1-slow-oneshot", null);
+            RequestGate.open("slow-oneshot", null);
             Object reqSlowOneShot = RequestGate.enter();
             try {
                 caller.getMethod("scheduleOneShotDelay", java.util.Timer.class, java.util.TimerTask.class, long.class)
@@ -3096,21 +3102,21 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("slow one-shot TimerTask started", bodyStarted.await(5, TimeUnit.SECONDS));
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(100); // Well past old 50ms grace while body is STILL running!
-            RequestGate.open("b1-during-slow-body", null);
-            assertEquals("running one-shot TimerTask body MUST contaminate t2 (B1)",
-                    Collections.singletonList("tail:b1-slow-oneshot"),
+            RequestGate.open("during-slow-body", null);
+            assertEquals("running one-shot TimerTask body MUST contaminate t2",
+                    Collections.singletonList("tail:slow-oneshot"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             // Calling cancel() while body is running returns false -> MUST STILL keep tail active!
             boolean cancelWhileRunning = (Boolean) caller.getMethod("cancelTask", java.util.TimerTask.class)
                     .invoke(null, slowOneShot);
             assertFalse("cancel() on already-running one-shot returns false", cancelWhileRunning);
-            RequestGate.open("b1-after-cancel-while-running", null);
-            assertEquals("cancel() while body is running MUST NOT drop tail immediately (B1)",
-                    Collections.singletonList("tail:b1-slow-oneshot"),
+            RequestGate.open("after-cancel-while-running", null);
+            assertEquals("cancel() while body is running MUST NOT drop tail immediately",
+                    Collections.singletonList("tail:slow-oneshot"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             releaseBody.countDown();
 
-            // (iii) B1/SF1c: Periodic TimerTask that ran >= 1 tick, then cancelled & retained in a field ->
+            // (iii) Periodic TimerTask that ran >= 1 tick, then cancelled & retained in a field ->
             //       active during untrackedTailWindowNanos, then CLEAN (never stuck forever)!
             RequestGate.disarm();
             RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(80);
@@ -3121,7 +3127,7 @@ public class HonestProtocolAndAsyncTest {
                     periodicRanOnce.countDown();
                 }
             };
-            RequestGate.open("b1-periodic-ran-then-cancel", null);
+            RequestGate.open("periodic-ran-then-cancel", null);
             Object reqRanPer = RequestGate.enter();
             try {
                 caller.getMethod("schedulePeriodicDelay", java.util.Timer.class, java.util.TimerTask.class,
@@ -3135,12 +3141,12 @@ public class HonestProtocolAndAsyncTest {
             // Immediately after cancelling a periodic task that already ticked, the tail MUST
             // stay active during untrackedTailWindowNanos (proving curExec != initial guards a
             // potentially running tick body!).
-            RequestGate.open("b1-periodic-right-after-cancel", null);
+            RequestGate.open("periodic-right-after-cancel", null);
             assertEquals("periodic TimerTask cancelled after ticking MUST keep tail active during tail window",
-                    Collections.singletonList("tail:b1-periodic-ran-then-cancel"),
+                    Collections.singletonList("tail:periodic-ran-then-cancel"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             Thread.sleep(120); // Past 80ms untrackedTailWindowNanos after cancel!
-            RequestGate.open("b1-periodic-clean-after-tail", null);
+            RequestGate.open("periodic-clean-after-tail", null);
             assertEquals("cancelled periodic TimerTask retained in field must become clean after tail window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
@@ -3152,7 +3158,7 @@ public class HonestProtocolAndAsyncTest {
             //   2. Cancelling a Timer while a 0ms one-shot body is STILL RUNNING -> keeps tail active!
             RequestGate.disarm();
             java.util.Timer cancelBeforeFireTimer = new java.util.Timer(true);
-            RequestGate.open("b1-timer-cancel-before-fire", null);
+            RequestGate.open("timer-cancel-before-fire-2", null);
             Object reqTcb = RequestGate.enter();
             try {
                 caller.getMethod("scheduleOneShotDelay", java.util.Timer.class, java.util.TimerTask.class, long.class)
@@ -3162,7 +3168,7 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqTcb);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            RequestGate.open("b1-timer-cancel-before-fire-next", null);
+            RequestGate.open("timer-cancel-before-fire-2-next", null);
             assertEquals("Timer.cancel() well before scheduled fire time leaves next window clean",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
@@ -3171,7 +3177,7 @@ public class HonestProtocolAndAsyncTest {
             java.util.Timer cancelWhileRunningTimer = new java.util.Timer(true);
             CountDownLatch timerBodyStarted = new CountDownLatch(1);
             CountDownLatch timerBodyRelease = new CountDownLatch(1);
-            RequestGate.open("b1-timer-cancel-running", null);
+            RequestGate.open("timer-cancel-running", null);
             Object reqTcr = RequestGate.enter();
             try {
                 caller.getMethod("scheduleOneShotDelay", java.util.Timer.class, java.util.TimerTask.class, long.class)
@@ -3192,16 +3198,16 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqTcr);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            RequestGate.open("b1-timer-cancel-running-next", null);
+            RequestGate.open("timer-cancel-running-next", null);
             assertEquals("Timer.cancel() while body is running MUST keep tail active",
-                    Collections.singletonList("tail:b1-timer-cancel-running"),
+                    Collections.singletonList("tail:timer-cancel-running"),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             timerBodyRelease.countDown();
 
             // (iv) One-shot TimerTask with 30s delay cancelled before returning -> immediately CLEAN!
             RequestGate.disarm();
             java.util.TimerTask retainedOneShot = new NoopTimerTask();
-            RequestGate.open("sf1c-oneshot-cancel", null);
+            RequestGate.open("oneshot-cancel", null);
             Object reqOneShot = RequestGate.enter();
             try {
                 caller.getMethod("scheduleAndCancelOneShot", java.util.Timer.class, java.util.TimerTask.class)
@@ -3210,30 +3216,30 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqOneShot);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            RequestGate.open("sf1c-oneshot-next-clean", null);
-            assertEquals("cancelled one-shot 30s TimerTask must NOT taint next window (SF1c)",
+            RequestGate.open("oneshot-next-clean", null);
+            assertEquals("cancelled one-shot 30s TimerTask must NOT taint next window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
             assertNotNull("keep strong reference alive", retainedOneShot);
 
-            // S1: Two-arg submit(Runnable, T) returning a Future subtype (like Guava ListenableFuture)
+            // Two-arg submit(Runnable, T) returning a Future subtype (like Guava ListenableFuture)
             // MUST flag untracked-executor on a custom ExecutorService, while ignoring PlainSyncTxHelper!
             RequestGate.disarm();
-            RequestGate.open("s1-listenable-submit2", null);
-            Object reqS1 = RequestGate.enter();
+            RequestGate.open("listenable-submit2", null);
+            Object reqSubmit2 = RequestGate.enter();
             CustomListenableLikeExecutor listenableExec = new CustomListenableLikeExecutor();
             try {
                 Object res = caller.getMethod("callTwoArgSubmit", ListenableLikeExecutorService.class,
                         Runnable.class, Object.class).invoke(null, listenableExec, (Runnable) () -> { }, "val");
                 assertNotNull("two-arg submit returned SubtypeFuture", res);
             } finally {
-                RequestGate.exit(reqS1);
+                RequestGate.exit(reqSubmit2);
             }
-            RequestGate.WindowOutcome s1Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            assertTrue("two-arg ListenableFuture submit must flag untracked-executor (S1): " + s1Out.contaminations,
-                    s1Out.contaminations.contains("untracked-executor:" + listenableExec.getClass().getName()));
+            RequestGate.WindowOutcome submit2Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("two-arg ListenableFuture submit must flag untracked-executor: " + submit2Out.contaminations,
+                    submit2Out.contaminations.contains("untracked-executor:" + listenableExec.getClass().getName()));
 
-            // Should-Fix 3 + S4: Known same-thread inline executors (Spring SyncTaskExecutor,
+            // Known same-thread inline executors (Spring SyncTaskExecutor,
             // ConcurrentTaskExecutor(SyncTaskExecutor), Guava DirectExecutor, and DirectExecutorService)
             // are NEITHER wrapped NOR flagged untracked-executor, AND *Async(fn, inlineExec) holds permit
             // while upstream CF is incomplete!
@@ -3257,7 +3263,7 @@ public class HonestProtocolAndAsyncTest {
             ExecutorService legacyGuavaDirectSvc =
                     (ExecutorService) legacyGuavaDirectSvcCls.getDeclaredConstructor().newInstance();
 
-            RequestGate.open("sf3-inline", null);
+            RequestGate.open("inline-exec-check", null);
             Object reqInline = RequestGate.enter();
             AtomicBoolean inlineRan1 = new AtomicBoolean(false);
             AtomicBoolean inlineRan2 = new AtomicBoolean(false);
@@ -3290,20 +3296,20 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("SyncTaskExecutor task executed", inlineRan1.get());
             assertTrue("Guava DirectExecutor task executed", inlineRan2.get());
             assertTrue("Guava DirectExecutorService task executed", inlineRan3.get());
-            assertEquals("thenApplyAsync(fn, inlineExec) must hold permit while upstream CF is incomplete (S4)",
+            assertEquals("thenApplyAsync(fn, inlineExec) must hold permit while upstream CF is incomplete",
                     1, RequestGate.running());
             upstream.complete("ok");
             assertEquals("ok-done", asyncWithInline.get(5, TimeUnit.SECONDS));
             assertEquals("permit released once upstream CF completes", 0, RequestGate.running());
-            assertEquals("known inline executors must NOT contaminate current window (SF3)",
+            assertEquals("known inline executors must NOT contaminate current window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
-            RequestGate.open("sf3-inline-next", null);
-            assertEquals("known inline executors must NOT taint next window (SF3)",
+            RequestGate.open("inline-exec-next", null);
+            assertEquals("known inline executors must NOT taint next window",
                     Collections.<String>emptyList(),
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
 
-            // Should-Fix 4 (S4): Real CoverageTcpClient connect test with injected RuntimeException in
+            // Real CoverageTcpClient connect test with injected RuntimeException in
             // helloFrame() -> falls back to minimal empty-identity HELLO, stays connected (NO reconnect loop),
             // and serves NOP on the first connection!
             collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
@@ -3433,7 +3439,7 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("BACKGROUND reports lost:1 from suppressed gap: " + bgLine,
                     bgLine.contains("\"lost\":1"));
 
-            // S2 (A -> B -> C): test-3 starts a live thread still alive at END test-4,
+            // Active lingering thread across A -> B -> C: test-3 starts a live thread still alive at END test-4,
             // finishing inside the test-4 -> test-5 gap! BOTH gaps (test-3->test-4 AND
             // test-4->test-5) MUST be suppressed!
             CountDownLatch allowLongAudit = new CountDownLatch(1);
@@ -3479,10 +3485,10 @@ public class HonestProtocolAndAsyncTest {
             send(out, "START ts/test-5");
             assertEquals("ACK ts/test-5", in.readLine());
             send(out, "NOP check-no-bg-bc");
-            assertEquals("B->C gap holding A's finishing audit MUST suppress BACKGROUND (S2)",
+            assertEquals("B->C gap holding A's finishing audit MUST suppress BACKGROUND",
                     "ACK check-no-bg-bc", in.readLine());
 
-            // S2 (opposite): test-5 starts a thread AND joins it before END ->
+            // Opposite case: test-5 starts a thread AND joins it before END ->
             // next gap IS clean and DOES emit BACKGROUND (with lost:1 from test-4->test-5)!
             Object req5 = RequestGate.enter();
             try {
@@ -3501,12 +3507,12 @@ public class HonestProtocolAndAsyncTest {
             send(out, "START ts/test-6");
             assertEquals("ACK ts/test-6", in.readLine());
             String bg56 = in.readLine();
-            assertTrue("joined thread before END must NOT suppress next clean BACKGROUND (S2): " + bg56,
+            assertTrue("joined thread before END must NOT suppress next clean BACKGROUND: " + bg56,
                     bg56 != null && bg56.startsWith("BACKGROUND ")
                             && bg56.contains("\"after\":\"ts/test-5\"")
                             && bg56.contains("\"lost\":1"));
 
-            // S2 (independent suppressBackground[0] branch): test-6 ends completely clean
+            // Independent suppressBackground[0] branch: test-6 ends completely clean
             // (prevMayEmitTail == false), then an expired job starts in the gap before START test-7
             // so ONLY suppressBackground[0] suppresses BACKGROUND!
             Object req6 = RequestGate.enter();
@@ -3529,7 +3535,7 @@ public class HonestProtocolAndAsyncTest {
                 send(out, "START ts/test-7");
                 assertEquals("ACK ts/test-7", in.readLine());
                 send(out, "NOP check-suppress-only");
-                assertEquals("suppressBackground[0] alone MUST suppress BACKGROUND when expired job active (S2)",
+                assertEquals("suppressBackground[0] alone MUST suppress BACKGROUND when expired job active",
                         "ACK check-suppress-only", in.readLine());
             } finally {
                 JobGate.exit(expiredToken);
@@ -3550,7 +3556,7 @@ public class HonestProtocolAndAsyncTest {
             send(out, "START ts/test-8");
             assertEquals("ACK ts/test-8", in.readLine());
             String bg78 = in.readLine();
-            assertTrue("next clean gap after suppressBackground[0] reports lost:1 (S2): " + bg78,
+            assertTrue("next clean gap after suppressBackground[0] reports lost:1: " + bg78,
                     bg78 != null && bg78.startsWith("BACKGROUND ") && bg78.contains("\"lost\":1"));
         } finally {
             KeployDedupAgent.stop();
@@ -3559,7 +3565,7 @@ public class HonestProtocolAndAsyncTest {
         }
 
         // 2. Unix transport: verify BOTH (a) BACKGROUND suppression + lost:1 AND
-        //    (b) Blocker 1 end-to-end on Unix (unverified: ["no-server-entry"], NO "contaminated")!
+        //    (b) no-server-entry end-to-end on Unix (unverified: ["no-server-entry"], NO "contaminated")!
         System.clearProperty(ENDPOINT_PROPERTY);
         KeployDedupAgent.transformerAdded = true;
         File sockDir = tmp.newFolder("unix-bg-suppress");
@@ -3684,9 +3690,9 @@ public class HonestProtocolAndAsyncTest {
                 }
             }
             assertNotNull("expected Unix record for ts/u3", recU3);
-            assertTrue("Unix uncounted-server record must carry unverified no-server-entry (S4): " + recU3,
+            assertTrue("Unix uncounted-server record must carry unverified no-server-entry: " + recU3,
                     recU3.contains("\"unverified\":[\"no-server-entry\"]"));
-            assertFalse("Unix uncounted-server record must NOT carry contaminated (B1/S4): " + recU3,
+            assertFalse("Unix uncounted-server record must NOT carry contaminated: " + recU3,
                     recU3.contains("\"contaminated\""));
             assertNotNull("expected BACKGROUND for clean gap u2->u3", bgU2U3);
             assertTrue("Unix BACKGROUND u2->u3 must carry lost:1 for suppressed u1->u2 gap: " + bgU2U3,
@@ -4024,6 +4030,385 @@ public class HonestProtocolAndAsyncTest {
         RequestGate.WindowOutcome rusOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
         assertTrue("unbound real ExecutorService::submit must flag untracked-executor: " + rusOut.contaminations,
                 rusOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutorService.class.getName()));
+        assertFalse("in-window method refs must NOT trip pre-captured executor latch",
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+    }
+
+    public static final class PreCapturedBoundExecCaller {
+        private static volatile java.util.function.Consumer<Runnable> captured;
+
+        public static void capture(Object e) {
+            captured = ((Executor) e)::execute;
+        }
+
+        public static void invoke(Runnable r) {
+            captured.accept(r);
+        }
+    }
+
+    public static final class PreCapturedBoundSubmitCaller {
+        private static volatile java.util.function.Function<Runnable, Future<?>> captured;
+
+        public static void capture(Object s) {
+            captured = ((ExecutorService) s)::submit;
+        }
+
+        public static Future<?> invoke(Runnable r) {
+            return captured.apply(r);
+        }
+    }
+
+    public static final class PreCapturedUnboundExecCaller {
+        private static volatile java.util.function.BiConsumer<Executor, Runnable> captured;
+
+        public static void capture() {
+            captured = Executor::execute;
+        }
+
+        public static void invoke(Executor e, Runnable r) {
+            captured.accept(e, r);
+        }
+    }
+
+    public static final class PreCapturedUnboundSubmitCaller {
+        private static volatile java.util.function.BiFunction<ExecutorService, Runnable, Future<?>> captured;
+
+        public static void capture() {
+            captured = ExecutorService::submit;
+        }
+
+        public static Future<?> invoke(ExecutorService s, Runnable r) {
+            return captured.apply(s, r);
+        }
+    }
+
+    public static final class PreCapturedNonExecHelperCaller {
+        private static volatile java.util.function.Consumer<Runnable> boundExec;
+        private static volatile java.util.function.BiConsumer<MethodRefTxHelper, Runnable> unboundExec;
+        private static volatile java.util.function.Function<Runnable, Object> boundSubmit;
+        private static volatile java.util.function.BiFunction<MethodRefTxHelper, Runnable, Object> unboundSubmit;
+
+        public static void capture(MethodRefTxHelper h) {
+            boundExec = h::execute;
+            unboundExec = MethodRefTxHelper::execute;
+            boundSubmit = h::submit;
+            unboundSubmit = MethodRefTxHelper::submit;
+        }
+
+        public static void invokeAll(MethodRefTxHelper h, Runnable r) {
+            boundExec.accept(r);
+            unboundExec.accept(h, r);
+            boundSubmit.apply(r);
+            unboundSubmit.apply(h, r);
+        }
+    }
+
+    public static final class PreCapturedInlineAndSpringCaller {
+        private static volatile java.util.function.Consumer<Runnable> boundInline;
+        private static volatile java.util.function.BiConsumer<org.springframework.core.task.SyncTaskExecutor, Runnable> unboundInline;
+        private static volatile java.util.function.Consumer<Runnable> boundSpring;
+
+        public static void capture(org.springframework.core.task.SyncTaskExecutor inline,
+                org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor spring) {
+            boundInline = ((Executor) inline)::execute;
+            unboundInline = org.springframework.core.task.SyncTaskExecutor::execute;
+            boundSpring = ((Executor) spring)::execute;
+        }
+
+        public static void invokeInline(org.springframework.core.task.SyncTaskExecutor inline, Runnable r) {
+            boundInline.accept(r);
+            unboundInline.accept(inline, r);
+        }
+
+        public static void invokeSpring(Runnable r) {
+            boundSpring.accept(r);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void preCapturedExecutorMethodRefLatchesAsyncExecutorsFalseOnTcpAndUnix() throws Exception {
+        Class<?> boundExec = rewriteClassWithWrapExecutorCalls(PreCapturedBoundExecCaller.class);
+        Class<?> boundSubmit = rewriteClassWithWrapExecutorCalls(PreCapturedBoundSubmitCaller.class);
+        Class<?> unboundExec = rewriteClassWithWrapExecutorCalls(PreCapturedUnboundExecCaller.class);
+        Class<?> unboundSubmit = rewriteClassWithWrapExecutorCalls(PreCapturedUnboundSubmitCaller.class);
+
+        byte[] shopBytes = new byte[] {61, 62, 63};
+        File shop = new File(tmp.newFolder("precaptured-exec-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 2);
+
+        ThreadPoolExecutor tpe = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        try {
+            // 1. TCP transport: initial HELLO declares asyncExecutors=true; capturing ((Executor) tpe)::execute
+            //    outside any window latches asyncExecutors=false, refreshes HELLO before START/COV,
+            //    and stays permanently latched across reconnect and subsequent windows.
+            KeployDedupAgent.transformerAdded = true;
+            KeployDedupAgent.executorCallSitesEnabled = true;
+            KeployDedupAgent.observedNoServerEntry = false;
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            ServerEntries.restoreCounted(Collections.<String>emptySet());
+            ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+            collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+            collector.setSoTimeout(30000);
+            System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+            System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+            assertTrue(KeployDedupAgent.start());
+            try {
+                try (Socket sdk = collector.accept()) {
+                    sdk.setSoTimeout(30000);
+                    OutputStream out = sdk.getOutputStream();
+                    BufferedReader in = new BufferedReader(
+                            new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                    JsonObject initial = parseHello(in.readLine());
+                    assertTrue("initial HELLO starts with windowCut=true",
+                            initial.get("windowCut").getAsBoolean());
+                    assertTrue("initial HELLO starts with asyncExecutors=true",
+                            initial.get("asyncExecutors").getAsBoolean());
+
+                    send(out, "ACK_ID");
+                    // Capture bound ((Executor) tpe)::execute outside any request window (no RequestGate.enter).
+                    boundExec.getMethod("capture", Object.class).invoke(null, tpe);
+                    assertTrue("pre-captured bound Executor::execute must latch observedPreCapturedUntrackedExecutor",
+                            KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+
+                    // Next START refreshes HELLO with asyncExecutors=false BEFORE ACK!
+                    send(out, "START ts/precaptured-1");
+                    JsonObject refreshed = parseHello(in.readLine());
+                    assertTrue("windowCut stays true when only pre-captured executor latches",
+                            refreshed.get("windowCut").getAsBoolean());
+                    assertFalse("HELLO must refresh asyncExecutors=false after pre-capture",
+                            refreshed.get("asyncExecutors").getAsBoolean());
+                    assertEquals("ACK ts/precaptured-1", in.readLine());
+
+                    // Invoke the pre-captured method ref inside a request window.
+                    CountDownLatch ran = new CountDownLatch(1);
+                    Object tok = RequestGate.enter();
+                    try {
+                        probes[1] = true;
+                        boundExec.getMethod("invoke", Runnable.class).invoke(null, (Runnable) ran::countDown);
+                    } finally {
+                        RequestGate.exit(tok);
+                    }
+                    assertTrue("pre-captured executor ran task", ran.await(5, TimeUnit.SECONDS));
+                    send(out, "END ts/precaptured-1");
+                    String cov1 = in.readLine();
+                    assertTrue("COV emitted for precaptured-1", cov1.startsWith("COV "));
+                    assertEquals("ACK ts/precaptured-1", in.readLine());
+
+                    // Subsequent clean window keeps asyncExecutors=false (no revert HELLO).
+                    send(out, "START ts/precaptured-2");
+                    assertEquals("ACK ts/precaptured-2", in.readLine());
+                    Object tok2 = RequestGate.enter();
+                    try {
+                        probes[1] = true;
+                    } finally {
+                        RequestGate.exit(tok2);
+                    }
+                    send(out, "END ts/precaptured-2");
+                    assertTrue(in.readLine().startsWith("COV "));
+                    assertEquals("ACK ts/precaptured-2", in.readLine());
+                }
+
+                // Connection 2 (after reconnect): asyncExecutors=false stays permanently latched!
+                try (Socket sdk2 = collector.accept()) {
+                    sdk2.setSoTimeout(30000);
+                    BufferedReader in2 = new BufferedReader(
+                            new InputStreamReader(sdk2.getInputStream(), StandardCharsets.UTF_8));
+                    JsonObject reconnected = parseHello(in2.readLine());
+                    assertTrue("windowCut remains true after reconnect",
+                            reconnected.get("windowCut").getAsBoolean());
+                    assertFalse("asyncExecutors=false stays permanently latched across reconnect",
+                            reconnected.get("asyncExecutors").getAsBoolean());
+                }
+            } finally {
+                KeployDedupAgent.stop();
+                collector.close();
+                collector = null;
+                System.clearProperty(ENDPOINT_PROPERTY);
+            }
+
+            // 2. Startup (disarmed) capture for bound submit, unbound execute, and unbound submit
+            //    all latch asyncExecutors=false BEFORE any collector connects!
+            String[] variants = new String[] {"boundSubmit", "unboundExec", "unboundSubmit"};
+            for (String variant : variants) {
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+                RequestGate.disarm();
+                if ("boundSubmit".equals(variant)) {
+                    boundSubmit.getMethod("capture", Object.class).invoke(null, tpe);
+                } else if ("unboundExec".equals(variant)) {
+                    unboundExec.getMethod("capture").invoke(null);
+                } else {
+                    unboundSubmit.getMethod("capture").invoke(null);
+                }
+                assertTrue(variant + " captured while disarmed must latch observedPreCapturedUntrackedExecutor",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                JsonObject h = parseHello(connectAndReadHello(true));
+                assertTrue(variant + " keeps windowCut=true", h.get("windowCut").getAsBoolean());
+                assertFalse(variant + " must report asyncExecutors=false on initial HELLO",
+                        h.get("asyncExecutors").getAsBoolean());
+            }
+
+            // 3. Unix transport: caps flip from asyncExecutors=true to asyncExecutors=false after
+            //    pre-capture and stay false on subsequent windows.
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            System.clearProperty(ENDPOINT_PROPERTY);
+            File sockDir = tmp.newFolder("unix-precaptured-exec");
+            KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+            KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+            org.newsclub.net.unix.AFUNIXServerSocket dataServer =
+                    org.newsclub.net.unix.AFUNIXServerSocket.newInstance();
+            dataServer.bind(org.newsclub.net.unix.AFUNIXSocketAddress.of(new File(KeployDedupAgent.dataSocketPath)));
+            Thread dataReader = new Thread(() -> {
+                while (!dataServer.isClosed()) {
+                    try (Socket conn = dataServer.accept();
+                         BufferedReader r = new BufferedReader(
+                                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        while (r.readLine() != null) {
+                            // Drain published Unix coverage records.
+                        }
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, "unix-precaptured-data-reader");
+            dataReader.setDaemon(true);
+            dataReader.start();
+            try {
+                assertTrue(KeployDedupAgent.start());
+                String ack1 = sendUnixControl("START ts/u-pre-1");
+                assertTrue("Unix START before pre-capture reports asyncExecutors=true: " + ack1,
+                        ack1.startsWith("ACK proto=3") && ack1.contains("windowCut=true")
+                                && ack1.contains("asyncExecutors=true"));
+                String end1 = sendUnixControl("END ts/u-pre-1");
+                assertTrue("Unix END before pre-capture reports asyncExecutors=true: " + end1,
+                        end1.startsWith("ACK proto=3") && end1.contains("asyncExecutors=true"));
+
+                // Capture outside any window.
+                boundExec.getMethod("capture", Object.class).invoke(null, tpe);
+                assertTrue(KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+
+                String ack2 = sendUnixControl("START ts/u-pre-2");
+                assertTrue("Unix START after pre-capture must refresh asyncExecutors=false: " + ack2,
+                        ack2.startsWith("ACK proto=3") && ack2.contains("windowCut=true")
+                                && ack2.contains("asyncExecutors=false"));
+                CountDownLatch unixRan = new CountDownLatch(1);
+                Object tokU = RequestGate.enter();
+                try {
+                    boundExec.getMethod("invoke", Runnable.class).invoke(null, (Runnable) unixRan::countDown);
+                } finally {
+                    RequestGate.exit(tokU);
+                }
+                assertTrue(unixRan.await(5, TimeUnit.SECONDS));
+                String end2 = sendUnixControl("END ts/u-pre-2");
+                assertTrue("Unix END stays asyncExecutors=false: " + end2,
+                        end2.startsWith("ACK proto=3") && end2.contains("asyncExecutors=false"));
+
+                String ack3 = sendUnixControl("START ts/u-pre-3");
+                assertTrue("Unix subsequent window stays asyncExecutors=false: " + ack3,
+                        ack3.startsWith("ACK proto=3") && ack3.contains("asyncExecutors=false"));
+            } finally {
+                KeployDedupAgent.stop();
+                dataServer.close();
+            }
+        } finally {
+            tpe.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void preCapturedNonExecutorAndInlineMethodRefsDoNotLatchAsyncExecutors() throws Exception {
+        Class<?> helperCaller = rewriteClassWithWrapExecutorCalls(PreCapturedNonExecHelperCaller.class);
+        Class<?> inlineAndSpringCaller = rewriteClassWithWrapExecutorCalls(PreCapturedInlineAndSpringCaller.class);
+
+        byte[] shopBytes = new byte[] {64, 65, 66};
+        File shop = new File(tmp.newFolder("nonexec-precaptured-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+
+        MethodRefTxHelper helper = new MethodRefTxHelper();
+        org.springframework.core.task.SyncTaskExecutor syncExec = new org.springframework.core.task.SyncTaskExecutor();
+        org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springExec =
+                new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+        springExec.initialize();
+        try {
+            ServerEntries.markSpringExecutorHookedForTests(springExec.getClass().getName());
+            KeployDedupAgent.transformerAdded = true;
+            KeployDedupAgent.executorCallSitesEnabled = true;
+            KeployDedupAgent.observedNoServerEntry = false;
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            ServerEntries.restoreCounted(Collections.<String>emptySet());
+            ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+            // 1. Capture outside any window while DISARMED (startup) -> must NOT latch!
+            RequestGate.disarm();
+            helperCaller.getMethod("capture", MethodRefTxHelper.class).invoke(null, helper);
+            inlineAndSpringCaller.getMethod("capture",
+                    org.springframework.core.task.SyncTaskExecutor.class,
+                    org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor.class)
+                    .invoke(null, syncExec, springExec);
+            assertFalse("disarmed pre-capture of TxHelper/inline/hooked-Spring must NOT latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+
+            // 2. Capture outside any window while ARMED -> must NOT latch!
+            RequestGate.arm();
+            helperCaller.getMethod("capture", MethodRefTxHelper.class).invoke(null, helper);
+            inlineAndSpringCaller.getMethod("capture",
+                    org.springframework.core.task.SyncTaskExecutor.class,
+                    org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor.class)
+                    .invoke(null, syncExec, springExec);
+            assertFalse("armed outside-window capture of TxHelper/inline/hooked-Spring must NOT latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+
+            // 3. TCP HELLO keeps asyncExecutors=true!
+            JsonObject hello = parseHello(connectAndReadHello(true));
+            assertTrue("windowCut stays true", hello.get("windowCut").getAsBoolean());
+            assertTrue("asyncExecutors stays true for non-Executor/inline/hooked-Spring pre-captures",
+                    hello.get("asyncExecutors").getAsBoolean());
+
+            // 4. Unix ACK keeps asyncExecutors=true!
+            File sockDir = tmp.newFolder("unix-nonexec-precaptured");
+            KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+            KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+            System.clearProperty(ENDPOINT_PROPERTY);
+            System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+            assertTrue(KeployDedupAgent.start());
+            try {
+                String ack = sendUnixControl("START ts/u-nonexec-pre");
+                assertTrue("Unix ACK keeps asyncExecutors=true: " + ack,
+                        ack.startsWith("ACK proto=3") && ack.contains("asyncExecutors=true"));
+            } finally {
+                KeployDedupAgent.stop();
+            }
+
+            // 5. Invoking all captured non-Executor and inline refs inside a window produces 0 contaminations!
+            RequestGate.disarm();
+            RequestGate.open("nonexec-precaptured-call", null);
+            AtomicInteger count = new AtomicInteger();
+            Object tok = RequestGate.enter();
+            try {
+                helperCaller.getMethod("invokeAll", MethodRefTxHelper.class, Runnable.class)
+                        .invoke(null, helper, (Runnable) count::incrementAndGet);
+                inlineAndSpringCaller.getMethod("invokeInline",
+                        org.springframework.core.task.SyncTaskExecutor.class, Runnable.class)
+                        .invoke(null, syncExec, (Runnable) count::incrementAndGet);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            assertEquals("all 6 helper + inline invocations ran", 6, count.get());
+            RequestGate.WindowOutcome out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals("pre-captured TxHelper/inline must produce 0 contaminations",
+                    Collections.<String>emptyList(), out.contaminations);
+            assertFalse("pre-captured TxHelper/inline must leave tailActiveAtEnd=false", out.tailActiveAtEnd);
+            assertFalse("latch remains false after in-window invocations",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+        } finally {
+            ServerEntries.unmarkSpringExecutorHookedForTests(springExec.getClass().getName());
+            springExec.shutdown();
+        }
     }
 
     @Test(timeout = 60000)

@@ -38,7 +38,7 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 /**
- * End-to-end forked {@code -javaagent} JVM tests proving Ruling #3 across both
+ * End-to-end forked {@code -javaagent} JVM tests verifying v3 protocol honesty across both
  * embedded-JaCoCo index mode AND external-JaCoCo {@code appPackagePrefix} k8s
  * mode, plain JDK executors, {@code CompletableFuture} dependent stages,
  * fail-closed unknown executors, {@code KEPLOY_JAVA_ASYNC_CALLSITES=off},
@@ -93,7 +93,7 @@ public class ForkedAsyncAndHonestyTest {
             assertTrue("k8s external-JaCoCo prefix mode must declare asyncExecutors=true",
                     hello.get("asyncExecutors").getAsBoolean());
 
-            // 1. Reproduce plg-87's exact bug: supplyAsync(20ms, pool).thenAccept(350ms audit)
+            // 1. Fast supplier with slow synchronous dependent: supplyAsync(20ms, pool).thenAccept(350ms audit)
             //    with endWait=80ms -> MUST report windowCut:true while audit runs!
             String cov1 = app.runHttpTest("ts/cf-dep", "/cf-then-accept?ms=350");
             assertTrue("CF dependent thenAccept(audit) must keep window open and trigger windowCut: " + cov1,
@@ -131,7 +131,7 @@ public class ForkedAsyncAndHonestyTest {
                     cov.contains("\"contaminated\":[\"untracked-executor:"
                             + AsyncHonestyApp.SerializableOnlyExecutor.class.getName() + "\"]"));
 
-            // 2. B1: Async 350ms task on unknown SerializableOnlyExecutor -> Test 1 gets
+            // 2. Async 350ms task on unknown SerializableOnlyExecutor -> Test 1 gets
             //    untracked-executor:... AND Test 2 immediately gets tail:ts/unknown-async!
             String covAsync = app.runHttpTest("ts/unknown-async", "/unknown-serializable-async?ms=350");
             assertTrue("Test 1 must carry untracked-executor: " + covAsync,
@@ -147,7 +147,7 @@ public class ForkedAsyncAndHonestyTest {
     @Test(timeout = 120000)
     public void forkedExternalCfDependentAndConcreteAsyncFormsAreTrackedOrFlagged() throws Exception {
         try (ForkedApp app = startFork("tomcat", "80", false, false, null, null)) {
-            // B2: External library CompletableFuture.thenAccept(350ms audit) with endWait=80ms -> windowCut:true!
+            // External library CompletableFuture.thenAccept(350ms audit) with endWait=80ms -> windowCut:true!
             String covExtCut = app.runHttpTest("ts/ext-cf-cut", "/external-cf-dependent?ms=350");
             assertTrue("external CF plain thenAccept must hold window permit and cut at 80ms: " + covExtCut,
                     covExtCut.contains("\"windowCut\":true"));
@@ -156,7 +156,7 @@ public class ForkedAsyncAndHonestyTest {
             assertTrue("window after cut external CF must carry tail:ts/ext-cf-cut: " + covAfterExt,
                     covAfterExt.contains("\"tail:ts/ext-cf-cut\""));
 
-            // B2: CompletionStage-typed thenApplyAsync(350ms) with endWait=80ms -> windowCut:true!
+            // CompletionStage-typed thenApplyAsync(350ms) with endWait=80ms -> windowCut:true!
             String covStage = app.runHttpTest("ts/stage-async", "/completion-stage-async?ms=350");
             assertTrue("CompletionStage.thenApplyAsync must hold window permit and cut at 80ms: " + covStage,
                     covStage.contains("\"windowCut\":true"));
@@ -309,7 +309,7 @@ public class ForkedAsyncAndHonestyTest {
         //   5. Release the latch via /release-virtual and assert the next /clean is clean.
         try (ForkedApp app = startFork("tomcat", "2000", true, false, null, null)) {
             String covDirect = app.runHttpTest("ts/vthread-1", "/virtual-thread-latch");
-            assertTrue("Thread.startVirtualThread must contaminate COV (SF-D): " + covDirect,
+            assertTrue("Thread.startVirtualThread must contaminate COV: " + covDirect,
                     covDirect.contains("\"untracked-async:virtual-thread\""));
 
             // Consume one-time report so the later assertion genuinely depends on Thread.isAlive().
@@ -317,16 +317,16 @@ public class ForkedAsyncAndHonestyTest {
             Thread.sleep(2200); // Strictly past default 2000ms base tail while virtual thread is held on latch!
             String covAfterDirect = app.runHttpTest("ts/vthread-still-alive", "/clean");
             assertTrue("window past 2s base tail & after one-time report while virtual thread is alive "
-                    + "must carry tail (SF-D/SF-4): " + covAfterDirect,
+                    + "must carry tail: " + covAfterDirect,
                     covAfterDirect.contains("\"tail:ts/vthread-1\""));
 
             app.runHttpTest("ts/vthread-release", "/release-virtual");
             String covDirectDone = app.runHttpTest("ts/vthread-done", "/clean");
-            assertFalse("window after virtual thread exits must be clean (SF-4): " + covDirectDone,
+            assertFalse("window after virtual thread exits must be clean: " + covDirectDone,
                     covDirectDone.contains("\"tail:ts/vthread-1\""));
 
             String covBuilder = app.runHttpTest("ts/vbuilder-1", "/virtual-builder-latch");
-            assertTrue("Thread.ofVirtual().start() must contaminate COV (SF-D): " + covBuilder,
+            assertTrue("Thread.ofVirtual().start() must contaminate COV: " + covBuilder,
                     covBuilder.contains("\"untracked-async:thread-builder\""));
 
             // Consume one-time report so the later assertion genuinely depends on Thread.isAlive().
@@ -334,12 +334,12 @@ public class ForkedAsyncAndHonestyTest {
             Thread.sleep(2200); // Strictly past default 2000ms base tail while builder virtual thread is held on latch!
             String covAfterBuilder = app.runHttpTest("ts/vbuilder-still-alive", "/clean");
             assertTrue("window past 2s base tail & after one-time report while builder virtual thread is alive "
-                    + "must carry tail (SF-4): " + covAfterBuilder,
+                    + "must carry tail: " + covAfterBuilder,
                     covAfterBuilder.contains("\"tail:ts/vbuilder-1\""));
 
             app.runHttpTest("ts/vbuilder-release", "/release-virtual");
             String covBuilderDone = app.runHttpTest("ts/vbuilder-done", "/clean");
-            assertFalse("window after builder virtual thread exits must be clean (SF-4): " + covBuilderDone,
+            assertFalse("window after builder virtual thread exits must be clean: " + covBuilderDone,
                     covBuilderDone.contains("\"tail:ts/vbuilder-1\""));
         }
     }

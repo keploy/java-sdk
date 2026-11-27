@@ -83,7 +83,7 @@ final class ServerEntries implements ClassFileTransformer {
         // ScheduledMethodRunnable, on the scheduler's threads.
         addJob("Quartz", "org/quartz/core/JobRunShell", "quartz", "run");
         addJob("Spring", "org/springframework/scheduling/support/ScheduledMethodRunnable", "scheduled", "run");
-        // Message listeners (F10 listener contamination): an inbound message
+        // Message listeners: an inbound message
         // delivered on a consumer thread during a test's window mixes the
         // listener's probes into the test's record, so mark the test contaminated.
         addJob("Kafka", "org/springframework/kafka/listener/KafkaMessageListenerContainer$ListenerConsumer",
@@ -1132,12 +1132,14 @@ final class ServerEntries implements ClassFileTransformer {
                                             // Bound method ref: captured receiver sits on top of stack.
                                             // DUP receiver and verify its runtime Executor/submit type
                                             // so plain non-Executor helpers (e.g. txHelper::execute)
-                                            // are ignored with zero contamination.
+                                            // are ignored with zero contamination, while real untracked
+                                            // executors captured outside any window latch asyncExecutors=false.
                                             changed[0] = true;
                                             ensureExtraStack(1);
                                             super.visitInsn(Opcodes.DUP);
                                             super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
-                                                    execRef ? "noteIfUntrackedExecutor" : "noteIfUntrackedSubmit",
+                                                    execRef ? "noteIfUntrackedExecutorMethodRef"
+                                                            : "noteIfUntrackedSubmitMethodRef",
                                                     "(Ljava/lang/Object;)V", false);
                                         } else {
                                             // Unbound method ref (e.g. TxHelper::execute as BiConsumer)
@@ -1155,8 +1157,13 @@ final class ServerEntries implements ClassFileTransformer {
                                         break;
                                     }
                                     if (isAsyncMethodRefTarget(h)) {
-                                        emitUntrackedFlag("untracked-async:method-ref:"
+                                        changed[0] = true;
+                                        ensureExtraStack(1);
+                                        super.visitLdcInsn("untracked-async:method-ref:"
                                                 + h.getOwner().replace('/', '.') + "." + h.getName());
+                                        super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
+                                                "noteUntrackedAsyncMethodRef",
+                                                "(Ljava/lang/String;)V", false);
                                         break;
                                     }
                                 }

@@ -42,7 +42,7 @@ import org.objectweb.asm.Opcodes;
 
 /**
  * Real application process launched in forked {@code -javaagent:keploy-sdk.jar}
- * JVMs by {@code ForkedAsyncAndHonestyTest} to prove Ruling #3 end-to-end
+ * JVMs by {@code ForkedAsyncAndHonestyTest} to verify v3 protocol honesty end-to-end
  * (premain -> index OR appPackagePrefix external-JaCoCo mode -> real app
  * bytecode -> TCP START/END -> HELLO + COV).
  */
@@ -173,7 +173,7 @@ public final class AsyncHonestyApp {
                     AsyncTail.ran();
                 });
             } else if ("/cf-then-accept".equals(path)) {
-                // Reproduces plg-87's exact bug: fast supplier, slow synchronous thenAccept(audit).
+                // Fast supplier followed by a slow synchronous thenAccept(audit) dependent.
                 CompletableFuture.supplyAsync(() -> {
                     sleepQuietly(20);
                     return "result";
