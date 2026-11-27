@@ -914,10 +914,6 @@ final class ServerEntries implements ClassFileTransformer {
                         || desc.startsWith("(Ljava/util/concurrent/Callable;)"));
     }
 
-    private static boolean isSingleArgExecutorSubmitOrExecute(String mname, String desc) {
-        return isSingleArgExecutorExecute(mname, desc) || isSingleArgExecutorSubmit(mname, desc);
-    }
-
     private static boolean isTwoArgExecutorSubmit(String mname, String desc) {
         return "submit".equals(mname) && desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)");
     }
@@ -1004,14 +1000,30 @@ final class ServerEntries implements ClassFileTransformer {
                 || "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor".equals(owner);
     }
 
+    private static boolean isInstanceMethodHandle(Handle h) {
+        int tag = h.getTag();
+        return tag == Opcodes.H_INVOKEVIRTUAL
+                || tag == Opcodes.H_INVOKEINTERFACE
+                || tag == Opcodes.H_INVOKESPECIAL;
+    }
+
+    private static boolean isExecutorExecuteMethodRefTarget(Handle h) {
+        return isInstanceMethodHandle(h)
+                && !isHookedSpringMethodRefOwner(h.getOwner())
+                && isSingleArgExecutorExecute(h.getName(), h.getDesc());
+    }
+
+    private static boolean isExecutorSubmitMethodRefTarget(Handle h) {
+        return isInstanceMethodHandle(h)
+                && !isHookedSpringMethodRefOwner(h.getOwner())
+                && (isSingleArgExecutorSubmit(h.getName(), h.getDesc())
+                        || isTwoArgExecutorSubmit(h.getName(), h.getDesc()));
+    }
+
     private static boolean isAsyncMethodRefTarget(Handle h) {
         String owner = h.getOwner();
         String mname = h.getName();
         String desc = h.getDesc();
-        if (!isHookedSpringMethodRefOwner(owner)
-                && (isSingleArgExecutorSubmitOrExecute(mname, desc) || isTwoArgExecutorSubmit(mname, desc))) {
-            return true;
-        }
         if (isUntrackedScheduleOrInvokeAny(mname, desc)
                 || isTimerSchedule(owner, mname, desc)
                 || isForkJoinTaskSubmission(owner, mname, desc)) {
@@ -1108,6 +1120,40 @@ final class ServerEntries implements ClassFileTransformer {
                             for (Object arg : bsmArgs) {
                                 if (arg instanceof Handle) {
                                     Handle h = (Handle) arg;
+                                    boolean execRef = isExecutorExecuteMethodRefTarget(h);
+                                    boolean submitRef = !execRef && isExecutorSubmitMethodRefTarget(h);
+                                    if (execRef || submitRef) {
+                                        Type[] indyArgs = Type.getArgumentTypes(indyDesc);
+                                        boolean isBoundMethodRef = bsm != null
+                                                && "java/lang/invoke/LambdaMetafactory".equals(bsm.getOwner())
+                                                && indyArgs.length == 1
+                                                && indyArgs[0].getSort() == Type.OBJECT;
+                                        if (isBoundMethodRef) {
+                                            // Bound method ref: captured receiver sits on top of stack.
+                                            // DUP receiver and verify its runtime Executor/submit type
+                                            // so plain non-Executor helpers (e.g. txHelper::execute)
+                                            // are ignored with zero contamination.
+                                            changed[0] = true;
+                                            ensureExtraStack(1);
+                                            super.visitInsn(Opcodes.DUP);
+                                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
+                                                    execRef ? "noteIfUntrackedExecutor" : "noteIfUntrackedSubmit",
+                                                    "(Ljava/lang/Object;)V", false);
+                                        } else {
+                                            // Unbound method ref (e.g. TxHelper::execute as BiConsumer)
+                                            // or non-standard capture: LDC the handle's owner Class<?>
+                                            // and verify assignability at runtime (note: checks only the
+                                            // declaring owner class, not runtime subclasses passed later).
+                                            changed[0] = true;
+                                            ensureExtraStack(1);
+                                            super.visitLdcInsn(Type.getObjectType(h.getOwner()));
+                                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
+                                                    execRef ? "noteIfUntrackedExecutorClass"
+                                                            : "noteIfUntrackedSubmitClass",
+                                                    "(Ljava/lang/Class;)V", false);
+                                        }
+                                        break;
+                                    }
                                     if (isAsyncMethodRefTarget(h)) {
                                         emitUntrackedFlag("untracked-async:method-ref:"
                                                 + h.getOwner().replace('/', '.') + "." + h.getName());

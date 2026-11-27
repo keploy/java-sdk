@@ -113,9 +113,19 @@ final class OrderedPools {
         return executor != null && INLINE_EXECUTORS.contains(executor.getClass().getName());
     }
 
+    static boolean isInlineExecutorClass(Class<?> cls) {
+        return cls != null && INLINE_EXECUTORS.contains(cls.getName());
+    }
+
     static boolean isSpringAsyncTaskExecutor(Object receiver) {
         return receiver instanceof java.util.concurrent.Executor
                 && Boolean.TRUE.equals(IS_SPRING_ASYNC_TASK_EXECUTOR.get(receiver.getClass()));
+    }
+
+    static boolean isSpringAsyncTaskExecutorClass(Class<?> cls) {
+        return cls != null
+                && java.util.concurrent.Executor.class.isAssignableFrom(cls)
+                && Boolean.TRUE.equals(IS_SPRING_ASYNC_TASK_EXECUTOR.get(cls));
     }
 
     // Spring classes whose pool accessor throws IllegalStateException while

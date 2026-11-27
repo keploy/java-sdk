@@ -146,6 +146,20 @@ public final class KeployDedupAgent {
     // Whether ServerEntries was installed with a non-empty app-only class
     // allow-list for JDK executor call-site rewriting.
     static volatile boolean executorCallSitesEnabled;
+    // Latched true once any END sees probes recorded with RequestGate
+    // enteredCount == 0 (and no job contamination), indicating an uncounted
+    // server (e.g. Armeria, Helidon, Play) not in ServerEntries.UNCOUNTED.
+    // Permanently drops windowCut (and asyncExecutors) to false in HELLO and
+    // Unix ACK caps; reset only by tests.
+    static volatile boolean observedNoServerEntry;
+
+    private static void noteObservedNoServerEntry(String testId) {
+        if (!observedNoServerEntry) {
+            observedNoServerEntry = true;
+            log(Level.INFO, "Keploy dedup: " + testId + " recorded coverage probes with no counted server request"
+                    + " entry; latching windowCut=false for this JVM", null);
+        }
+    }
     // The answer to a command not taken (a START that could not clear the
     // counters, an END with no START for that test, as after a restart, an
     // END whose scan lost hits it had cleared): nothing is published
@@ -322,7 +336,8 @@ public final class KeployDedupAgent {
         // probes with enteredCount==0 still fail closed via "no-server-entry".
         boolean serverEntriesInstalled = agentAttached && endWaitActive
                 && !ServerEntries.hasUncountedServer()
-                && !ServerEntries.hadServerHookFailure();
+                && !ServerEntries.hadServerHookFailure()
+                && !observedNoServerEntry;
         boolean windowCut = serverEntriesInstalled;
         boolean contaminated = agentAttached;
         boolean classMismatch = true;
@@ -1270,6 +1285,9 @@ public final class KeployDedupAgent {
                 List<String> jobContams = JobGate.close();
                 boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
                         && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0 && jobContams.isEmpty();
+                if (noServerEntry) {
+                    noteObservedNoServerEntry(command.testId);
+                }
                 List<String> unverified = noServerEntry
                         ? Collections.singletonList("no-server-entry")
                         : Collections.<String>emptyList();
@@ -1664,6 +1682,7 @@ public final class KeployDedupAgent {
                                 && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0
                                 && jobContams.isEmpty();
                         if (noServerEntry) {
+                            noteObservedNoServerEntry(command.testId);
                             tailActiveAtEnd = true;
                         }
                         List<String> unverified = noServerEntry

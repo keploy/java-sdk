@@ -3102,6 +3102,59 @@ public final class RequestGate {
     }
 
     /**
+     * Checks at runtime whether the owner class of an unbound
+     * {@code execute(Runnable)} method reference is an untracked
+     * {@link Executor}, ignoring non-{@link Executor} types and allow-listed
+     * same-thread inline executors.
+     *
+     * @param owner declaring owner class of the method reference
+     */
+    public static void noteIfUntrackedExecutorClass(Class<?> owner) {
+        if (owner == null || !Executor.class.isAssignableFrom(owner)) {
+            return;
+        }
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return;
+        }
+        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
+            return;
+        }
+        if (OrderedPools.isInlineExecutorClass(owner)) {
+            return;
+        }
+        noteUntrackedAsync("untracked-executor:" + owner.getName(), 0L);
+    }
+
+    /**
+     * Checks at runtime whether the owner class of an unbound {@code submit*}
+     * method reference is an untracked {@link ExecutorService},
+     * {@link CompletionService}, or Spring {@code AsyncTaskExecutor}, ignoring
+     * non-executor types and allow-listed same-thread inline executors.
+     *
+     * @param owner declaring owner class of the method reference
+     */
+    public static void noteIfUntrackedSubmitClass(Class<?> owner) {
+        if (owner == null
+                || (!ExecutorService.class.isAssignableFrom(owner)
+                        && !CompletionService.class.isAssignableFrom(owner)
+                        && !OrderedPools.isSpringAsyncTaskExecutorClass(owner))) {
+            return;
+        }
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return;
+        }
+        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
+            return;
+        }
+        if (OrderedPools.isInlineExecutorClass(owner)) {
+            return;
+        }
+        noteUntrackedAsync("untracked-executor:" + owner.getName(), 0L);
+    }
+
+    /**
      * Records cancellation of a {@link Timer} with timestamp so tasks that had
      * not started stop driving tail contamination immediately, while any
      * already-running body stays covered for {@code untrackedTailWindowNanos}.

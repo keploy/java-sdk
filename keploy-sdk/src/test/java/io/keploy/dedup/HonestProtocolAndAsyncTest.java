@@ -107,6 +107,7 @@ public class HonestProtocolAndAsyncTest {
     private ClassLoader savedContextLoader;
     private boolean savedTransformerAdded;
     private boolean savedExecutorCallSitesEnabled;
+    private boolean savedObservedNoServerEntry;
     private Set<String> savedCounted;
     private Set<String> savedUncounted;
     private long savedHandedJobMaxNanos;
@@ -117,11 +118,13 @@ public class HonestProtocolAndAsyncTest {
     public void setUp() {
         savedTransformerAdded = KeployDedupAgent.transformerAdded;
         savedExecutorCallSitesEnabled = KeployDedupAgent.executorCallSitesEnabled;
+        savedObservedNoServerEntry = KeployDedupAgent.observedNoServerEntry;
         savedCounted = ServerEntries.snapshotCounted();
         savedUncounted = ServerEntries.snapshotUncounted();
         savedHandedJobMaxNanos = JobGate.handedJobMaxNanos;
         savedControlSocketPath = KeployDedupAgent.controlSocketPath;
         savedDataSocketPath = KeployDedupAgent.dataSocketPath;
+        KeployDedupAgent.observedNoServerEntry = false;
         ServerEntries.restoreUncounted(Collections.<String>emptySet());
         ServerEntries.setHookStatusForTests(false, false, false);
         RequestGate.disarm();
@@ -138,6 +141,7 @@ public class HonestProtocolAndAsyncTest {
         }
         KeployDedupAgent.transformerAdded = savedTransformerAdded;
         KeployDedupAgent.executorCallSitesEnabled = savedExecutorCallSitesEnabled;
+        KeployDedupAgent.observedNoServerEntry = savedObservedNoServerEntry;
         ServerEntries.restoreCounted(savedCounted);
         ServerEntries.restoreUncounted(savedUncounted);
         ServerEntries.setHookStatusForTests(false, false, false);
@@ -364,10 +368,16 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("early BACKGROUND opt-in must take effect once JaCoCo starts, got: " + bg,
                     bg != null && bg.startsWith("BACKGROUND ") && bg.contains("\"com/acme/Shop\":[0]"));
 
-            // Uncounted server (probes > 0 while enteredCount == 0, e.g. Netty/WebFlux) ->
-            // unverified: ["no-server-entry"] with NO "contaminated" field (old enterprise compat)!
+            // Uncounted server (probes > 0 while enteredCount == 0, e.g. Armeria/Helidon/Play) ->
+            // latches observedNoServerEntry, refreshes HELLO with windowCut=false BEFORE COV,
+            // and emits unverified: ["no-server-entry"] with NO "contaminated" field!
             probes[1] = true;
             send(out, "END ts/test-2");
+            JsonObject downgradedHello = parseHello(in.readLine());
+            assertFalse("no-server-entry END must refresh HELLO with windowCut=false before COV",
+                    downgradedHello.get("windowCut").getAsBoolean());
+            assertFalse("no-server-entry END must refresh HELLO with asyncExecutors=false before COV",
+                    downgradedHello.get("asyncExecutors").getAsBoolean());
             String cov2 = in.readLine();
             assertEquals("COV {\"id\":\"ts/test-2\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]},"
                     + "\"unverified\":[\"no-server-entry\"]}", cov2);
@@ -3615,22 +3625,32 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(sendUnixControl("END ts/u2").startsWith("ACK proto=3"));
 
             probes[3] = true;
-            assertTrue(sendUnixControl("START ts/u3").startsWith("ACK proto=3"));
+            String startU3Reply = sendUnixControl("START ts/u3");
+            assertTrue("Unix START before no-server-entry reports windowCut=true: " + startU3Reply,
+                    startU3Reply.startsWith("ACK proto=3") && startU3Reply.contains("windowCut=true"));
             // Uncounted server on Unix (probes > 0 while enteredCount == 0):
-            // MUST emit "unverified":["no-server-entry"] with NO "contaminated" field (Blocker 1 / S4)
+            // MUST emit "unverified":["no-server-entry"] with NO "contaminated" field,
+            // MUST latch windowCut=false on this END ACK and subsequent ACKs,
             // AND MUST suppress BACKGROUND(u3->u4) because an uncounted request's tail may run in the gap!
             probes[1] = true;
-            assertTrue(sendUnixControl("END ts/u3").startsWith("ACK proto=3"));
+            String endU3Reply = sendUnixControl("END ts/u3");
+            assertTrue("Unix END seeing no-server-entry must report windowCut=false: " + endU3Reply,
+                    endU3Reply.startsWith("ACK proto=3") && endU3Reply.contains("windowCut=false")
+                            && endU3Reply.contains("asyncExecutors=false"));
 
             probes[3] = true; // gap after uncounted u3: MUST be suppressed (lost increments to 1)!
-            assertTrue(sendUnixControl("START ts/u4").startsWith("ACK proto=3"));
+            String startU4Reply = sendUnixControl("START ts/u4");
+            assertTrue("Unix subsequent START after no-server-entry stays windowCut=false: " + startU4Reply,
+                    startU4Reply.startsWith("ACK proto=3") && startU4Reply.contains("windowCut=false"));
             Object reqU4 = RequestGate.enter();
             try {
                 probes[0] = true;
             } finally {
                 RequestGate.exit(reqU4);
             }
-            assertTrue(sendUnixControl("END ts/u4").startsWith("ACK proto=3"));
+            String endU4Reply = sendUnixControl("END ts/u4");
+            assertTrue("Unix subsequent END stays windowCut=false: " + endU4Reply,
+                    endU4Reply.startsWith("ACK proto=3") && endU4Reply.contains("windowCut=false"));
 
             probes[3] = true; // clean gap u4->u5 carries lost:1 from suppressed u3->u4!
             assertTrue(sendUnixControl("START ts/u5").startsWith("ACK proto=3"));
@@ -3677,6 +3697,663 @@ public class HonestProtocolAndAsyncTest {
         } finally {
             KeployDedupAgent.stop();
             dataServer.close();
+        }
+    }
+
+    public static final class MethodRefTxHelper {
+        public void execute(Runnable r) {
+            r.run();
+        }
+
+        public Object submit(Runnable r) {
+            r.run();
+            return "ok1";
+        }
+
+        public Object submit(Runnable r, Object result) {
+            r.run();
+            return result;
+        }
+    }
+
+    public static final class CustomMethodRefExecutor implements Executor {
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
+    }
+
+    public static final class CustomMethodRefExecutorService extends AbstractExecutorService {
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return true;
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
+
+        @Override
+        public Future<?> submit(Runnable task) {
+            return super.submit(task);
+        }
+
+        @Override
+        public <T> Future<T> submit(Runnable task, T result) {
+            return super.submit(task, result);
+        }
+    }
+
+    @FunctionalInterface
+    public interface TriSubmitFn<A, B, C, R> {
+        R apply(A a, B b, C c);
+    }
+
+    public static final class BoundExecuteMethodRefCaller {
+        public static void run(MethodRefTxHelper h, Runnable r) {
+            java.util.function.Consumer<Runnable> c = h::execute;
+            c.accept(r);
+        }
+    }
+
+    public static final class UnboundExecuteMethodRefCaller {
+        public static void run(MethodRefTxHelper h, Runnable r) {
+            java.util.function.BiConsumer<MethodRefTxHelper, Runnable> b = MethodRefTxHelper::execute;
+            b.accept(h, r);
+        }
+    }
+
+    public static final class BoundSubmitMethodRefCaller {
+        public static Object run(MethodRefTxHelper h, Runnable r) {
+            java.util.function.Function<Runnable, Object> f = h::submit;
+            Object r1 = f.apply(r);
+            java.util.function.BiFunction<Runnable, Object, Object> f2 = h::submit;
+            return r1 + ":" + f2.apply(r, "ok2");
+        }
+    }
+
+    public static final class UnboundSubmitMethodRefCaller {
+        public static Object run(MethodRefTxHelper h, Runnable r) {
+            java.util.function.BiFunction<MethodRefTxHelper, Runnable, Object> bf = MethodRefTxHelper::submit;
+            Object r1 = bf.apply(h, r);
+            TriSubmitFn<MethodRefTxHelper, Runnable, Object, Object> bf2 = MethodRefTxHelper::submit;
+            return r1 + ":" + bf2.apply(h, r, "ok2");
+        }
+    }
+
+    public static final class RealBoundExecMethodRefCaller {
+        public static void run(Executor e, Runnable r) {
+            java.util.function.Consumer<Runnable> c = e::execute;
+            c.accept(r);
+        }
+    }
+
+    public static final class RealUnboundExecMethodRefCaller {
+        public static void run(CustomMethodRefExecutor e, Runnable r) {
+            java.util.function.BiConsumer<CustomMethodRefExecutor, Runnable> b = CustomMethodRefExecutor::execute;
+            b.accept(e, r);
+        }
+    }
+
+    public static final class RealBoundSubmitMethodRefCaller {
+        public static Object run(ExecutorService s, Runnable r) {
+            java.util.function.Function<Runnable, Future<?>> f = s::submit;
+            Future<?> f1 = f.apply(r);
+            java.util.function.BiFunction<Runnable, String, Future<String>> f2 = s::submit;
+            Future<String> res2 = f2.apply(r, "res");
+            return f1 != null && res2 != null ? "ok" : "bad";
+        }
+    }
+
+    public static final class RealUnboundSubmitMethodRefCaller {
+        public static Object run(CustomMethodRefExecutorService s, Runnable r) {
+            java.util.function.BiFunction<CustomMethodRefExecutorService, Runnable, Future<?>> bf =
+                    CustomMethodRefExecutorService::submit;
+            Future<?> f1 = bf.apply(s, r);
+            TriSubmitFn<CustomMethodRefExecutorService, Runnable, String, Future<String>> bf2 =
+                    CustomMethodRefExecutorService::submit;
+            Future<String> f2 = bf2.apply(s, r, "res");
+            return f1 != null && f2 != null ? "ok" : "bad";
+        }
+    }
+
+    public static final class UnboundInlineExecMethodRefCaller {
+        public static void run(org.springframework.core.task.SyncTaskExecutor e, Runnable r) {
+            java.util.function.BiConsumer<org.springframework.core.task.SyncTaskExecutor, Runnable> b =
+                    org.springframework.core.task.SyncTaskExecutor::execute;
+            b.accept(e, r);
+        }
+    }
+
+    private static final class ChildFirstClassLoader extends ClassLoader {
+        private final String targetName;
+        private final byte[] bytes;
+
+        ChildFirstClassLoader(ClassLoader parent, String targetName, byte[] bytes) {
+            super(parent);
+            this.targetName = targetName;
+            this.bytes = bytes;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (targetName.equals(name)) {
+                synchronized (getClassLoadingLock(name)) {
+                    Class<?> loaded = findLoadedClass(name);
+                    if (loaded == null) {
+                        loaded = defineClass(name, bytes, 0, bytes.length);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+            return super.loadClass(name, resolve);
+        }
+    }
+
+    private static Class<?> rewriteClassWithWrapExecutorCalls(Class<?> cls) throws Exception {
+        String name = cls.getName();
+        byte[] raw;
+        try (java.io.InputStream in = cls.getClassLoader().getResourceAsStream(name.replace('.', '/') + ".class")) {
+            assertNotNull("class bytes not found for " + name, in);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            for (int n; (n = in.read(buf)) > 0; ) {
+                out.write(buf, 0, n);
+            }
+            raw = out.toByteArray();
+        }
+        byte[] rewritten = ServerEntries.wrapExecutorCalls(raw);
+        assertNotNull("ServerEntries.wrapExecutorCalls must rewrite " + cls.getSimpleName(), rewritten);
+        return new ChildFirstClassLoader(cls.getClassLoader(), name, rewritten).loadClass(name);
+    }
+
+    @Test(timeout = 60000)
+    public void methodReferencesToNonExecutorHelpersAreNotFlaggedWhileRealExecutorsStillFlag() throws Exception {
+        Class<?> boundExec = rewriteClassWithWrapExecutorCalls(BoundExecuteMethodRefCaller.class);
+        Class<?> unboundExec = rewriteClassWithWrapExecutorCalls(UnboundExecuteMethodRefCaller.class);
+        Class<?> boundSubmit = rewriteClassWithWrapExecutorCalls(BoundSubmitMethodRefCaller.class);
+        Class<?> unboundSubmit = rewriteClassWithWrapExecutorCalls(UnboundSubmitMethodRefCaller.class);
+        Class<?> realBoundExec = rewriteClassWithWrapExecutorCalls(RealBoundExecMethodRefCaller.class);
+        Class<?> realUnboundExec = rewriteClassWithWrapExecutorCalls(RealUnboundExecMethodRefCaller.class);
+        Class<?> realBoundSubmit = rewriteClassWithWrapExecutorCalls(RealBoundSubmitMethodRefCaller.class);
+        Class<?> realUnboundSubmit = rewriteClassWithWrapExecutorCalls(RealUnboundSubmitMethodRefCaller.class);
+        Class<?> unboundInlineExec = rewriteClassWithWrapExecutorCalls(UnboundInlineExecMethodRefCaller.class);
+
+        MethodRefTxHelper helper = new MethodRefTxHelper();
+
+        // 1. Disarmed non-Executor method refs must be complete no-ops (must NOT touch unarmed hand-off state).
+        RequestGate.disarm();
+        Object unarmedTok = RequestGate.enter();
+        try {
+            boundExec.getMethod("run", MethodRefTxHelper.class, Runnable.class).invoke(null, helper, (Runnable) () -> { });
+            unboundExec.getMethod("run", MethodRefTxHelper.class, Runnable.class).invoke(null, helper, (Runnable) () -> { });
+            boundSubmit.getMethod("run", MethodRefTxHelper.class, Runnable.class).invoke(null, helper, (Runnable) () -> { });
+            unboundSubmit.getMethod("run", MethodRefTxHelper.class, Runnable.class).invoke(null, helper, (Runnable) () -> { });
+        } finally {
+            RequestGate.exit(unarmedTok);
+        }
+        // First armed window sees the one-time armed-mid-flight from unarmedTok, second window MUST be clean
+        // (proving lastUnarmedHandOffNanos was NOT set by non-Executor method refs).
+        RequestGate.open("disarmed-check-1", null);
+        RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        RequestGate.open("disarmed-check-2", null);
+        assertEquals("non-Executor method refs while disarmed must NOT trigger unarmed hand-off tail",
+                Collections.<String>emptyList(),
+                RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+        // 2. Bound & unbound execute/submit method refs on plain non-Executor helper -> 0 contamination, 0 tail:!
+        Class<?>[] helperCallers = new Class<?>[] {boundExec, unboundExec, boundSubmit, unboundSubmit};
+        for (Class<?> caller : helperCallers) {
+            String label = caller.getName();
+            RequestGate.disarm();
+            RequestGate.open("mref-helper-" + label + "-1", null);
+            AtomicInteger ran = new AtomicInteger();
+            Object tok = RequestGate.enter();
+            try {
+                caller.getMethod("run", MethodRefTxHelper.class, Runnable.class)
+                        .invoke(null, helper, (Runnable) ran::incrementAndGet);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            assertTrue(label + " invoked target", ran.get() > 0);
+            RequestGate.WindowOutcome out1 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals(label + " must have 0 contamination",
+                    Collections.<String>emptyList(), out1.contaminations);
+            assertFalse(label + " must have tailActiveAtEnd=false", out1.tailActiveAtEnd);
+
+            RequestGate.open("mref-helper-" + label + "-2", null);
+            Object tok2 = RequestGate.enter();
+            RequestGate.exit(tok2);
+            RequestGate.WindowOutcome out2 = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertEquals(label + " must leave 0 tail: on next window",
+                    Collections.<String>emptyList(), out2.contaminations);
+        }
+
+        // 3. Unbound inline executor method ref (SyncTaskExecutor::execute) -> 0 contamination, 0 tail:!
+        RequestGate.disarm();
+        RequestGate.open("mref-inline-1", null);
+        AtomicBoolean inlineRan = new AtomicBoolean(false);
+        Object tokInline = RequestGate.enter();
+        try {
+            unboundInlineExec.getMethod("run", org.springframework.core.task.SyncTaskExecutor.class, Runnable.class)
+                    .invoke(null, new org.springframework.core.task.SyncTaskExecutor(),
+                            (Runnable) () -> inlineRan.set(true));
+        } finally {
+            RequestGate.exit(tokInline);
+        }
+        assertTrue("SyncTaskExecutor::execute ran", inlineRan.get());
+        assertEquals("unbound SyncTaskExecutor::execute must NOT contaminate",
+                Collections.<String>emptyList(),
+                RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+        // 4. Positive controls: bound & unbound method refs to real custom Executor / ExecutorService STILL flag!
+        CustomMethodRefExecutor customExec = new CustomMethodRefExecutor();
+        CustomMethodRefExecutorService customSvc = new CustomMethodRefExecutorService();
+
+        RequestGate.disarm();
+        RequestGate.open("mref-real-bound-exec", null);
+        Object tokRbe = RequestGate.enter();
+        try {
+            realBoundExec.getMethod("run", Executor.class, Runnable.class)
+                    .invoke(null, customExec, (Runnable) () -> { });
+        } finally {
+            RequestGate.exit(tokRbe);
+        }
+        RequestGate.WindowOutcome rbeOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("bound real Executor::execute must flag untracked-executor: " + rbeOut.contaminations,
+                rbeOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutor.class.getName()));
+
+        RequestGate.disarm();
+        RequestGate.open("mref-real-unbound-exec", null);
+        Object tokRue = RequestGate.enter();
+        try {
+            realUnboundExec.getMethod("run", CustomMethodRefExecutor.class, Runnable.class)
+                    .invoke(null, customExec, (Runnable) () -> { });
+        } finally {
+            RequestGate.exit(tokRue);
+        }
+        RequestGate.WindowOutcome rueOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("unbound real Executor::execute must flag untracked-executor: " + rueOut.contaminations,
+                rueOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutor.class.getName()));
+
+        RequestGate.disarm();
+        RequestGate.open("mref-real-bound-submit", null);
+        Object tokRbs = RequestGate.enter();
+        try {
+            realBoundSubmit.getMethod("run", ExecutorService.class, Runnable.class)
+                    .invoke(null, customSvc, (Runnable) () -> { });
+        } finally {
+            RequestGate.exit(tokRbs);
+        }
+        RequestGate.WindowOutcome rbsOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("bound real ExecutorService::submit must flag untracked-executor: " + rbsOut.contaminations,
+                rbsOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutorService.class.getName()));
+
+        RequestGate.disarm();
+        RequestGate.open("mref-real-unbound-submit", null);
+        Object tokRus = RequestGate.enter();
+        try {
+            realUnboundSubmit.getMethod("run", CustomMethodRefExecutorService.class, Runnable.class)
+                    .invoke(null, customSvc, (Runnable) () -> { });
+        } finally {
+            RequestGate.exit(tokRus);
+        }
+        RequestGate.WindowOutcome rusOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("unbound real ExecutorService::submit must flag untracked-executor: " + rusOut.contaminations,
+                rusOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutorService.class.getName()));
+    }
+
+    @Test(timeout = 60000)
+    public void observedNoServerEntryLatchesWindowCutFalseBeforeCovAndAcrossReconnect() throws Exception {
+        byte[] shopBytes = new byte[] {41, 42, 43};
+        File shop = new File(tmp.newFolder("armeria-uncounted-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 2);
+
+        // Simulate Armeria / Helidon / Play: -javaagent attached, endWait > 0, and server is NOT
+        // in ServerEntries.UNCOUNTED so initial HELLO starts with windowCut=true, asyncExecutors=true.
+        KeployDedupAgent.transformerAdded = true;
+        KeployDedupAgent.executorCallSitesEnabled = true;
+        KeployDedupAgent.observedNoServerEntry = false;
+        ServerEntries.restoreCounted(Collections.<String>emptySet());
+        ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+        collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+        collector.setSoTimeout(30000);
+        System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        assertTrue(KeployDedupAgent.start());
+
+        // Connection 1: initial HELLO has windowCut=true; first uncounted END refreshes HELLO
+        // with windowCut=false BEFORE COV and emits "unverified":["no-server-entry"] without "contaminated".
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            JsonObject initial = parseHello(in.readLine());
+            assertTrue("initial cold-start HELLO starts with windowCut=true",
+                    initial.get("windowCut").getAsBoolean());
+            assertTrue("initial cold-start HELLO starts with asyncExecutors=true",
+                    initial.get("asyncExecutors").getAsBoolean());
+
+            send(out, "ACK_ID");
+            send(out, "START ts/armeria-1");
+            assertEquals("ACK ts/armeria-1", in.readLine());
+            // Uncounted server executes app code without calling RequestGate.enter().
+            probes[1] = true;
+            send(out, "END ts/armeria-1");
+
+            String beforeCov = in.readLine();
+            JsonObject refreshed = parseHello(beforeCov);
+            assertFalse("END seeing noServerEntry must refresh HELLO windowCut=false BEFORE COV",
+                    refreshed.get("windowCut").getAsBoolean());
+            assertFalse("END seeing noServerEntry must refresh HELLO asyncExecutors=false BEFORE COV",
+                    refreshed.get("asyncExecutors").getAsBoolean());
+
+            String cov = in.readLine();
+            assertEquals("COV {\"id\":\"ts/armeria-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]},"
+                    + "\"unverified\":[\"no-server-entry\"]}", cov);
+            assertFalse("unverified no-server-entry must NOT emit contaminated field",
+                    cov.contains("\"contaminated\""));
+            assertEquals("ACK ts/armeria-1", in.readLine());
+        }
+
+        // Connection 2 (after reconnect): observedNoServerEntry stays permanently latched so the
+        // new connection's initial HELLO immediately declares windowCut=false!
+        try (Socket sdk2 = collector.accept()) {
+            sdk2.setSoTimeout(30000);
+            BufferedReader in2 = new BufferedReader(
+                    new InputStreamReader(sdk2.getInputStream(), StandardCharsets.UTF_8));
+            JsonObject reconnected = parseHello(in2.readLine());
+            assertFalse("windowCut=false must stay permanently latched after reconnect",
+                    reconnected.get("windowCut").getAsBoolean());
+            assertFalse("asyncExecutors=false must stay permanently latched after reconnect",
+                    reconnected.get("asyncExecutors").getAsBoolean());
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void lateStartingExpiredLingeringTaskSuppressesBackgroundViaRequestGateOpenOnTcp()
+            throws Exception {
+        byte[] shopBytes = new byte[] {51, 52, 53};
+        File shop = new File(tmp.newFolder("open-tail-tcp-bg-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        System.setProperty(END_WAIT_PROPERTY, "20");
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 4);
+
+        long savedMaxLingering = RequestGate.maxLingeringNanos;
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        try {
+            RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(40);
+
+            // TCP transport: older lingering window L expires past maxLingeringNanos with a queued
+            // task not yet running at END N (so hasActiveLingering == false -> lastEndedMayEmitTail == false).
+            // The task starts in the N->N+1 gap (Hand.enter retains L again and hits probe[2]);
+            // START N+1 adds tail:L and MUST suppress BACKGROUND(N->N+1) via RequestGate.open()
+            // alone, incrementing lost to 1!
+            collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+            collector.setSoTimeout(30000);
+            System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+            assertTrue(KeployDedupAgent.start());
+            try (Socket sdk = collector.accept()) {
+                sdk.setSoTimeout(30000);
+                OutputStream out = sdk.getOutputStream();
+                BufferedReader in = new BufferedReader(
+                        new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                assertNotNull(parseHello(in.readLine()));
+                send(out, "ACK_ID");
+                send(out, "BACKGROUND");
+
+                // Window L: creates a queued task (handed, not yet started) and cuts at END L.
+                send(out, "START ts/open-tail-L");
+                assertEquals("ACK ts/open-tail-L", in.readLine());
+                CountDownLatch taskStarted = new CountDownLatch(1);
+                CountDownLatch allowTaskFinish = new CountDownLatch(1);
+                Runnable handed;
+                Object reqL = RequestGate.enter();
+                try {
+                    probes[0] = true;
+                    handed = RequestGate.hand(pool, () -> {
+                        probes[2] = true;
+                        taskStarted.countDown();
+                        try {
+                            allowTaskFinish.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+                } finally {
+                    RequestGate.exit(reqL);
+                }
+                send(out, "END ts/open-tail-L");
+                String covL = in.readLine();
+                assertTrue("L must be cut while queued task is pending: " + covL,
+                        covL.contains("\"windowCut\":true"));
+                assertEquals("ACK ts/open-tail-L", in.readLine());
+
+                // Wait strictly past maxLingeringNanos so idle window L expires.
+                Thread.sleep(70);
+
+                // Window N: consumes L's one-time cut report and evicts expired idle L from LINGERING;
+                // END N drains cleanly with hasActiveLingering == false (lastEndedMayEmitTail == false).
+                send(out, "START ts/open-tail-N");
+                assertEquals("ACK ts/open-tail-N", in.readLine());
+                Object reqN = RequestGate.enter();
+                try {
+                    probes[0] = true;
+                } finally {
+                    RequestGate.exit(reqN);
+                }
+                send(out, "END ts/open-tail-N");
+                String covN = in.readLine();
+                assertTrue("N reports one-time cut tail from L: " + covN, covN.contains("\"tail:ts/open-tail-L\""));
+                assertFalse("N itself is not cut: " + covN, covN.contains("\"windowCut\":true"));
+                assertEquals("ACK ts/open-tail-N", in.readLine());
+
+                // Gap N -> N+1: queued task from L now starts! Hand.enter() re-retains L with executing=1
+                // and records L's probe[2] in the gap.
+                Future<?> handedFuture = pool.submit(handed);
+                assertTrue("queued task from L started in N->N+1 gap", taskStarted.await(5, TimeUnit.SECONDS));
+
+                // START N+1: ONLY RequestGate.open()'s return value (next.hasOpeningTail()) can suppress
+                // BACKGROUND(N->N+1) here because prevMayEmitTail == false and JobGate.open() == false!
+                send(out, "START ts/open-tail-N1");
+                assertEquals("ACK ts/open-tail-N1", in.readLine());
+                send(out, "NOP check-open-tail-no-bg");
+                assertEquals("RequestGate.open open-time tail MUST suppress TCP BACKGROUND(N->N+1)",
+                        "ACK check-open-tail-no-bg", in.readLine());
+
+                allowTaskFinish.countDown();
+                // Wait on Future.get() so Hand.exit() (executing=0, running=0) happens-before END N+1.
+                handedFuture.get(5, TimeUnit.SECONDS);
+
+                Object reqN1 = RequestGate.enter();
+                try {
+                    probes[1] = true;
+                } finally {
+                    RequestGate.exit(reqN1);
+                }
+                send(out, "END ts/open-tail-N1");
+                String covN1 = in.readLine();
+                assertTrue("N+1 carries tail:ts/open-tail-L: " + covN1, covN1.contains("\"tail:ts/open-tail-L\""));
+                assertEquals("ACK ts/open-tail-N1", in.readLine());
+
+                // Clean gap N+1 -> N+2 emits BACKGROUND carrying lost:1 from suppressed N->N+1!
+                probes[3] = true;
+                send(out, "START ts/open-tail-N2");
+                assertEquals("ACK ts/open-tail-N2", in.readLine());
+                String bgN1N2 = in.readLine();
+                assertTrue("clean TCP gap after N+1 must emit BACKGROUND with lost:1, got: " + bgN1N2,
+                        bgN1N2 != null && bgN1N2.startsWith("BACKGROUND ")
+                                && bgN1N2.contains("\"after\":\"ts/open-tail-N1\"")
+                                && bgN1N2.contains("\"lost\":1"));
+            } finally {
+                KeployDedupAgent.stop();
+                collector.close();
+                collector = null;
+            }
+        } finally {
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+            pool.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void lateStartingExpiredLingeringTaskSuppressesBackgroundViaRequestGateOpenOnUnix()
+            throws Exception {
+        byte[] shopBytes = new byte[] {54, 55, 56};
+        File shop = new File(tmp.newFolder("open-tail-unix-bg-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        System.setProperty(END_WAIT_PROPERTY, "20");
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 4);
+
+        long savedMaxLingering = RequestGate.maxLingeringNanos;
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        try {
+            RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(40);
+            System.clearProperty(ENDPOINT_PROPERTY);
+            File sockDir = tmp.newFolder("unix-open-tail-bg");
+            KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+            KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+            java.util.concurrent.BlockingQueue<String> records = new java.util.concurrent.LinkedBlockingQueue<>();
+            org.newsclub.net.unix.AFUNIXServerSocket dataServer =
+                    org.newsclub.net.unix.AFUNIXServerSocket.newInstance();
+            dataServer.bind(org.newsclub.net.unix.AFUNIXSocketAddress.of(new File(KeployDedupAgent.dataSocketPath)));
+            Thread dataReader = new Thread(() -> {
+                while (!dataServer.isClosed()) {
+                    try (Socket conn = dataServer.accept();
+                         BufferedReader r = new BufferedReader(
+                                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        StringBuilder sb = new StringBuilder();
+                        String l;
+                        while ((l = r.readLine()) != null) {
+                            sb.append(l);
+                        }
+                        if (sb.length() > 0) {
+                            records.add(sb.toString());
+                        }
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, "unix-open-tail-data-reader");
+            dataReader.setDaemon(true);
+            dataReader.start();
+            try {
+                assertTrue(KeployDedupAgent.start());
+                assertTrue(sendUnixControl("BACKGROUND").startsWith("ACK proto=3"));
+                assertTrue(sendUnixControl("START ts/u-open-tail-L").startsWith("ACK proto=3"));
+                CountDownLatch uTaskStarted = new CountDownLatch(1);
+                CountDownLatch uAllowFinish = new CountDownLatch(1);
+                Runnable uHanded;
+                Object reqUL = RequestGate.enter();
+                try {
+                    probes[0] = true;
+                    uHanded = RequestGate.hand(pool, () -> {
+                        probes[2] = true;
+                        uTaskStarted.countDown();
+                        try {
+                            uAllowFinish.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+                } finally {
+                    RequestGate.exit(reqUL);
+                }
+                assertTrue(sendUnixControl("END ts/u-open-tail-L").startsWith("ACK proto=3"));
+                Thread.sleep(70);
+
+                assertTrue(sendUnixControl("START ts/u-open-tail-N").startsWith("ACK proto=3"));
+                Object reqUN = RequestGate.enter();
+                try {
+                    probes[0] = true;
+                } finally {
+                    RequestGate.exit(reqUN);
+                }
+                assertTrue(sendUnixControl("END ts/u-open-tail-N").startsWith("ACK proto=3"));
+
+                Future<?> uHandedFuture = pool.submit(uHanded);
+                assertTrue("Unix queued task from L started in N->N+1 gap", uTaskStarted.await(5, TimeUnit.SECONDS));
+
+                assertTrue(sendUnixControl("START ts/u-open-tail-N1").startsWith("ACK proto=3"));
+                uAllowFinish.countDown();
+                uHandedFuture.get(5, TimeUnit.SECONDS);
+
+                Object reqUN1 = RequestGate.enter();
+                try {
+                    probes[1] = true;
+                } finally {
+                    RequestGate.exit(reqUN1);
+                }
+                assertTrue(sendUnixControl("END ts/u-open-tail-N1").startsWith("ACK proto=3"));
+
+                probes[3] = true;
+                assertTrue(sendUnixControl("START ts/u-open-tail-N2").startsWith("ACK proto=3"));
+
+                String recN1 = null;
+                String bgN1N2 = null;
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                while (System.nanoTime() < deadline && (recN1 == null || bgN1N2 == null)) {
+                    String rec = records.poll(200, TimeUnit.MILLISECONDS);
+                    if (rec == null) {
+                        continue;
+                    }
+                    assertFalse("RequestGate.open open-time tail MUST suppress Unix BACKGROUND(u-open-tail-N->u-open-tail-N1): " + rec,
+                            rec.contains("\"kind\":\"background\"") && rec.contains("\"after\":\"ts/u-open-tail-N\""));
+                    if (rec.contains("\"id\":\"ts/u-open-tail-N1\"")) {
+                        recN1 = rec;
+                    }
+                    if (rec.contains("\"kind\":\"background\"") && rec.contains("\"after\":\"ts/u-open-tail-N1\"")) {
+                        bgN1N2 = rec;
+                    }
+                }
+                assertNotNull("expected Unix record for ts/u-open-tail-N1", recN1);
+                assertTrue("Unix ts/u-open-tail-N1 carries tail:ts/u-open-tail-L: " + recN1,
+                        recN1.contains("\"tail:ts/u-open-tail-L\""));
+                assertNotNull("expected Unix BACKGROUND for clean gap u-open-tail-N1->u-open-tail-N2", bgN1N2);
+                assertTrue("Unix BACKGROUND u-open-tail-N1->u-open-tail-N2 must carry lost:1: " + bgN1N2,
+                        bgN1N2.contains("\"lost\":1"));
+            } finally {
+                KeployDedupAgent.stop();
+                dataServer.close();
+            }
+        } finally {
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+            pool.shutdownNow();
         }
     }
 

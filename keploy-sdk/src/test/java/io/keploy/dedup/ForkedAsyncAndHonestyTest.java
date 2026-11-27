@@ -192,7 +192,7 @@ public class ForkedAsyncAndHonestyTest {
 
             String covMethodRef = app.runHttpTest("ts/method-ref", "/method-ref");
             assertTrue("executor::execute method ref must contaminate: " + covMethodRef,
-                    covMethodRef.contains("untracked-async:method-ref:"));
+                    covMethodRef.contains("untracked-executor:java.util.concurrent.ThreadPoolExecutor"));
         }
     }
 
