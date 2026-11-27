@@ -1192,7 +1192,12 @@ public final class KeployDedupAgent {
         }
 
         private String unixReplyTaken() {
-            return computeCapabilities(collector).toUnixAck();
+            try {
+                return computeCapabilities(collector).toUnixAck();
+            } catch (RuntimeException e) {
+                log(Level.FINE, "Failed to compute live Unix capabilities; falling back to bare ACK proto=3", e);
+                return UNIX_REPLY_TAKEN;
+            }
         }
 
         // run runs one parsed command under testCaseLock, and marks its steps.
@@ -1404,7 +1409,7 @@ public final class KeployDedupAgent {
             while (running.get()) {
                 try {
                     connectAndServe();
-                } catch (IOException | RuntimeException e) {
+                } catch (IOException | RuntimeException | LinkageError e) {
                     if (running.get()) {
                         Level level = connectFailureLogged ? Level.FINE : Level.INFO;
                         connectFailureLogged = true;
@@ -1560,7 +1565,11 @@ public final class KeployDedupAgent {
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
-                    maybeSendUpdatedHello(out);
+                    try {
+                        maybeSendUpdatedHello(out);
+                    } catch (RuntimeException e) {
+                        log(Level.FINE, "Failed to refresh HELLO before START ACK for " + command.testId, e);
+                    }
                     ack(out, command.testId);
                     // Emit BACKGROUND after START's ACK (matching the unix path)
                     // so building coverageIndex.report() / JSON never delays the
@@ -1881,7 +1890,8 @@ public final class KeployDedupAgent {
         // HELLO frames. Uses the cached IndexReport buildId if already computed
         // (or fast in-memory when <= 4096 entries are already loaded), else
         // hashes build tag + class dirs + launch command + classpath metadata +
-        // sdkVersion without blocking connect on full-jar scanning.
+        // sdkVersion without blocking connect on full-jar scanning. Cached once
+        // so HELLO.buildId never flips mid-connection.
         private String helloBuildId() {
             String id = cachedHelloBuildId;
             if (id != null) {

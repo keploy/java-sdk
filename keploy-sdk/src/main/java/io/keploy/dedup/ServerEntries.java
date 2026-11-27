@@ -93,13 +93,13 @@ final class ServerEntries implements ClassFileTransformer {
         addJob("JMS", "org/springframework/jms/listener/AbstractMessageListenerContainer",
                 "listener", "doInvokeListener");
         // Spring's executors a request hands work to.
-        addAsync("org/springframework/core/task/SimpleAsyncTaskExecutor", "doExecute");
+        addAsync("org/springframework/core/task/SimpleAsyncTaskExecutor", "doExecute", "submitCompletable");
         addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor", "execute", "submit",
-                "submitListenable");
+                "submitListenable", "submitCompletable");
         addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler", "execute", "submit",
-                "submitListenable");
+                "submitListenable", "submitCompletable");
         addAsync("org/springframework/scheduling/concurrent/ConcurrentTaskExecutor", "execute", "submit",
-                "submitListenable");
+                "submitListenable", "submitCompletable");
         addAsync("org/springframework/aop/interceptor/AsyncExecutionAspectSupport", "doSubmit");
     }
 
@@ -129,11 +129,25 @@ final class ServerEntries implements ClassFileTransformer {
         UNHOOKED_CONSUMERS.put("io/awspring/cloud/sqs/listener/SqsMessageListenerContainer", "Spring Cloud SQS");
         UNHOOKED_CONSUMERS.put("com/amazonaws/services/sqs/AmazonSQSClient", "AWS SQS");
         UNHOOKED_CONSUMERS.put("software/amazon/awssdk/services/sqs/DefaultSqsClient", "AWS SQS");
+        UNHOOKED_CONSUMERS.put("software/amazon/awssdk/services/sqs/DefaultSqsAsyncClient", "AWS SQS Async");
+        UNHOOKED_CONSUMERS.put("org/springframework/data/redis/listener/RedisMessageListenerContainer",
+                "Spring Data Redis");
+        UNHOOKED_CONSUMERS.put("org/apache/pulsar/client/impl/ConsumerImpl", "Apache Pulsar");
+        UNHOOKED_CONSUMERS.put("org/apache/pulsar/client/impl/MultiTopicsConsumerImpl", "Apache Pulsar");
+        UNHOOKED_CONSUMERS.put("com/google/cloud/pubsub/v1/Subscriber", "GCP Pub/Sub");
     }
+
+    private static final Set<String> RAW_CONSUMER_OWNERS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "org/apache/kafka/clients/consumer/KafkaConsumer",
+            "org/apache/kafka/clients/consumer/Consumer",
+            "com/rabbitmq/client/Channel",
+            "javax/jms/MessageConsumer",
+            "jakarta/jms/MessageConsumer")));
 
     private static final Set<String> COUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNCOUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNHOOKED_CONSUMERS = new CopyOnWriteArraySet<>();
+    private static final Set<String> HOOKED_SPRING_CLASSES = new CopyOnWriteArraySet<>();
     private static volatile boolean serverHookFailed;
     private static volatile boolean listenerHookFailed;
     private static volatile boolean jpmsGuardTriggered;
@@ -162,26 +176,26 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/concurrent/CompletableFuture",
             "java/util/concurrent/CompletionStage",
             "java/lang/Thread",
+            "java/util/Timer",
+            "org/springframework/scheduling/TaskScheduler",
+            "com/google/common/util/concurrent/Futures",
+            "com/google/common/util/concurrent/ListenableFuture",
             "reactor/core/publisher/Mono",
             "reactor/core/publisher/Flux",
             "reactor/core/publisher/ParallelFlux")));
 
     // Constant-pool method names (CONSTANT_NameAndType, tag 12) targeted by
-    // wrapExecutorCalls, so custom executor subtypes, Thread subclasses,
-    // CompletionStage, Reactor subscribe, method references, and raw consumer
-    // polling are never skipped by the fast pre-scan.
+    // wrapExecutorCalls for non-JDK owners (custom executor subtypes, Thread
+    // subclasses, Spring TaskScheduler, Guava, Reactor subscribe, method
+    // references, and raw consumer polling). Methods whose owners are always
+    // in TARGET_EXECUTOR_OWNERS (CompletableFuture/CompletionStage/remove/
+    // shutdownNow) are matched by tag 7 above to avoid unnecessary ASM passes.
     private static final Set<String> TARGET_ASYNC_METHOD_NAMES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "execute", "submit", "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
-            "invokeAny", "remove", "shutdownNow", "runAsync", "supplyAsync", "completeAsync",
-            "fork", "subscribe", "start", "poll", "basicConsume", "receive",
-            "thenApplyAsync", "thenAcceptAsync", "thenRunAsync", "thenComposeAsync",
-            "thenCombineAsync", "thenAcceptBothAsync", "runAfterBothAsync",
-            "applyToEitherAsync", "acceptEitherAsync", "runAfterEitherAsync",
-            "handleAsync", "whenCompleteAsync", "exceptionallyAsync", "exceptionallyComposeAsync",
-            "thenApply", "thenAccept", "thenRun", "thenCompose",
-            "thenCombine", "thenAcceptBoth", "runAfterBoth",
-            "applyToEither", "acceptEither", "runAfterEither",
-            "handle", "whenComplete", "exceptionally", "exceptionallyCompose")));
+            "execute", "submit", "submitListenable", "submitCompletable",
+            "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
+            "invokeAny", "fork", "subscribe", "start",
+            "addListener", "addCallback", "transform", "transformAsync", "catching", "catchingAsync",
+            "poll", "basicConsume", "receive", "setMessageListener")));
 
     // CompletableFuture *Async instance methods rewritten to RequestGate.
     private static final Map<String, Set<String>> CF_ASYNC_INSTANCE_METHODS =
@@ -320,6 +334,14 @@ final class ServerEntries implements ClassFileTransformer {
         return !SEEN_UNHOOKED_CONSUMERS.isEmpty();
     }
 
+    static boolean isSpringExecutorHooked(String binaryClassName) {
+        return HOOKED_SPRING_CLASSES.contains(binaryClassName);
+    }
+
+    static void markSpringExecutorHookedForTests(String binaryClassName) {
+        HOOKED_SPRING_CLASSES.add(binaryClassName);
+    }
+
     static boolean hadServerHookFailure() {
         return serverHookFailed;
     }
@@ -416,6 +438,7 @@ final class ServerEntries implements ClassFileTransformer {
                     } else {
                         appRewriteFailed = true;
                     }
+                    scanRawConsumerCalls(classfileBuffer);
                     return null;
                 }
                 try {
@@ -428,6 +451,12 @@ final class ServerEntries implements ClassFileTransformer {
                     appRewriteFailed = true;
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
                 }
+            } else if (className != null && isRewriteAllowedPackage(className)) {
+                // Even when KEPLOY_JAVA_ASYNC_CALLSITES=off or no app allow-list
+                // is configured, read-only CP scan still detects direct raw
+                // Kafka/RabbitMQ/JMS consumer calls so listenerContamination
+                // stays honest without modifying any bytecode.
+                scanRawConsumerCalls(classfileBuffer);
             }
             return null;
         }
@@ -463,6 +492,8 @@ final class ServerEntries implements ClassFileTransformer {
             }
             if (entry.job == null && !entry.async) {
                 COUNTED.add(entry.server);
+            } else if (entry.async) {
+                HOOKED_SPRING_CLASSES.add(name);
             }
             synchronized (changed) {
                 Set<String> names = changed.get(loader);
@@ -607,11 +638,26 @@ final class ServerEntries implements ClassFileTransformer {
             return false;
         }
         if (!appClasses.isEmpty()) {
+            // Exact indexed app class allow-list: do NOT apply shaded-package
+            // filtering; isRewriteAllowedPackage still blocks framework/library
+            // classes if misconfigured in KEPLOY_JAVA_CLASS_DIRS while allowing
+            // org/springframework/samples/... (e.g. Spring PetClinic).
             return appClasses.contains(className);
         }
         return appPackagePrefix != null
                 && className.startsWith(appPackagePrefix)
                 && !isShadedOrRelocated(className);
+    }
+
+    private static boolean isInternalOrAgentClass(String className) {
+        return className.startsWith("java/")
+                || className.startsWith("javax/")
+                || className.startsWith("sun/")
+                || className.startsWith("jdk/")
+                || className.startsWith("com/sun/")
+                || className.startsWith("io/keploy/")
+                || className.startsWith("org/jacoco/")
+                || className.startsWith("org/newsclub/");
     }
 
     static boolean canAccessGate(ClassLoader loader, ProtectionDomain protectionDomain) {
@@ -738,14 +784,7 @@ final class ServerEntries implements ClassFileTransformer {
     // applied only in prefix mode (not exact appClasses index mode).
     static boolean isRewriteAllowedPackage(String className) {
         return className != null
-                && !className.startsWith("java/")
-                && !className.startsWith("javax/")
-                && !className.startsWith("sun/")
-                && !className.startsWith("jdk/")
-                && !className.startsWith("com/sun/")
-                && !className.startsWith("io/keploy/")
-                && !className.startsWith("org/jacoco/")
-                && !className.startsWith("org/newsclub/")
+                && !isInternalOrAgentClass(className)
                 && !className.startsWith("io/netty/")
                 && !className.startsWith("reactor/")
                 && !className.startsWith("okhttp3/")
@@ -754,7 +793,8 @@ final class ServerEntries implements ClassFileTransformer {
                 && !className.startsWith("io/grpc/")
                 && !className.startsWith("software/amazon/")
                 && !className.startsWith("com/amazonaws/")
-                && !className.startsWith("org/springframework/")
+                && (!className.startsWith("org/springframework/")
+                        || className.startsWith("org/springframework/samples/"))
                 && !className.startsWith("org/apache/catalina/")
                 && !className.startsWith("org/apache/coyote/")
                 && !className.startsWith("org/apache/tomcat/")
@@ -808,27 +848,66 @@ final class ServerEntries implements ClassFileTransformer {
         return false;
     }
 
-    private static boolean isHookedSpringExecutorOwner(String owner) {
-        return "org/springframework/core/task/TaskExecutor".equals(owner)
-                || "org/springframework/core/task/AsyncTaskExecutor".equals(owner)
-                || "org/springframework/core/task/AsyncListenableTaskExecutor".equals(owner)
-                || "org/springframework/core/task/SimpleAsyncTaskExecutor".equals(owner)
-                || "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor".equals(owner)
-                || "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler".equals(owner)
-                || "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor".equals(owner);
+    private static void scanRawConsumerCalls(byte[] classfile) {
+        if (classfile == null || classfile.length < 16) {
+            return;
+        }
+        try {
+            ClassReader reader = new ClassReader(classfile);
+            int itemCount = reader.getItemCount();
+            char[] buf = new char[reader.getMaxStringLength()];
+            boolean hasOwner = false;
+            for (int i = 1; i < itemCount; i++) {
+                int offset = reader.getItem(i);
+                if (offset != 0 && reader.readByte(offset - 1) == 7
+                        && RAW_CONSUMER_OWNERS.contains(reader.readUTF8(offset, buf))) {
+                    hasOwner = true;
+                    break;
+                }
+            }
+            if (!hasOwner) {
+                return;
+            }
+            reader.accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                        String[] exceptions) {
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(int opcode, String owner, String mname, String desc,
+                                boolean isInterface) {
+                            if (isDirectRawConsumerCall(owner, mname)) {
+                                SEEN_UNHOOKED_CONSUMERS.add(owner.replace('/', '.') + "." + mname);
+                            }
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        } catch (Throwable ignored) {
+            // Read-only heuristic scan must never affect class loading.
+        }
     }
 
-    private static boolean isUntrackedExecuteOrSubmit(String owner, String mname, String desc) {
-        if (isHookedSpringExecutorOwner(owner)) {
-            return false;
-        }
+    private static boolean isSingleArgExecutorSubmitOrExecute(String mname, String desc) {
         if ("execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
             return true;
         }
-        if ("submit".equals(mname)
+        if (("submit".equals(mname) || "submitListenable".equals(mname) || "submitCompletable".equals(mname))
                 && (desc.startsWith("(Ljava/lang/Runnable;)")
-                        || desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)")
                         || desc.startsWith("(Ljava/util/concurrent/Callable;)"))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isTwoArgExecutorSubmit(String mname, String desc) {
+        return "submit".equals(mname) && desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)");
+    }
+
+    private static boolean isForkJoinTaskSubmission(String owner, String mname, String desc) {
+        if ("java/util/concurrent/ForkJoinPool".equals(owner)
+                && ("execute".equals(mname) || "submit".equals(mname))
+                && desc.startsWith("(Ljava/util/concurrent/ForkJoinTask;)")) {
             return true;
         }
         return false;
@@ -836,17 +915,41 @@ final class ServerEntries implements ClassFileTransformer {
 
     private static boolean isUntrackedScheduleOrInvokeAny(String mname, String desc) {
         if ("schedule".equals(mname)
-                && (desc.startsWith("(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)")
-                        || desc.startsWith("(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)"))) {
+                && (desc.startsWith("(Ljava/lang/Runnable;")
+                        || desc.startsWith("(Ljava/util/concurrent/Callable;"))) {
             return true;
         }
         if (("scheduleAtFixedRate".equals(mname) || "scheduleWithFixedDelay".equals(mname))
-                && desc.startsWith("(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)")) {
+                && desc.startsWith("(Ljava/lang/Runnable;")) {
             return true;
         }
         if ("invokeAny".equals(mname)
                 && (desc.startsWith("(Ljava/util/Collection;)")
                         || desc.startsWith("(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)"))) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isTimerSchedule(String owner, String mname, String desc) {
+        return "java/util/Timer".equals(owner)
+                && ("schedule".equals(mname) || "scheduleAtFixedRate".equals(mname))
+                && desc.startsWith("(Ljava/util/TimerTask;");
+    }
+
+    private static boolean isGuavaAsyncCall(int opcode, String owner, String mname, String desc) {
+        if ((opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
+                && "addListener".equals(mname)
+                && "(Ljava/lang/Runnable;Ljava/util/concurrent/Executor;)V".equals(desc)) {
+            return true;
+        }
+        if (opcode == Opcodes.INVOKESTATIC
+                && "com/google/common/util/concurrent/Futures".equals(owner)
+                && ("addCallback".equals(mname)
+                        || "transform".equals(mname)
+                        || "transformAsync".equals(mname)
+                        || "catching".equals(mname)
+                        || "catchingAsync".equals(mname))) {
             return true;
         }
         return false;
@@ -868,7 +971,7 @@ final class ServerEntries implements ClassFileTransformer {
         if ("basicConsume".equals(mname) && "com/rabbitmq/client/Channel".equals(owner)) {
             return true;
         }
-        if ("receive".equals(mname)
+        if (("receive".equals(mname) || "setMessageListener".equals(mname))
                 && ("javax/jms/MessageConsumer".equals(owner)
                         || "jakarta/jms/MessageConsumer".equals(owner))) {
             return true;
@@ -876,11 +979,24 @@ final class ServerEntries implements ClassFileTransformer {
         return false;
     }
 
+    private static boolean isHookedSpringMethodRefOwner(String owner) {
+        return "org/springframework/core/task/SimpleAsyncTaskExecutor".equals(owner)
+                || "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor".equals(owner)
+                || "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler".equals(owner)
+                || "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor".equals(owner);
+    }
+
     private static boolean isAsyncMethodRefTarget(Handle h) {
         String owner = h.getOwner();
         String mname = h.getName();
         String desc = h.getDesc();
-        if (isUntrackedExecuteOrSubmit(owner, mname, desc) || isUntrackedScheduleOrInvokeAny(mname, desc)) {
+        if (!isHookedSpringMethodRefOwner(owner)
+                && (isSingleArgExecutorSubmitOrExecute(mname, desc) || isTwoArgExecutorSubmit(mname, desc))) {
+            return true;
+        }
+        if (isUntrackedScheduleOrInvokeAny(mname, desc)
+                || isTimerSchedule(owner, mname, desc)
+                || isForkJoinTaskSubmission(owner, mname, desc)) {
             return true;
         }
         if ("java/util/concurrent/CompletableFuture".equals(owner)) {
@@ -945,11 +1061,17 @@ final class ServerEntries implements ClassFileTransformer {
                     return null;
                 }
                 return new MethodVisitor(Opcodes.ASM9, mv) {
-                    private boolean addedStack;
+                    private int extraStack;
+
+                    private void ensureExtraStack(int needed) {
+                        if (extraStack < needed) {
+                            extraStack = needed;
+                        }
+                    }
 
                     private void emitUntrackedFlag(String reason) {
                         changed[0] = true;
-                        addedStack = true;
+                        ensureExtraStack(1);
                         super.visitLdcInsn(reason);
                         super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteUntrackedAsync",
                                 "(Ljava/lang/String;)V", false);
@@ -1161,9 +1283,26 @@ final class ServerEntries implements ClassFileTransformer {
                             return;
                         }
                         // Flag-only async submission sites (task untouched, 100% app-safe).
-                        if (opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE) {
-                            if (isUntrackedExecuteOrSubmit(owner, mname, desc)) {
+                        if (isGuavaAsyncCall(opcode, owner, mname, desc)) {
+                            emitUntrackedFlag("untracked-async:guava-future");
+                        } else if (opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE) {
+                            if (isSingleArgExecutorSubmitOrExecute(mname, desc)) {
+                                // Decide at runtime by actual receiver so Spring interfaces
+                                // (TaskExecutor/AsyncTaskExecutor) and subclasses have zero
+                                // false positives when hooked+verified AND zero false negatives
+                                // when backed by VirtualThreadTaskExecutor/custom pools.
+                                changed[0] = true;
+                                ensureExtraStack(2);
+                                super.visitInsn(Opcodes.DUP2);
+                                super.visitInsn(Opcodes.POP);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfUntrackedExecutor",
+                                        "(Ljava/lang/Object;)V", false);
+                            } else if (isTwoArgExecutorSubmit(mname, desc)) {
                                 emitUntrackedFlag("untracked-executor:" + owner.replace('/', '.'));
+                            } else if (isForkJoinTaskSubmission(owner, mname, desc)) {
+                                emitUntrackedFlag("untracked-async:forkjoin-task");
+                            } else if (isTimerSchedule(owner, mname, desc)) {
+                                emitUntrackedFlag("untracked-async:timer");
                             } else if (isUntrackedScheduleOrInvokeAny(mname, desc)) {
                                 emitUntrackedFlag("untracked-async:" + ("invokeAny".equals(mname)
                                         ? "invokeAny" : "schedule"));
@@ -1177,7 +1316,7 @@ final class ServerEntries implements ClassFileTransformer {
                                 // Only flag if runtime receiver is a Thread subclass (zero false
                                 // positives on non-Thread start() methods).
                                 changed[0] = true;
-                                addedStack = true;
+                                ensureExtraStack(1);
                                 super.visitInsn(Opcodes.DUP);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfThread",
                                         "(Ljava/lang/Object;)V", false);
@@ -1188,7 +1327,7 @@ final class ServerEntries implements ClassFileTransformer {
 
                     @Override
                     public void visitMaxs(int maxStack, int maxLocals) {
-                        super.visitMaxs(addedStack ? maxStack + 1 : maxStack, maxLocals);
+                        super.visitMaxs(maxStack + extraStack, maxLocals);
                     }
                 };
             }

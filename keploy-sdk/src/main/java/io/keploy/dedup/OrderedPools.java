@@ -177,6 +177,38 @@ final class OrderedPools {
         return false;
     }
 
+    // Returns true iff executor extends one of the Spring executor classes that
+    // ServerEntries.addAsync actually instrumented, does not override execute/
+    // submit/doExecute, and passes OrderedPools' fail-closed verification.
+    static boolean isHookedAndVerifiedSpringExecutor(Object executor) {
+        if (executor == null) {
+            return false;
+        }
+        Class<?> cls = executor.getClass();
+        String hookedBase = null;
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            String name = c.getName();
+            if (SPRING_POOL.equals(name)
+                    || SPRING_SCHEDULER.equals(name)
+                    || SPRING_CONCURRENT.equals(name)
+                    || SPRING_SIMPLE_ASYNC.equals(name)) {
+                hookedBase = name;
+                break;
+            }
+        }
+        if (hookedBase == null || !ServerEntries.isSpringExecutorHooked(hookedBase)) {
+            return false;
+        }
+        try {
+            if (Boolean.TRUE.equals(OVERRIDES_SPRING_SUBMIT.get(cls))) {
+                return false;
+            }
+            return !orders(executor);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     // Whether a ThreadPoolExecutor subclass overrides beforeExecute,
     // afterExecute, newTaskFor, execute, submit, or (for
     // ScheduledThreadPoolExecutor) decorateTask, which may cast the queued

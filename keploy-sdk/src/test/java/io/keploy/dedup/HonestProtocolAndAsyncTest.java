@@ -1658,7 +1658,9 @@ public class HonestProtocolAndAsyncTest {
     public void unarmedKeployAbsentIsNoOpAndMarksArmedMidFlightWhileUnarmedWorkRemainsInFlight() throws Exception {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>());
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
         try {
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
             RequestGate.disarm();
             assertFalse(RequestGate.isArmed());
 
@@ -1686,13 +1688,15 @@ public class HonestProtocolAndAsyncTest {
             assertEquals("in-flight unarmed job must keep marking subsequent windows armed-mid-flight",
                     Collections.singletonList("armed-mid-flight"), second.contaminations);
 
-            // Once the pre-arming job finally exits, Test 3 is clean.
+            // Once the pre-arming job finally exits (and the short unarmed hand-off tail elapses), Test 3 is clean.
             JobGate.exit(jobTok);
             assertEquals(0L, RequestGate.unarmedInFlight());
+            Thread.sleep(50);
             RequestGate.open("third-armed-after-exit", null);
             RequestGate.WindowOutcome third = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             assertEquals(Collections.<String>emptyList(), third.contaminations);
         } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
             pool.shutdownNow();
         }
     }
@@ -1898,6 +1902,306 @@ public class HonestProtocolAndAsyncTest {
         } finally {
             RequestGate.untrackedTailWindowNanos = savedTailWindow;
             pool.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void minimalStageNoUoeMinimalFutureTrackedAbandonedStageGcAndR3Regressions() throws Exception {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
+        long savedMaxLingering = RequestGate.maxLingeringNanos;
+        long savedJobMax = JobGate.handedJobMaxNanos;
+        try {
+            // NB1: JDK 9+ MinimalStage (completedStage / failedStage / minimalCompletionStage)
+            //      throws UnsupportedOperationException on isDone(). Rewritten plain dependents
+            //      MUST NEVER throw UOE either outside or inside a request!
+            RequestGate.open("nb1-minimal-stage", null);
+            try {
+                Method completedStageM = CompletableFuture.class.getMethod("completedStage", Object.class);
+                Method failedStageM = CompletableFuture.class.getMethod("failedStage", Throwable.class);
+                Method minimalStageM = CompletableFuture.class.getMethod("minimalCompletionStage");
+
+                @SuppressWarnings("unchecked")
+                java.util.concurrent.CompletionStage<String> cs =
+                        (java.util.concurrent.CompletionStage<String>) completedStageM.invoke(null, "hi");
+                // Outside a request:
+                assertEquals("hi!", RequestGate.stageThenApply(cs, s -> s + "!").toCompletableFuture().get());
+                CompletableFuture<String> base = CompletableFuture.completedFuture("a");
+                assertEquals("a+hi", RequestGate.thenCombine(base, cs, (a, b) -> a + "+" + b).get());
+
+                // Inside an active armed request:
+                Object req = RequestGate.enter();
+                try {
+                    assertEquals("hi?", RequestGate.stageThenApply(cs, s -> s + "?").toCompletableFuture().get());
+                    CompletableFuture<String> incomplete = new CompletableFuture<>();
+                    CompletableFuture<String> combined = RequestGate.thenCombine(incomplete, cs, (a, b) -> a + ":" + b);
+                    incomplete.complete("ok");
+                    assertEquals("ok:hi", combined.get(5, TimeUnit.SECONDS));
+
+                    @SuppressWarnings("unchecked")
+                    java.util.concurrent.CompletionStage<String> failed =
+                            (java.util.concurrent.CompletionStage<String>) failedStageM.invoke(
+                                    null, new RuntimeException("boom"));
+                    assertEquals("recovered", RequestGate.stageExceptionally(failed, e -> "recovered")
+                            .toCompletableFuture().get(5, TimeUnit.SECONDS));
+
+                    CompletableFuture<String> live = new CompletableFuture<>();
+                    @SuppressWarnings("unchecked")
+                    java.util.concurrent.CompletionStage<String> minimal =
+                            (java.util.concurrent.CompletionStage<String>) minimalStageM.invoke(live);
+                    java.util.concurrent.CompletionStage<String> mapped =
+                            RequestGate.stageThenApply(minimal, s -> s + "-done");
+                    live.complete("val");
+                    assertEquals("val-done", mapped.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                } finally {
+                    RequestGate.exit(req);
+                }
+                RequestGate.WindowOutcome nb1Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+                assertTrue("MinimalStage dependents must drain cleanly", nb1Out.drained);
+                assertEquals("MinimalStage must not spuriously contaminate: " + nb1Out.contaminations,
+                        Collections.<String>emptyList(), nb1Out.contaminations);
+            } catch (NoSuchMethodException java8Skip) {
+                // Java 8 has no completedStage/minimalCompletionStage.
+            }
+
+            // SF3: CompletableFuture subclass inheriting thenAccept/whenComplete (like JDK HttpClient's
+            //      MinimalFuture) IS tracked instead of flagged; subclass overriding thenAccept fails closed!
+            class MinimalFutureLike<T> extends CompletableFuture<T> {
+                @SuppressWarnings("unused")
+                public CompletableFuture<T> newIncompleteFuture() {
+                    return new MinimalFutureLike<T>();
+                }
+            }
+            class OverridingCf<T> extends CompletableFuture<T> {
+                @Override
+                public CompletableFuture<Void> thenAccept(java.util.function.Consumer<? super T> action) {
+                    return super.thenAccept(action);
+                }
+            }
+            RequestGate.open("sf3-minimal-future", null);
+            Object reqSf3 = RequestGate.enter();
+            MinimalFutureLike<String> httpCf = new MinimalFutureLike<>();
+            AtomicBoolean auditRan = new AtomicBoolean();
+            try {
+                RequestGate.thenAccept(httpCf, v -> auditRan.set(true));
+                assertEquals("MinimalFuture-like subclass must be tracked", 2, RequestGate.running());
+            } finally {
+                RequestGate.exit(reqSf3);
+            }
+            assertEquals("window still waits for MinimalFuture-like dependent", 1, RequestGate.running());
+            httpCf.complete("200");
+            assertTrue(auditRan.get());
+            RequestGate.WindowOutcome sf3Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue(sf3Out.drained);
+            assertEquals("MinimalFuture-like dependent must NOT contaminate",
+                    Collections.<String>emptyList(), sf3Out.contaminations);
+
+            RequestGate.open("sf3-override-cf", null);
+            Object reqSf3b = RequestGate.enter();
+            try {
+                RequestGate.thenAccept(new OverridingCf<String>(), v -> { });
+            } finally {
+                RequestGate.exit(reqSf3b);
+            }
+            RequestGate.WindowOutcome sf3bOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("CF subclass overriding thenAccept must fail closed: " + sf3bOut.contaminations,
+                    sf3bOut.contaminations.stream().anyMatch(s -> s.startsWith("untracked-executor:")));
+
+            // SF1: Abandoned plain dependent whose future is GC'd releases its permit via DEAD_HANDS,
+            //      AND a stuck strongly-referenced future stops poisoning windows after maxLingeringNanos.
+            RequestGate.disarm();
+            RequestGate.open("sf1-gc", null);
+            Object reqSf1 = RequestGate.enter();
+            try {
+                CompletableFuture<String> abandoned = new CompletableFuture<>();
+                RequestGate.thenAccept(abandoned, v -> { });
+                assertEquals(2, RequestGate.running());
+                abandoned = null;
+            } finally {
+                RequestGate.exit(reqSf1);
+            }
+            long gcDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (RequestGate.running() > 0 && System.nanoTime() < gcDeadline) {
+                System.gc();
+                Thread.sleep(20);
+            }
+            assertEquals("GC'd abandoned plain-dependent future must release window permit (SF1)",
+                    0, RequestGate.running());
+
+            RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(100);
+            CompletableFuture<String> neverCompletes = new CompletableFuture<>();
+            RequestGate.open("sf1-stuck", null);
+            Object reqStuck = RequestGate.enter();
+            try {
+                RequestGate.thenAccept(neverCompletes, v -> { });
+            } finally {
+                RequestGate.exit(reqStuck);
+            }
+            assertFalse("stuck future cuts window", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(30)));
+            RequestGate.open("sf1-while-stuck", null);
+            assertEquals(Collections.singletonList("tail:sf1-stuck"),
+                    RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
+            Thread.sleep(140);
+            RequestGate.open("sf1-after-bound", null);
+            assertEquals("stuck lingering window must stop poisoning after maxLingeringNanos (SF1)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true).contaminations);
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+
+            // SF2: Runtime receiver check for hooked Spring executor vs custom TaskExecutor +
+            //      TaskScheduler.schedule / Timer.schedule / ForkJoinPool.execute(ForkJoinTask) / Guava.
+            RequestGate.disarm();
+            org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springExec =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+            springExec.initialize();
+            try {
+                ServerEntries.markSpringExecutorHookedForTests(springExec.getClass().getName());
+                RequestGate.open("sf2-spring-ok", null);
+                Object reqSp = RequestGate.enter();
+                try {
+                    RequestGate.noteIfUntrackedExecutor(springExec);
+                } finally {
+                    RequestGate.exit(reqSp);
+                }
+                assertEquals("hooked & verified Spring executor must NOT false-positive (SF2)",
+                        Collections.<String>emptyList(),
+                        RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+                RequestGate.open("sf2-custom-task-exec", null);
+                Object reqCustom = RequestGate.enter();
+                org.springframework.core.task.TaskExecutor customTe = r -> r.run();
+                try {
+                    RequestGate.noteIfUntrackedExecutor(customTe);
+                } finally {
+                    RequestGate.exit(reqCustom);
+                }
+                RequestGate.WindowOutcome customOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+                assertTrue("unhooked TaskExecutor impl must be flagged by runtime class (SF2): "
+                        + customOut.contaminations,
+                        customOut.contaminations.contains("untracked-executor:" + customTe.getClass().getName()));
+            } finally {
+                springExec.shutdown();
+            }
+
+            // SF4: schedule(r, delay, unit) extends untracked tail window by delay!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(50);
+            RequestGate.open("sf4-sched", null);
+            Object reqSched = RequestGate.enter();
+            try {
+                RequestGate.schedule(stpe, () -> { }, 300, TimeUnit.MILLISECONDS);
+            } finally {
+                RequestGate.exit(reqSched);
+            }
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            Thread.sleep(100); // past 50ms base window, still inside 350ms delay-extended tail!
+            RequestGate.open("sf4-during-delay", null);
+            assertEquals("scheduled delay must keep next window contaminated past base tail (SF4)",
+                    Collections.singletonList("tail:sf4-sched"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+
+            // SF5: Expired job hop that fans out to an executor flags job-tail on active & next window!
+            RequestGate.disarm();
+            JobGate.handedJobMaxNanos = TimeUnit.MILLISECONDS.toNanos(40);
+            RequestGate.open("sf5-arm", null);
+            CountDownLatch fanoutDone = new CountDownLatch(1);
+            Runnable hop1;
+            Object jTok = JobGate.enter(new Object(), "scheduled");
+            try {
+                hop1 = RequestGate.hand(pool, () -> {
+                    try {
+                        Thread.sleep(70);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    assertNull("hop1 expired so running() is null", JobGate.running());
+                    assertNotNull("hop1 expiredRunningName() still knows job", JobGate.expiredRunningName());
+                    JobGate.open();
+                    RequestGate.execute(pool, fanoutDone::countDown);
+                });
+            } finally {
+                JobGate.exit(jTok);
+            }
+            hop1.run();
+            assertTrue(fanoutDone.await(5, TimeUnit.SECONDS));
+            List<String> sf5JobContams = JobGate.close();
+            assertTrue("expired hop fan-out must mark JobGate window job-tail (SF5): " + sf5JobContams,
+                    sf5JobContams.stream().anyMatch(s -> s.startsWith("job-tail:")));
+            RequestGate.open("sf5-next", null);
+            RequestGate.WindowOutcome sf5Next = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("expired hop fan-out must mark next RequestGate window tail:job-tail (SF5): "
+                    + sf5Next.contaminations,
+                    sf5Next.contaminations.stream().anyMatch(s -> s.startsWith("tail:job-tail:")));
+
+            // SF6: Unarmed hand-off made while unarmed keeps marking armed-mid-flight within tail window!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(200);
+            Object unarmedReq = RequestGate.enter();
+            CountDownLatch unarmedDone = new CountDownLatch(1);
+            RequestGate.execute(pool, unarmedDone::countDown);
+            RequestGate.exit(unarmedReq);
+            assertTrue(unarmedDone.await(5, TimeUnit.SECONDS));
+            RequestGate.open("sf6-w1", null);
+            assertEquals(Collections.singletonList("armed-mid-flight"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.open("sf6-w2", null);
+            assertEquals("unarmed hand-off keeps marking armed-mid-flight within tail window (SF6)",
+                    Collections.singletonList("armed-mid-flight"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+
+            // SF7: Expanded unhooked consumers + read-only scan works even with empty appClasses!
+            for (String consumerCls : new String[] {
+                    "org/springframework/data/redis/listener/RedisMessageListenerContainer",
+                    "software/amazon/awssdk/services/sqs/DefaultSqsAsyncClient",
+                    "org/apache/pulsar/client/impl/ConsumerImpl",
+                    "com/google/cloud/pubsub/v1/Subscriber"
+            }) {
+                ServerEntries.setHookStatusForTests(false, false, false, false);
+                new ServerEntries(true).transform(getClass().getClassLoader(), consumerCls, null, null,
+                        generatePlainClass(consumerCls));
+                assertTrue(consumerCls + " must flip hasUnhookedConsumer (SF7)",
+                        ServerEntries.hasUnhookedConsumer());
+            }
+            // Read-only raw JMS setMessageListener scan with NO appClasses / callsites off:
+            ServerEntries.setHookStatusForTests(false, false, false, false);
+            ClassWriter jmsApp = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            jmsApp.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "com/acme/RawJmsApp", null, "java/lang/Object", null);
+            emitDefaultCtor(jmsApp);
+            MethodVisitor jmsMv = jmsApp.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                    "wire", "(Ljavax/jms/MessageConsumer;Ljava/lang/Object;)V", null, null);
+            jmsMv.visitCode();
+            jmsMv.visitVarInsn(Opcodes.ALOAD, 0);
+            jmsMv.visitVarInsn(Opcodes.ALOAD, 1);
+            jmsMv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "javax/jms/MessageConsumer",
+                    "setMessageListener", "(Ljava/lang/Object;)V", true);
+            jmsMv.visitInsn(Opcodes.RETURN);
+            jmsMv.visitMaxs(2, 2);
+            jmsMv.visitEnd();
+            jmsApp.visitEnd();
+            assertNull("callsites-off ServerEntries must not modify bytecode",
+                    new ServerEntries(true, Collections.<String>emptySet(), null)
+                            .transform(getClass().getClassLoader(), "com/acme/RawJmsApp", null, null,
+                                    jmsApp.toByteArray()));
+            assertTrue("raw JMS setMessageListener must be detected even with callsites off (SF7)",
+                    ServerEntries.hasUnhookedConsumer());
+            ServerEntries.setHookStatusForTests(false, false, false, false);
+
+            // SF8: Exact indexed app classes under org/springframework/samples/... must NOT be dropped!
+            ServerEntries petclinic = new ServerEntries(true,
+                    Collections.singleton("org/springframework/samples/petclinic/owner/OwnerController"), null);
+            assertTrue("indexed PetClinic class under org/springframework/samples must be rewritten (SF8)",
+                    petclinic.shouldRewriteExecutorCalls(
+                            "org/springframework/samples/petclinic/owner/OwnerController"));
+        } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+            JobGate.handedJobMaxNanos = savedJobMax;
+            pool.shutdownNow();
+            stpe.shutdownNow();
         }
     }
 

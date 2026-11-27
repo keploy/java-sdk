@@ -136,9 +136,14 @@ public final class JobGate {
     }
 
     // markUntracked records an untracked async hand-off originated by a job's
-    // run (e.g., an unknown executor) on the currently open window (if any)
-    // and requests tail contamination on the immediately following window.
+    // run (e.g., an unknown executor or expired job fan-out) on the currently
+    // open window (if any) and requests tail contamination on subsequent
+    // windows.
     static void markUntracked(String reason) {
+        markUntracked(reason, 0L);
+    }
+
+    static void markUntracked(String reason, long extraTailNanos) {
         if (reason == null || reason.isEmpty() || !RequestGate.isArmed()) {
             return;
         }
@@ -146,7 +151,26 @@ public final class JobGate {
         if (active != null) {
             active.mark(reason);
         }
-        RequestGate.noteExternalUntrackedTail(reason);
+        RequestGate.noteExternalUntrackedTail(reason, extraTailNanos);
+    }
+
+    // expiredRunningName returns the job name if this thread is currently
+    // executing an expired handed-off job Run (whose runningAttribution()
+    // returns null so chained wrapping stops, while fan-out work from it is
+    // still flagged via job-tail:<name>).
+    static String expiredRunningName() {
+        Run run = CURRENT.get();
+        if (run == null) {
+            return null;
+        }
+        long now = System.nanoTime();
+        while (run != null) {
+            if (!run.over && run.isExpired(now)) {
+                return run.name;
+            }
+            run = run.outer;
+        }
+        return null;
     }
 
     // detachThread restores CURRENT without removing the Run from RUNNING, so
@@ -642,8 +666,9 @@ public final class JobGate {
         // True for tasks handed off via enterAs (bounded by expiresAtNanos).
         private final boolean handed;
         private final long expiresAtNanos;
-        // Whether its exit came; only its own thread reads or sets it.
-        private boolean over;
+        // Whether its exit came; volatile because deferred CF release can
+        // finish on another thread via whenComplete.
+        private volatile boolean over;
 
         private Run(String name, Run outer, boolean handed, long expiresAtNanos) {
             this.name = name;
