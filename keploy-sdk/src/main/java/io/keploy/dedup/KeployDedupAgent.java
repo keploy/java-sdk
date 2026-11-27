@@ -151,28 +151,34 @@ public final class KeployDedupAgent {
     // server (e.g. Armeria, Helidon, Play) not in ServerEntries.UNCOUNTED.
     // Permanently drops windowCut (and asyncExecutors) to false in HELLO and
     // Unix ACK caps; reset only by tests.
-    static volatile boolean observedNoServerEntry;
-    // Latched true once an executor or async method reference targeting a real
-    // untracked executor/async API is captured outside any active request
-    // window or tracked job (e.g. stored in a field during startup and invoked
-    // later inside requests). Permanently drops asyncExecutors to false in
-    // HELLO and Unix ACK caps; reset only by tests.
-    static volatile boolean observedPreCapturedUntrackedExecutor;
+    static final AtomicBoolean observedNoServerEntry = new AtomicBoolean();
+    // Latched true once an untracked executor/async method reference or
+    // untracked library-to-JDK-pool hand-off (e.g. Spring
+    // SimpleApplicationEventMulticaster.setTaskExecutor with a plain JDK pool)
+    // is observed. Permanently drops asyncExecutors to false in HELLO and Unix
+    // ACK caps; reset only by tests.
+    static final AtomicBoolean observedPreCapturedUntrackedExecutor = new AtomicBoolean();
 
     private static void noteObservedNoServerEntry(String testId) {
-        if (!observedNoServerEntry) {
-            observedNoServerEntry = true;
-            log(Level.INFO, "Keploy dedup: " + testId + " saw an HTTP server whose requests the SDK cannot count,"
+        if (observedNoServerEntry.compareAndSet(false, true)) {
+            log(Level.INFO, "Keploy dedup: " + testId + " recorded coverage outside any counted server request,"
                     + " so window cuts are not trusted for the rest of this run", null);
         }
     }
 
-    static void noteObservedPreCapturedUntrackedExecutor(String target) {
-        if (!observedPreCapturedUntrackedExecutor) {
-            observedPreCapturedUntrackedExecutor = true;
-            log(Level.INFO, "Keploy dedup: saw an executor method reference (" + target
-                    + ") created outside any tracked request, so background async work cannot be tracked"
-                    + " reliably for the rest of this run", null);
+    static void noteObservedUntrackedMethodRef(String api, boolean armed) {
+        if (observedPreCapturedUntrackedExecutor.compareAndSet(false, true)) {
+            log(armed ? Level.INFO : Level.FINE,
+                    "Keploy dedup: saw an untracked async method reference to " + api
+                    + ", so background async work cannot be tracked reliably for the rest of this run", null);
+        }
+    }
+
+    static void noteObservedUntrackedAsyncLibrary(String description, boolean armed) {
+        if (observedPreCapturedUntrackedExecutor.compareAndSet(false, true)) {
+            log(armed ? Level.INFO : Level.FINE,
+                    "Keploy dedup: saw an untracked async dispatcher (" + description
+                    + "), so background async work cannot be tracked reliably for the rest of this run", null);
         }
     }
     // The answer to a command not taken (a START that could not clear the
@@ -355,25 +361,28 @@ public final class KeployDedupAgent {
         boolean serverEntriesInstalled = agentAttached && endWaitActive
                 && !ServerEntries.hasUncountedServer()
                 && !ServerEntries.hadServerHookFailure()
-                && !observedNoServerEntry;
+                && !observedNoServerEntry.get();
         boolean windowCut = serverEntriesInstalled;
         boolean contaminated = agentAttached;
         boolean classMismatch = true;
         boolean background = collector.probeScan() != null;
         boolean appOnlyActive = collector.coverageIndex.entries == null
                 || collector.coverageIndex.appOnly;
-        // Also fail closed via observedPreCapturedUntrackedExecutor if an
-        // executor or async method reference targeting a real untracked
-        // executor/async API is captured outside any active request window or
-        // tracked job (e.g. stored in a field at startup and invoked later on
-        // the request path), refreshing TCP HELLO and Unix ACK caps.
+        // Also fail closed if any untracked executor/async method reference,
+        // untracked library/JDK async dispatcher (RxJava Schedulers, Kotlin
+        // coroutines Dispatchers, OkHttp Dispatcher, NIO Asynchronous*Channel,
+        // or Spring SimpleApplicationEventMulticaster with a plain JDK pool),
+        // or async hook failure was observed, refreshing TCP HELLO and Unix
+        // ACK caps.
         boolean asyncExecutors = serverEntriesInstalled
                 && executorCallSitesEnabled
                 && !isAsyncCallSitesTurnedOff()
                 && appOnlyActive
                 && !ServerEntries.wasJpmsGuardTriggered()
                 && !ServerEntries.hadAppRewriteFailure()
-                && !observedPreCapturedUntrackedExecutor;
+                && !ServerEntries.hadAsyncHookFailure()
+                && !ServerEntries.hasUnhookedAsyncDispatcher()
+                && !observedPreCapturedUntrackedExecutor.get();
         boolean listenerContamination = agentAttached
                 && !ServerEntries.hadListenerHookFailure()
                 && !ServerEntries.hasUnhookedConsumer();
@@ -1457,6 +1466,12 @@ public final class KeployDedupAgent {
             this.port = port;
         }
 
+        private static final String FAIL_CLOSED_FALLBACK_HELLO =
+                "HELLO {\"proto\":3,\"sdkVersion\":\"\",\"podUid\":\"\",\"podName\":\"\",\"sessionId\":\"\","
+                + "\"jvmNonce\":\"\",\"buildId\":\"\","
+                + "\"windowCut\":false,\"contaminated\":false,\"classMismatch\":false,\"background\":false,"
+                + "\"ackId\":true,\"nopResync\":true,\"asyncExecutors\":false,\"listenerContamination\":false}";
+
         private String helloFrame() {
             RuntimeException injected = testHelloFailure;
             if (injected != null) {
@@ -1470,6 +1485,21 @@ public final class KeployDedupAgent {
             if (!current.equals(lastHelloSent)) {
                 writeLine(out, current);
                 lastHelloSent = current;
+            }
+        }
+
+        private boolean refreshHelloOrFallback(OutputStream out, String phase) throws IOException {
+            try {
+                maybeSendUpdatedHello(out);
+                return true;
+            } catch (RuntimeException | LinkageError e) {
+                log(Level.FINE, "Failed to refresh HELLO during " + phase
+                        + "; sending fail-closed fallback HELLO", e);
+                if (!FAIL_CLOSED_FALLBACK_HELLO.equals(lastHelloSent)) {
+                    writeLine(out, FAIL_CLOSED_FALLBACK_HELLO);
+                    lastHelloSent = FAIL_CLOSED_FALLBACK_HELLO;
+                }
+                return false;
             }
         }
 
@@ -1542,15 +1572,7 @@ public final class KeployDedupAgent {
                 // removal eligibility on this declaration and refresh it if a later
                 // HELLO arrives after server/JaCoCo initialization completes.
                 synchronized (testCaseLock) {
-                    try {
-                        maybeSendUpdatedHello(out);
-                    } catch (RuntimeException | LinkageError e) {
-                        log(Level.FINE, "Failed to compute connect-time HELLO; falling back to minimal HELLO", e);
-                        String fallback = buildHelloFrame("", "", "", "", "", "",
-                                false, false, false, false, true, true, false, false);
-                        writeLine(out, fallback);
-                        lastHelloSent = fallback;
-                    }
+                    refreshHelloOrFallback(out, "connect");
                     out.flush();
                 }
                 String line;
@@ -1646,11 +1668,7 @@ public final class KeployDedupAgent {
                         // collector has no other sign this test went unmeasured.
                         writeLine(out, IGNORED_REPLY + " " + command.testId);
                     }
-                    try {
-                        maybeSendUpdatedHello(out);
-                    } catch (RuntimeException | LinkageError e) {
-                        log(Level.FINE, "Failed to refresh HELLO before START ACK for " + command.testId, e);
-                    }
+                    refreshHelloOrFallback(out, "START " + command.testId);
                     ack(out, command.testId);
                     // Emit BACKGROUND after START's ACK (matching the unix path)
                     // so building coverageIndex.report() / JSON never delays the
@@ -1728,12 +1746,22 @@ public final class KeployDedupAgent {
                     }
                     // Emit updated HELLO if capabilities changed during the test
                     // (e.g. Jetty/Undertow loaded its request entry on first request,
-                    // or probeScan was dropped). Isolated from the COV try block so a
-                    // runtime error computing HELLO can never suppress COV before ACK.
-                    try {
-                        maybeSendUpdatedHello(out);
-                    } catch (RuntimeException | LinkageError e) {
-                        log(Level.FINE, "Failed to refresh HELLO before COV for " + command.testId, e);
+                    // an untracked async dispatcher latched, or probeScan was dropped).
+                    // Isolated from the COV try block so a runtime error computing
+                    // HELLO can never suppress COV before ACK; on error, emit the
+                    // fail-closed all-false fallback HELLO and also tag COV unverified
+                    // if the async latch is active so the collector never sees a stale
+                    // honest declaration.
+                    boolean helloRefreshed = refreshHelloOrFallback(out, "END " + command.testId);
+                    if (!helloRefreshed
+                            && (observedPreCapturedUntrackedExecutor.get()
+                                    || ServerEntries.hasUnhookedAsyncDispatcher()
+                                    || ServerEntries.hadAsyncHookFailure())) {
+                        List<String> updatedUnverified = new ArrayList<>(coverage.unverified);
+                        if (!updatedUnverified.contains("untracked-async")) {
+                            updatedUnverified.add("untracked-async");
+                        }
+                        coverage = coverage.ended(coverage.windowCut, coverage.contaminated, updatedUnverified);
                     }
                     try {
                         // Always emit exactly one COV before ACK — even when empty —

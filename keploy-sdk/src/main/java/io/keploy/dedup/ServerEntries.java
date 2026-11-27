@@ -137,6 +137,26 @@ final class ServerEntries implements ClassFileTransformer {
         UNHOOKED_CONSUMERS.put("com/google/cloud/pubsub/v1/Subscriber", "GCP Pub/Sub");
     }
 
+    private static final Map<String, String> UNHOOKED_ASYNC_DISPATCHERS = new HashMap<>();
+
+    static {
+        UNHOOKED_ASYNC_DISPATCHERS.put("rx/schedulers/Schedulers", "RxJava 1 Schedulers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("io/reactivex/schedulers/Schedulers", "RxJava 2 Schedulers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("io/reactivex/rxjava3/schedulers/Schedulers", "RxJava 3 Schedulers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("kotlinx/coroutines/Dispatchers", "Kotlin Coroutines Dispatchers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("okhttp3/Dispatcher", "OkHttp Dispatcher");
+        UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousChannelGroup", "JDK AsynchronousChannelGroup");
+        UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousFileChannel", "JDK AsynchronousFileChannel");
+        UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousSocketChannel", "JDK AsynchronousSocketChannel");
+        UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousServerSocketChannel",
+                "JDK AsynchronousServerSocketChannel");
+        UNHOOKED_ASYNC_DISPATCHERS.put("sun/nio/ch/SimpleAsynchronousFileChannelImpl", "JDK AsynchronousFileChannel");
+        UNHOOKED_ASYNC_DISPATCHERS.put("sun/nio/ch/AsynchronousChannelGroupImpl", "JDK AsynchronousChannelGroup");
+    }
+
+    private static final String SPRING_EVENT_MULTICASTER =
+            "org/springframework/context/event/SimpleApplicationEventMulticaster";
+
     private static final Set<String> RAW_CONSUMER_OWNERS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "org/apache/kafka/clients/consumer/KafkaConsumer",
             "org/apache/kafka/clients/consumer/Consumer",
@@ -147,9 +167,11 @@ final class ServerEntries implements ClassFileTransformer {
     private static final Set<String> COUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNCOUNTED = new CopyOnWriteArraySet<>();
     private static final Set<String> SEEN_UNHOOKED_CONSUMERS = new CopyOnWriteArraySet<>();
+    private static final Set<String> SEEN_UNHOOKED_ASYNC_DISPATCHERS = new CopyOnWriteArraySet<>();
     private static final Set<String> HOOKED_SPRING_CLASSES = new CopyOnWriteArraySet<>();
     private static volatile boolean serverHookFailed;
     private static volatile boolean listenerHookFailed;
+    private static volatile boolean asyncHookFailed;
     private static volatile boolean jpmsGuardTriggered;
     private static volatile boolean appRewriteFailed;
 
@@ -338,6 +360,14 @@ final class ServerEntries implements ClassFileTransformer {
         return !SEEN_UNHOOKED_CONSUMERS.isEmpty();
     }
 
+    static boolean hasUnhookedAsyncDispatcher() {
+        return !SEEN_UNHOOKED_ASYNC_DISPATCHERS.isEmpty();
+    }
+
+    static boolean hadAsyncHookFailure() {
+        return asyncHookFailed;
+    }
+
     static boolean isSpringExecutorHooked(String binaryClassName) {
         return HOOKED_SPRING_CLASSES.contains(binaryClassName);
     }
@@ -404,6 +434,17 @@ final class ServerEntries implements ClassFileTransformer {
         }
     }
 
+    static Set<String> snapshotUnhookedAsyncDispatchers() {
+        return new HashSet<>(SEEN_UNHOOKED_ASYNC_DISPATCHERS);
+    }
+
+    static void restoreUnhookedAsyncDispatchers(Set<String> snapshot) {
+        SEEN_UNHOOKED_ASYNC_DISPATCHERS.clear();
+        if (snapshot != null) {
+            SEEN_UNHOOKED_ASYNC_DISPATCHERS.addAll(snapshot);
+        }
+    }
+
     static void setHookStatusForTests(boolean serverFailed, boolean listenerFailed, boolean jpmsSkipped) {
         setHookStatusForTests(serverFailed, listenerFailed, jpmsSkipped, false);
     }
@@ -412,9 +453,11 @@ final class ServerEntries implements ClassFileTransformer {
             boolean rewriteFailed) {
         serverHookFailed = serverFailed;
         listenerHookFailed = listenerFailed;
+        asyncHookFailed = false;
         jpmsGuardTriggered = jpmsSkipped;
         appRewriteFailed = rewriteFailed;
         SEEN_UNHOOKED_CONSUMERS.clear();
+        SEEN_UNHOOKED_ASYNC_DISPATCHERS.clear();
     }
 
     // uncounted names the servers whose requests do not count that the app
@@ -429,6 +472,9 @@ final class ServerEntries implements ClassFileTransformer {
         if (classBeingRedefined != null) {
             return changedAgain(loader, className, classfileBuffer);
         }
+        if (SPRING_EVENT_MULTICASTER.equals(className)) {
+            return hookSpringEventMulticaster(loader, className, classfileBuffer);
+        }
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
             String uncounted = UNCOUNTED.get(className);
@@ -439,14 +485,19 @@ final class ServerEntries implements ClassFileTransformer {
             if (unhookedConsumer != null) {
                 SEEN_UNHOOKED_CONSUMERS.add(unhookedConsumer);
             }
+            String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(className);
+            if (unhookedAsync != null) {
+                SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(unhookedAsync);
+            }
             if (shouldRewriteExecutorCalls(className)) {
+                scanUnhookedReferences(classfileBuffer, false);
                 if (!canAccessGate(loader, protectionDomain)) {
                     if (seesGate(loader)) {
                         jpmsGuardTriggered = true;
                     } else {
                         appRewriteFailed = true;
                     }
-                    scanRawConsumerCalls(classfileBuffer);
+                    scanUnhookedReferences(classfileBuffer, true);
                     return null;
                 }
                 try {
@@ -463,10 +514,12 @@ final class ServerEntries implements ClassFileTransformer {
                     && !isKnownMessagingPoolWrapper(className)) {
                 // Even when KEPLOY_JAVA_ASYNC_CALLSITES=off or no app allow-list
                 // is configured, read-only CP scan still detects direct raw
-                // Kafka/RabbitMQ/JMS consumer calls so listenerContamination
-                // stays honest without modifying any bytecode (skipping known
-                // JMS/RabbitMQ pooling/recovery wrappers used by Spring Boot).
-                scanRawConsumerCalls(classfileBuffer);
+                // Kafka/RabbitMQ/JMS consumer calls and unhooked async
+                // dispatchers (RxJava, Kotlin coroutines, OkHttp, NIO
+                // Asynchronous*Channel) so capabilities stay honest without
+                // modifying bytecode (skipping known JMS/RabbitMQ pooling
+                // wrappers used by Spring Boot).
+                scanUnhookedReferences(classfileBuffer, true);
             }
             return null;
         }
@@ -555,6 +608,21 @@ final class ServerEntries implements ClassFileTransformer {
     }
 
     private byte[] changedAgain(ClassLoader loader, String className, byte[] classfile) {
+        if (SPRING_EVENT_MULTICASTER.equals(className)) {
+            synchronized (changed) {
+                Set<String> names = changed.get(loader);
+                if (names == null || !names.contains(className)) {
+                    return null;
+                }
+            }
+            try {
+                return wrapSpringEventMulticaster(classfile);
+            } catch (Throwable t) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup could not re-hook " + className, t);
+                return null;
+            }
+        }
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
             if (wasRewritten(loader, className)) {
@@ -864,7 +932,95 @@ final class ServerEntries implements ClassFileTransformer {
         return false;
     }
 
-    private static void scanRawConsumerCalls(byte[] classfile) {
+    private byte[] hookSpringEventMulticaster(ClassLoader loader, String className, byte[] classfileBuffer) {
+        String name = className.replace('/', '.');
+        try {
+            if (isInterface(classfileBuffer)) {
+                return null;
+            }
+            if (!seesGate(loader)) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot inspect " + name
+                        + ".setTaskExecutor: its class loader does not see keploy-sdk.jar", (Throwable) null);
+                return null;
+            }
+            byte[] wrapped = wrapSpringEventMulticaster(classfileBuffer);
+            if (wrapped == null) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot inspect " + name
+                        + ": setTaskExecutor(Executor) not found");
+                return null;
+            }
+            synchronized (changed) {
+                Set<String> names = changed.get(loader);
+                if (names == null) {
+                    names = new HashSet<>();
+                    changed.put(loader, names);
+                }
+                names.add(className);
+            }
+            return wrapped;
+        } catch (Throwable t) {
+            asyncHookFailed = true;
+            LOGGER.log(Level.WARNING, "Keploy dedup could not hook " + name + ".setTaskExecutor", t);
+            return null;
+        }
+    }
+
+    static byte[] wrapSpringEventMulticaster(byte[] classfile) {
+        ClassReader reader = new ClassReader(classfile);
+        ClassWriter writer = new ClassWriter(reader, 0);
+        final boolean[] found = {false};
+        final boolean[] alreadyHooked = {false};
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (mv == null || !"setTaskExecutor".equals(name)
+                        || !"(Ljava/util/concurrent/Executor;)V".equals(descriptor)
+                        || (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_STATIC)) != 0) {
+                    return mv;
+                }
+                found[0] = true;
+                return new MethodVisitor(Opcodes.ASM9, mv) {
+                    private boolean injected;
+
+                    @Override
+                    public void visitCode() {
+                        super.visitCode();
+                        if (!injected) {
+                            injected = true;
+                            super.visitVarInsn(Opcodes.ALOAD, 1);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
+                                    "noteSpringMulticasterTaskExecutor", "(Ljava/lang/Object;)V", false);
+                        }
+                    }
+
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String mname, String desc,
+                            boolean isInterface) {
+                        if (opcode == Opcodes.INVOKESTATIC && GATE.equals(owner)
+                                && "noteSpringMulticasterTaskExecutor".equals(mname)) {
+                            alreadyHooked[0] = true;
+                        }
+                        super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                    }
+
+                    @Override
+                    public void visitMaxs(int maxStack, int maxLocals) {
+                        super.visitMaxs(Math.max(maxStack, 1), maxLocals);
+                    }
+                };
+            }
+        }, 0);
+        if (!found[0]) {
+            return null;
+        }
+        return alreadyHooked[0] ? classfile : writer.toByteArray();
+    }
+
+    private static void scanUnhookedReferences(byte[] classfile, boolean includeRawConsumers) {
         if (classfile == null || classfile.length < 16) {
             return;
         }
@@ -872,16 +1028,21 @@ final class ServerEntries implements ClassFileTransformer {
             ClassReader reader = new ClassReader(classfile);
             int itemCount = reader.getItemCount();
             char[] buf = new char[reader.getMaxStringLength()];
-            boolean hasOwner = false;
+            boolean hasRawConsumerOwner = false;
             for (int i = 1; i < itemCount; i++) {
                 int offset = reader.getItem(i);
-                if (offset != 0 && reader.readByte(offset - 1) == 7
-                        && RAW_CONSUMER_OWNERS.contains(reader.readUTF8(offset, buf))) {
-                    hasOwner = true;
-                    break;
+                if (offset != 0 && reader.readByte(offset - 1) == 7) {
+                    String cls = reader.readUTF8(offset, buf);
+                    String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(cls);
+                    if (unhookedAsync != null) {
+                        SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(unhookedAsync);
+                    }
+                    if (includeRawConsumers && RAW_CONSUMER_OWNERS.contains(cls)) {
+                        hasRawConsumerOwner = true;
+                    }
                 }
             }
-            if (!hasOwner) {
+            if (!hasRawConsumerOwner) {
                 return;
             }
             reader.accept(new ClassVisitor(Opcodes.ASM9) {

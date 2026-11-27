@@ -111,6 +111,7 @@ public class HonestProtocolAndAsyncTest {
     private boolean savedObservedPreCapturedUntrackedExecutor;
     private Set<String> savedCounted;
     private Set<String> savedUncounted;
+    private Set<String> savedUnhookedAsyncDispatchers;
     private long savedHandedJobMaxNanos;
     private String savedControlSocketPath;
     private String savedDataSocketPath;
@@ -119,16 +120,18 @@ public class HonestProtocolAndAsyncTest {
     public void setUp() {
         savedTransformerAdded = KeployDedupAgent.transformerAdded;
         savedExecutorCallSitesEnabled = KeployDedupAgent.executorCallSitesEnabled;
-        savedObservedNoServerEntry = KeployDedupAgent.observedNoServerEntry;
-        savedObservedPreCapturedUntrackedExecutor = KeployDedupAgent.observedPreCapturedUntrackedExecutor;
+        savedObservedNoServerEntry = KeployDedupAgent.observedNoServerEntry.get();
+        savedObservedPreCapturedUntrackedExecutor = KeployDedupAgent.observedPreCapturedUntrackedExecutor.get();
         savedCounted = ServerEntries.snapshotCounted();
         savedUncounted = ServerEntries.snapshotUncounted();
+        savedUnhookedAsyncDispatchers = ServerEntries.snapshotUnhookedAsyncDispatchers();
         savedHandedJobMaxNanos = JobGate.handedJobMaxNanos;
         savedControlSocketPath = KeployDedupAgent.controlSocketPath;
         savedDataSocketPath = KeployDedupAgent.dataSocketPath;
-        KeployDedupAgent.observedNoServerEntry = false;
-        KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+        KeployDedupAgent.observedNoServerEntry.set(false);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
         ServerEntries.restoreUncounted(Collections.<String>emptySet());
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
         ServerEntries.setHookStatusForTests(false, false, false);
         RequestGate.disarm();
         RequestGate.open();
@@ -144,10 +147,11 @@ public class HonestProtocolAndAsyncTest {
         }
         KeployDedupAgent.transformerAdded = savedTransformerAdded;
         KeployDedupAgent.executorCallSitesEnabled = savedExecutorCallSitesEnabled;
-        KeployDedupAgent.observedNoServerEntry = savedObservedNoServerEntry;
-        KeployDedupAgent.observedPreCapturedUntrackedExecutor = savedObservedPreCapturedUntrackedExecutor;
+        KeployDedupAgent.observedNoServerEntry.set(savedObservedNoServerEntry);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(savedObservedPreCapturedUntrackedExecutor);
         ServerEntries.restoreCounted(savedCounted);
         ServerEntries.restoreUncounted(savedUncounted);
+        ServerEntries.restoreUnhookedAsyncDispatchers(savedUnhookedAsyncDispatchers);
         ServerEntries.setHookStatusForTests(false, false, false);
         JobGate.handedJobMaxNanos = savedHandedJobMaxNanos;
         KeployDedupAgent.controlSocketPath = savedControlSocketPath;
@@ -4030,8 +4034,79 @@ public class HonestProtocolAndAsyncTest {
         RequestGate.WindowOutcome rusOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
         assertTrue("unbound real ExecutorService::submit must flag untracked-executor: " + rusOut.contaminations,
                 rusOut.contaminations.contains("untracked-executor:" + CustomMethodRefExecutorService.class.getName()));
-        assertFalse("in-window method refs must NOT trip pre-captured executor latch",
-                KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+        assertTrue("in-window real executor method refs must also latch asyncExecutors=false",
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+    }
+
+    public static final class AsyncMethodRefThreadStartCaller {
+        private static volatile java.util.function.Consumer<Thread> captured;
+
+        public static void capture() {
+            captured = Thread::start;
+        }
+
+        public static void invoke(Thread t) {
+            captured.accept(t);
+        }
+    }
+
+    public static final class AsyncMethodRefCfRunAsyncCaller {
+        private static volatile java.util.function.Function<Runnable, CompletableFuture<Void>> captured;
+
+        public static void capture() {
+            captured = CompletableFuture::runAsync;
+        }
+
+        public static CompletableFuture<Void> invoke(Runnable r) {
+            return captured.apply(r);
+        }
+    }
+
+    public static final class AsyncMethodRefScheduleCaller {
+        private static volatile ScheduleTriFn captured;
+
+        @FunctionalInterface
+        public interface ScheduleTriFn {
+            java.util.concurrent.ScheduledFuture<?> apply(Runnable r, long delay, TimeUnit unit);
+        }
+
+        public static void capture(java.util.concurrent.ScheduledExecutorService sched) {
+            captured = sched::schedule;
+        }
+
+        public static java.util.concurrent.ScheduledFuture<?> invoke(Runnable r, long delay, TimeUnit unit) {
+            return captured.apply(r, delay, unit);
+        }
+    }
+
+    public static final class LazyInWindowExecutorRefCaller {
+        private static volatile java.util.function.Consumer<Runnable> cachedBound;
+        private static volatile java.util.function.BiConsumer<Executor, Runnable> cachedUnbound;
+
+        public static void reset() {
+            cachedBound = null;
+            cachedUnbound = null;
+        }
+
+        public static void callBound(Executor pool, Runnable task) {
+            if (cachedBound == null) {
+                cachedBound = pool::execute;
+            }
+            cachedBound.accept(task);
+        }
+
+        public static void callUnbound(Executor pool, Runnable task) {
+            if (cachedUnbound == null) {
+                cachedUnbound = Executor::execute;
+            }
+            cachedUnbound.accept(pool, task);
+        }
+    }
+
+    public static final class FakeNioAsyncChannelApp {
+        public static java.nio.channels.AsynchronousFileChannel openReadOnly(java.nio.file.Path p) throws IOException {
+            return java.nio.channels.AsynchronousFileChannel.open(p, java.nio.file.StandardOpenOption.READ);
+        }
     }
 
     public static final class PreCapturedBoundExecCaller {
@@ -4147,8 +4222,8 @@ public class HonestProtocolAndAsyncTest {
             //    and stays permanently latched across reconnect and subsequent windows.
             KeployDedupAgent.transformerAdded = true;
             KeployDedupAgent.executorCallSitesEnabled = true;
-            KeployDedupAgent.observedNoServerEntry = false;
-            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            KeployDedupAgent.observedNoServerEntry.set(false);
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
             ServerEntries.restoreCounted(Collections.<String>emptySet());
             ServerEntries.restoreUncounted(Collections.<String>emptySet());
 
@@ -4173,7 +4248,7 @@ public class HonestProtocolAndAsyncTest {
                     // Capture bound ((Executor) tpe)::execute outside any request window (no RequestGate.enter).
                     boundExec.getMethod("capture", Object.class).invoke(null, tpe);
                     assertTrue("pre-captured bound Executor::execute must latch observedPreCapturedUntrackedExecutor",
-                            KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                            KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
 
                     // Next START refreshes HELLO with asyncExecutors=false BEFORE ACK!
                     send(out, "START ts/precaptured-1");
@@ -4231,30 +4306,38 @@ public class HonestProtocolAndAsyncTest {
                 System.clearProperty(ENDPOINT_PROPERTY);
             }
 
-            // 2. Startup (disarmed) capture for bound submit, unbound execute, and unbound submit
-            //    all latch asyncExecutors=false BEFORE any collector connects!
-            String[] variants = new String[] {"boundSubmit", "unboundExec", "unboundSubmit"};
-            for (String variant : variants) {
-                KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
-                RequestGate.disarm();
-                if ("boundSubmit".equals(variant)) {
-                    boundSubmit.getMethod("capture", Object.class).invoke(null, tpe);
-                } else if ("unboundExec".equals(variant)) {
-                    unboundExec.getMethod("capture").invoke(null);
-                } else {
-                    unboundSubmit.getMethod("capture").invoke(null);
+            // 2. Startup (disarmed) AND armed-outside-window capture for ALL four executor
+            //    method-ref forms (bound/unbound execute/submit) latch asyncExecutors=false!
+            String[] variants = new String[] {"boundExec", "boundSubmit", "unboundExec", "unboundSubmit"};
+            for (boolean armedState : new boolean[] {false, true}) {
+                for (String variant : variants) {
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                    if (armedState) {
+                        RequestGate.arm();
+                    } else {
+                        RequestGate.disarm();
+                    }
+                    if ("boundExec".equals(variant)) {
+                        boundExec.getMethod("capture", Object.class).invoke(null, tpe);
+                    } else if ("boundSubmit".equals(variant)) {
+                        boundSubmit.getMethod("capture", Object.class).invoke(null, tpe);
+                    } else if ("unboundExec".equals(variant)) {
+                        unboundExec.getMethod("capture").invoke(null);
+                    } else {
+                        unboundSubmit.getMethod("capture").invoke(null);
+                    }
+                    assertTrue(variant + " (armed=" + armedState + ") must latch observedPreCapturedUntrackedExecutor",
+                            KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+                    JsonObject h = parseHello(connectAndReadHello(true));
+                    assertTrue(variant + " keeps windowCut=true", h.get("windowCut").getAsBoolean());
+                    assertFalse(variant + " (armed=" + armedState + ") must report asyncExecutors=false on HELLO",
+                            h.get("asyncExecutors").getAsBoolean());
                 }
-                assertTrue(variant + " captured while disarmed must latch observedPreCapturedUntrackedExecutor",
-                        KeployDedupAgent.observedPreCapturedUntrackedExecutor);
-                JsonObject h = parseHello(connectAndReadHello(true));
-                assertTrue(variant + " keeps windowCut=true", h.get("windowCut").getAsBoolean());
-                assertFalse(variant + " must report asyncExecutors=false on initial HELLO",
-                        h.get("asyncExecutors").getAsBoolean());
             }
 
             // 3. Unix transport: caps flip from asyncExecutors=true to asyncExecutors=false after
             //    pre-capture and stay false on subsequent windows.
-            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
             System.clearProperty(ENDPOINT_PROPERTY);
             File sockDir = tmp.newFolder("unix-precaptured-exec");
             KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
@@ -4288,7 +4371,7 @@ public class HonestProtocolAndAsyncTest {
 
                 // Capture outside any window.
                 boundExec.getMethod("capture", Object.class).invoke(null, tpe);
-                assertTrue(KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                assertTrue(KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
 
                 String ack2 = sendUnixControl("START ts/u-pre-2");
                 assertTrue("Unix START after pre-capture must refresh asyncExecutors=false: " + ack2,
@@ -4338,8 +4421,8 @@ public class HonestProtocolAndAsyncTest {
             ServerEntries.markSpringExecutorHookedForTests(springExec.getClass().getName());
             KeployDedupAgent.transformerAdded = true;
             KeployDedupAgent.executorCallSitesEnabled = true;
-            KeployDedupAgent.observedNoServerEntry = false;
-            KeployDedupAgent.observedPreCapturedUntrackedExecutor = false;
+            KeployDedupAgent.observedNoServerEntry.set(false);
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
             ServerEntries.restoreCounted(Collections.<String>emptySet());
             ServerEntries.restoreUncounted(Collections.<String>emptySet());
 
@@ -4351,7 +4434,7 @@ public class HonestProtocolAndAsyncTest {
                     org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor.class)
                     .invoke(null, syncExec, springExec);
             assertFalse("disarmed pre-capture of TxHelper/inline/hooked-Spring must NOT latch",
-                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
 
             // 2. Capture outside any window while ARMED -> must NOT latch!
             RequestGate.arm();
@@ -4361,7 +4444,7 @@ public class HonestProtocolAndAsyncTest {
                     org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor.class)
                     .invoke(null, syncExec, springExec);
             assertFalse("armed outside-window capture of TxHelper/inline/hooked-Spring must NOT latch",
-                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
 
             // 3. TCP HELLO keeps asyncExecutors=true!
             JsonObject hello = parseHello(connectAndReadHello(true));
@@ -4404,10 +4487,452 @@ public class HonestProtocolAndAsyncTest {
                     Collections.<String>emptyList(), out.contaminations);
             assertFalse("pre-captured TxHelper/inline must leave tailActiveAtEnd=false", out.tailActiveAtEnd);
             assertFalse("latch remains false after in-window invocations",
-                    KeployDedupAgent.observedPreCapturedUntrackedExecutor);
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
         } finally {
             ServerEntries.unmarkSpringExecutorHookedForTests(springExec.getClass().getName());
             springExec.shutdown();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void inWindowLazyExecutorMethodRefCaptureLatchesAndCoversLaterWindowsOnTcpAndUnix() throws Exception {
+        Class<?> lazyCaller = rewriteClassWithWrapExecutorCalls(LazyInWindowExecutorRefCaller.class);
+
+        byte[] shopBytes = new byte[] {71, 72, 73};
+        File shop = new File(tmp.newFolder("lazy-inwindow-exec-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 3);
+
+        ThreadPoolExecutor tpe = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        try {
+            // 1. TCP transport (bound and unbound lazy capture in W1 -> W2 invoke -> W3 clean).
+            for (String methodName : new String[] {"callBound", "callUnbound"}) {
+                lazyCaller.getMethod("reset").invoke(null);
+                KeployDedupAgent.transformerAdded = true;
+                KeployDedupAgent.executorCallSitesEnabled = true;
+                KeployDedupAgent.observedNoServerEntry.set(false);
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                ServerEntries.restoreCounted(Collections.<String>emptySet());
+                ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+                collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+                collector.setSoTimeout(30000);
+                System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+                System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+                assertTrue(KeployDedupAgent.start());
+                try {
+                    try (Socket sdk = collector.accept()) {
+                        sdk.setSoTimeout(30000);
+                        OutputStream out = sdk.getOutputStream();
+                        BufferedReader in = new BufferedReader(
+                                new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                        JsonObject initial = parseHello(in.readLine());
+                        assertTrue(methodName + " initial HELLO asyncExecutors=true",
+                                initial.get("asyncExecutors").getAsBoolean());
+                        send(out, "ACK_ID");
+
+                        // W1: lazy capture inside request window -> contaminates W1 AND refreshes HELLO before COV!
+                        send(out, "START ts/w1");
+                        assertEquals("ACK ts/w1", in.readLine());
+                        CountDownLatch w1Ran = new CountDownLatch(1);
+                        Object tok1 = RequestGate.enter();
+                        try {
+                            probes[1] = true;
+                            lazyCaller.getMethod(methodName, Executor.class, Runnable.class)
+                                    .invoke(null, tpe, (Runnable) w1Ran::countDown);
+                        } finally {
+                            RequestGate.exit(tok1);
+                        }
+                        assertTrue(w1Ran.await(5, TimeUnit.SECONDS));
+                        send(out, "END ts/w1");
+                        JsonObject refreshed = parseHello(in.readLine());
+                        assertTrue(methodName + " keeps windowCut=true",
+                                refreshed.get("windowCut").getAsBoolean());
+                        assertFalse(methodName + " W1 in-window capture must refresh HELLO asyncExecutors=false BEFORE COV",
+                                refreshed.get("asyncExecutors").getAsBoolean());
+                        String cov1 = in.readLine();
+                        assertTrue(methodName + " W1 COV must carry untracked-executor: " + cov1,
+                                cov1.contains("untracked-executor:"));
+                        assertEquals("ACK ts/w1", in.readLine());
+
+                        // W2: invokes already-cached ref -> HELLO already says asyncExecutors=false (never reverts).
+                        send(out, "START ts/w2");
+                        assertEquals("ACK ts/w2", in.readLine());
+                        CountDownLatch w2Ran = new CountDownLatch(1);
+                        Object tok2 = RequestGate.enter();
+                        try {
+                            probes[1] = true;
+                            lazyCaller.getMethod(methodName, Executor.class, Runnable.class)
+                                    .invoke(null, tpe, (Runnable) () -> {
+                                        probes[0] = true;
+                                        w2Ran.countDown();
+                                    });
+                        } finally {
+                            RequestGate.exit(tok2);
+                        }
+                        assertTrue(w2Ran.await(5, TimeUnit.SECONDS));
+                        send(out, "END ts/w2");
+                        assertTrue(in.readLine().startsWith("COV "));
+                        assertEquals("ACK ts/w2", in.readLine());
+                    }
+
+                    // Reconnect keeps asyncExecutors=false permanently latched.
+                    try (Socket sdk2 = collector.accept()) {
+                        sdk2.setSoTimeout(30000);
+                        BufferedReader in2 = new BufferedReader(
+                                new InputStreamReader(sdk2.getInputStream(), StandardCharsets.UTF_8));
+                        JsonObject reconn = parseHello(in2.readLine());
+                        assertFalse(methodName + " reconnect keeps asyncExecutors=false",
+                                reconn.get("asyncExecutors").getAsBoolean());
+                    }
+                } finally {
+                    KeployDedupAgent.stop();
+                    collector.close();
+                    collector = null;
+                    System.clearProperty(ENDPOINT_PROPERTY);
+                }
+            }
+
+            // 2. Unix transport: lazy in-window capture flips END ACK caps to asyncExecutors=false.
+            lazyCaller.getMethod("reset").invoke(null);
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            File sockDir = tmp.newFolder("unix-lazy-inwindow");
+            KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+            KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+            org.newsclub.net.unix.AFUNIXServerSocket dataServer =
+                    org.newsclub.net.unix.AFUNIXServerSocket.newInstance();
+            dataServer.bind(org.newsclub.net.unix.AFUNIXSocketAddress.of(new File(KeployDedupAgent.dataSocketPath)));
+            Thread dataReader = new Thread(() -> {
+                while (!dataServer.isClosed()) {
+                    try (Socket conn = dataServer.accept();
+                         BufferedReader r = new BufferedReader(
+                                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        while (r.readLine() != null) {
+                            // Drain.
+                        }
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, "unix-lazy-inwindow-reader");
+            dataReader.setDaemon(true);
+            dataReader.start();
+            try {
+                assertTrue(KeployDedupAgent.start());
+                String start1 = sendUnixControl("START ts/u-lazy-1");
+                assertTrue("Unix START before lazy capture reports asyncExecutors=true: " + start1,
+                        start1.contains("asyncExecutors=true"));
+                CountDownLatch ran = new CountDownLatch(1);
+                Object tok = RequestGate.enter();
+                try {
+                    lazyCaller.getMethod("callBound", Executor.class, Runnable.class)
+                            .invoke(null, tpe, (Runnable) ran::countDown);
+                } finally {
+                    RequestGate.exit(tok);
+                }
+                assertTrue(ran.await(5, TimeUnit.SECONDS));
+                String end1 = sendUnixControl("END ts/u-lazy-1");
+                assertTrue("Unix END after in-window lazy capture must report asyncExecutors=false: " + end1,
+                        end1.contains("asyncExecutors=false"));
+                String start2 = sendUnixControl("START ts/u-lazy-2");
+                assertTrue("Unix W2 stays asyncExecutors=false: " + start2,
+                        start2.contains("asyncExecutors=false"));
+            } finally {
+                KeployDedupAgent.stop();
+                dataServer.close();
+            }
+        } finally {
+            tpe.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void asyncMethodRefsThreadStartCfRunAsyncAndScheduleLatchAndContaminate() throws Exception {
+        Class<?> threadCaller = rewriteClassWithWrapExecutorCalls(AsyncMethodRefThreadStartCaller.class);
+        Class<?> cfCaller = rewriteClassWithWrapExecutorCalls(AsyncMethodRefCfRunAsyncCaller.class);
+        Class<?> schedCaller = rewriteClassWithWrapExecutorCalls(AsyncMethodRefScheduleCaller.class);
+
+        byte[] shopBytes = new byte[] {74, 75, 76};
+        File shop = new File(tmp.newFolder("async-mref-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+
+        java.util.concurrent.ScheduledExecutorService sched =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        try {
+            KeployDedupAgent.transformerAdded = true;
+            KeployDedupAgent.executorCallSitesEnabled = true;
+            KeployDedupAgent.observedNoServerEntry.set(false);
+            ServerEntries.restoreCounted(Collections.<String>emptySet());
+            ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+            String[][] cases = new String[][] {
+                {"thread", "untracked-async:method-ref:java.lang.Thread.start"},
+                {"cf", "untracked-async:method-ref:java.util.concurrent.CompletableFuture.runAsync"},
+                {"sched", "untracked-async:method-ref:java.util.concurrent.ScheduledExecutorService.schedule"}
+            };
+            for (String[] tc : cases) {
+                String kind = tc[0];
+                String wantReason = tc[1];
+
+                // 1. Disarmed capture -> latches asyncExecutors=false on TCP HELLO.
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.disarm();
+                invokeAsyncMethodRefCapture(kind, threadCaller, cfCaller, schedCaller, sched);
+                assertTrue(kind + " disarmed capture must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+                JsonObject hDisarmed = parseHello(connectAndReadHello(true));
+                assertFalse(kind + " disarmed HELLO must say asyncExecutors=false",
+                        hDisarmed.get("asyncExecutors").getAsBoolean());
+
+                // 2. Armed outside-window capture -> latches asyncExecutors=false on Unix ACK.
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.arm();
+                invokeAsyncMethodRefCapture(kind, threadCaller, cfCaller, schedCaller, sched);
+                assertTrue(kind + " armed-outside capture must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+                File sockDir = tmp.newFolder("unix-async-mref-" + kind);
+                KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+                KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+                System.clearProperty(ENDPOINT_PROPERTY);
+                System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+                assertTrue(KeployDedupAgent.start());
+                try {
+                    String ack = sendUnixControl("START ts/u-mref-" + kind);
+                    assertTrue(kind + " Unix ACK must say asyncExecutors=false: " + ack,
+                            ack.startsWith("ACK proto=3") && ack.contains("asyncExecutors=false"));
+                } finally {
+                    KeployDedupAgent.stop();
+                }
+
+                // 3. Armed inside-window capture -> contaminates window with wantReason AND latches!
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.disarm();
+                RequestGate.open("mref-async-" + kind, null);
+                Object tok = RequestGate.enter();
+                try {
+                    invokeAsyncMethodRefCapture(kind, threadCaller, cfCaller, schedCaller, sched);
+                } finally {
+                    RequestGate.exit(tok);
+                }
+                RequestGate.WindowOutcome out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+                assertTrue(kind + " in-window capture must contaminate with " + wantReason + ": " + out.contaminations,
+                        out.contaminations.contains(wantReason));
+                assertTrue(kind + " in-window capture must also latch asyncExecutors=false",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            }
+        } finally {
+            sched.shutdownNow();
+        }
+    }
+
+    private static byte[] readClassBytes(Class<?> cls) throws IOException {
+        String resource = cls.getName().replace('.', '/') + ".class";
+        try (java.io.InputStream in = cls.getClassLoader().getResourceAsStream(resource)) {
+            assertNotNull("class bytes not found for " + resource, in);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    private static void invokeAsyncMethodRefCapture(String kind, Class<?> threadCaller, Class<?> cfCaller,
+            Class<?> schedCaller, java.util.concurrent.ScheduledExecutorService sched) throws Exception {
+        if ("thread".equals(kind)) {
+            threadCaller.getMethod("capture").invoke(null);
+        } else if ("cf".equals(kind)) {
+            cfCaller.getMethod("capture").invoke(null);
+        } else {
+            schedCaller.getMethod("capture", java.util.concurrent.ScheduledExecutorService.class).invoke(null, sched);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void springMulticasterPlainPoolAndUnhookedLibraryAsyncDispatchersDropAsyncExecutors() throws Exception {
+        byte[] shopBytes = new byte[] {77, 78, 79};
+        File shop = new File(tmp.newFolder("unhooked-async-dispatchers"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+
+        KeployDedupAgent.transformerAdded = true;
+        KeployDedupAgent.executorCallSitesEnabled = true;
+        KeployDedupAgent.observedNoServerEntry.set(false);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreCounted(Collections.<String>emptySet());
+        ServerEntries.restoreUncounted(Collections.<String>emptySet());
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+
+        // 1. Spring SimpleApplicationEventMulticaster.setTaskExecutor bytecode hook:
+        //    - null, SyncTaskExecutor, and hooked ThreadPoolTaskExecutor (initialized OR pending init) keep asyncExecutors=true.
+        //    - plain JDK ThreadPoolExecutor latches asyncExecutors=false (both disarmed and armed) and contaminates inside window.
+        byte[] multicasterBytes = readClassBytes(
+                org.springframework.context.event.SimpleApplicationEventMulticaster.class);
+        byte[] hookedBytes = ServerEntries.wrapSpringEventMulticaster(multicasterBytes);
+        assertNotNull("SimpleApplicationEventMulticaster.setTaskExecutor must be instrumented", hookedBytes);
+        // Re-wrapping must be idempotent.
+        byte[] hookedAgain = ServerEntries.wrapSpringEventMulticaster(hookedBytes);
+        assertNotNull(hookedAgain);
+
+        ClassLoader loader = new ClassLoader(getClass().getClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if ("org.springframework.context.event.SimpleApplicationEventMulticaster".equals(name)) {
+                    Class<?> c = defineClass(name, hookedBytes, 0, hookedBytes.length);
+                    if (resolve) {
+                        resolveClass(c);
+                    }
+                    return c;
+                }
+                return super.loadClass(name, resolve);
+            }
+        };
+        Class<?> hookedMulticaster = loader.loadClass(
+                "org.springframework.context.event.SimpleApplicationEventMulticaster");
+        Object mc = hookedMulticaster.getConstructor().newInstance();
+        java.lang.reflect.Method setExec = hookedMulticaster.getMethod("setTaskExecutor", Executor.class);
+
+        org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springPool =
+                new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+        ThreadPoolExecutor plainPool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        try {
+            ServerEntries.markSpringExecutorHookedForTests(springPool.getClass().getName());
+            RequestGate.disarm();
+            setExec.invoke(mc, new Object[] {null});
+            setExec.invoke(mc, new org.springframework.core.task.SyncTaskExecutor());
+            // Pending-init hooked Spring ThreadPoolTaskExecutor must NOT falsely latch!
+            setExec.invoke(mc, springPool);
+            springPool.initialize();
+            setExec.invoke(mc, springPool);
+            assertFalse("null / SyncTaskExecutor / hooked Spring executor must NOT latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+            // Plain JDK ThreadPoolExecutor on SimpleApplicationEventMulticaster MUST latch while disarmed!
+            setExec.invoke(mc, plainPool);
+            assertTrue("SimpleApplicationEventMulticaster.setTaskExecutor(plainPool) must latch asyncExecutors=false",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            JsonObject hMc = parseHello(connectAndReadHello(true));
+            assertFalse("HELLO must report asyncExecutors=false after plain-pool multicaster",
+                    hMc.get("asyncExecutors").getAsBoolean());
+
+            // Inside an active window, it also contaminates!
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            RequestGate.disarm();
+            RequestGate.open("mc-plain-window", null);
+            Object tok = RequestGate.enter();
+            try {
+                setExec.invoke(mc, plainPool);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            RequestGate.WindowOutcome out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("in-window plain-pool setTaskExecutor must contaminate: " + out.contaminations,
+                    out.contaminations.contains("untracked-executor:" + ThreadPoolExecutor.class.getName()));
+            assertTrue("in-window plain-pool setTaskExecutor must also latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+        } finally {
+            ServerEntries.unmarkSpringExecutorHookedForTests(springPool.getClass().getName());
+            springPool.shutdown();
+            plainPool.shutdownNow();
+        }
+
+        // 2. Class-load detection for RxJava 1/2/3, Kotlin coroutines, OkHttp Dispatcher, and NIO AsynchronousChannelGroup.
+        ServerEntries transformer = new ServerEntries(true, Collections.singleton("com/acme/App"), null);
+        String[] unhookedInternalNames = new String[] {
+            "rx/schedulers/Schedulers",
+            "io/reactivex/schedulers/Schedulers",
+            "io/reactivex/rxjava3/schedulers/Schedulers",
+            "kotlinx/coroutines/Dispatchers",
+            "okhttp3/Dispatcher",
+            "java/nio/channels/AsynchronousChannelGroup",
+            "sun/nio/ch/SimpleAsynchronousFileChannelImpl"
+        };
+        for (String internalName : unhookedInternalNames) {
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            transformer.transform(getClass().getClassLoader(), internalName, null, null, new byte[0]);
+            assertTrue("loading " + internalName + " must mark hasUnhookedAsyncDispatcher",
+                    ServerEntries.hasUnhookedAsyncDispatcher());
+            JsonObject h = parseHello(connectAndReadHello(true));
+            assertFalse("HELLO must report asyncExecutors=false after loading " + internalName,
+                    h.get("asyncExecutors").getAsBoolean());
+        }
+
+        // 3. App-class constant-pool scan catches JDK AsynchronousFileChannel even when JDK class loaded before premain!
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        byte[] nioAppBytes = readClassBytes(FakeNioAsyncChannelApp.class);
+        transformer.transform(getClass().getClassLoader(), "com/acme/App", null, null, nioAppBytes);
+        assertTrue("app class referencing AsynchronousFileChannel must mark hasUnhookedAsyncDispatcher",
+                ServerEntries.hasUnhookedAsyncDispatcher());
+        JsonObject hNio = parseHello(connectAndReadHello(true));
+        assertFalse("HELLO must report asyncExecutors=false when app uses AsynchronousFileChannel",
+                hNio.get("asyncExecutors").getAsBoolean());
+    }
+
+    @Test(timeout = 60000)
+    public void helloRefreshFailureSendsFailClosedFallbackHelloAndTagsCovUnverifiedWhenLatched() throws Exception {
+        byte[] shopBytes = new byte[] {80, 81, 82};
+        File shop = new File(tmp.newFolder("hello-refresh-fail-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 2);
+
+        KeployDedupAgent.transformerAdded = true;
+        KeployDedupAgent.executorCallSitesEnabled = true;
+        KeployDedupAgent.observedNoServerEntry.set(false);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreCounted(Collections.<String>emptySet());
+        ServerEntries.restoreUncounted(Collections.<String>emptySet());
+
+        collector = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        collector.setSoTimeout(30000);
+        System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            JsonObject initial = parseHello(in.readLine());
+            assertTrue("initial HELLO starts honest", initial.get("asyncExecutors").getAsBoolean());
+            send(out, "ACK_ID");
+
+            // Latch asyncExecutors=false AND inject HELLO refresh failure on END!
+            send(out, "START ts/refresh-fail");
+            assertEquals("ACK ts/refresh-fail", in.readLine());
+            Object tok = RequestGate.enter();
+            try {
+                probes[1] = true;
+                KeployDedupAgent.noteObservedUntrackedMethodRef("java.util.concurrent.ThreadPoolExecutor::execute", true);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            KeployDedupAgent.testHelloFailure = new RuntimeException("simulated mid-session HELLO refresh failure");
+            try {
+                send(out, "END ts/refresh-fail");
+                // Must emit fail-closed all-false fallback HELLO before COV!
+                JsonObject fallback = parseHello(in.readLine());
+                assertFalse("fallback HELLO must set windowCut=false", fallback.get("windowCut").getAsBoolean());
+                assertFalse("fallback HELLO must set asyncExecutors=false",
+                        fallback.get("asyncExecutors").getAsBoolean());
+                String cov = in.readLine();
+                assertTrue("COV must carry unverified untracked-async backstop on HELLO refresh failure: " + cov,
+                        cov.contains("\"unverified\":[\"untracked-async\"]"));
+                assertEquals("ACK ts/refresh-fail", in.readLine());
+            } finally {
+                KeployDedupAgent.testHelloFailure = null;
+            }
         }
     }
 
@@ -4424,7 +4949,7 @@ public class HonestProtocolAndAsyncTest {
         // in ServerEntries.UNCOUNTED so initial HELLO starts with windowCut=true, asyncExecutors=true.
         KeployDedupAgent.transformerAdded = true;
         KeployDedupAgent.executorCallSitesEnabled = true;
-        KeployDedupAgent.observedNoServerEntry = false;
+        KeployDedupAgent.observedNoServerEntry.set(false);
         ServerEntries.restoreCounted(Collections.<String>emptySet());
         ServerEntries.restoreUncounted(Collections.<String>emptySet());
 

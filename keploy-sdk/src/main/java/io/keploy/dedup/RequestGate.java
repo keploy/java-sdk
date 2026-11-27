@@ -3101,14 +3101,27 @@ public final class RequestGate {
         noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
     }
 
+    private static void recordUntrackedMethodRef(String reason, String target) {
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            KeployDedupAgent.noteObservedUntrackedMethodRef(target, false);
+            return;
+        }
+        KeployDedupAgent.noteObservedUntrackedMethodRef(target, true);
+        if (INSIDE.get() != null || JobGate.runningAttribution() != null || JobGate.expiredRunningName() != null) {
+            noteUntrackedAsync(reason, 0L);
+        }
+    }
+
     /**
      * Checks at runtime whether a bound {@code execute(Runnable)} method
      * reference receiver is an untracked {@link Executor}, ignoring
      * non-{@link Executor} helpers, allow-listed same-thread inline executors,
-     * and hooked/verified Spring executors. When captured outside any active
-     * request window or tracked job (including before arming), permanently
-     * latches {@code asyncExecutors=false} because later invocations through
-     * the captured lambda bypass rewritten call sites.
+     * and hooked/verified Spring executors. Permanently latches
+     * {@code asyncExecutors=false} on any capture of a real untracked executor
+     * reference (inside or outside a window, because the captured lambda may be
+     * stored and invoked in later windows), and contaminates the active window
+     * or tracked job when captured inside one.
      *
      * @param receiver captured receiver of {@code execute(Runnable)} method reference
      */
@@ -3120,16 +3133,7 @@ public final class RequestGate {
             return;
         }
         String name = receiver.getClass().getName();
-        if (!armed) {
-            noteUnarmedHandOffIfInFlight();
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        noteUntrackedAsync("untracked-executor:" + name, 0L);
+        recordUntrackedMethodRef("untracked-executor:" + name, name + "::execute");
     }
 
     /**
@@ -3137,9 +3141,10 @@ public final class RequestGate {
      * receiver is an untracked {@link ExecutorService},
      * {@link CompletionService}, or Spring {@code AsyncTaskExecutor}, ignoring
      * non-executor helpers, allow-listed same-thread inline executors, and
-     * hooked/verified Spring executors. When captured outside any active
-     * request window or tracked job (including before arming), permanently
-     * latches {@code asyncExecutors=false}.
+     * hooked/verified Spring executors. Permanently latches
+     * {@code asyncExecutors=false} on any capture of a real untracked executor
+     * reference and contaminates the active window or tracked job when captured
+     * inside one.
      *
      * @param receiver captured receiver of {@code submit*} method reference
      */
@@ -3153,25 +3158,16 @@ public final class RequestGate {
             return;
         }
         String name = receiver.getClass().getName();
-        if (!armed) {
-            noteUnarmedHandOffIfInFlight();
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        noteUntrackedAsync("untracked-executor:" + name, 0L);
+        recordUntrackedMethodRef("untracked-executor:" + name, name + "::submit");
     }
 
     /**
      * Checks at runtime whether the owner class of an unbound
      * {@code execute(Runnable)} method reference is an untracked
      * {@link Executor}, ignoring non-{@link Executor} types and allow-listed
-     * same-thread inline executors. When captured outside any active request
-     * window or tracked job (including before arming), permanently latches
-     * {@code asyncExecutors=false}.
+     * same-thread inline executors. Permanently latches
+     * {@code asyncExecutors=false} on any capture and contaminates the active
+     * window or tracked job when captured inside one.
      *
      * @param owner declaring owner class of the method reference
      */
@@ -3183,25 +3179,16 @@ public final class RequestGate {
             return;
         }
         String name = owner.getName();
-        if (!armed) {
-            noteUnarmedHandOffIfInFlight();
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        noteUntrackedAsync("untracked-executor:" + name, 0L);
+        recordUntrackedMethodRef("untracked-executor:" + name, name + "::execute");
     }
 
     /**
      * Checks at runtime whether the owner class of an unbound {@code submit*}
      * method reference is an untracked {@link ExecutorService},
      * {@link CompletionService}, or Spring {@code AsyncTaskExecutor}, ignoring
-     * non-executor types and allow-listed same-thread inline executors. When
-     * captured outside any active request window or tracked job (including
-     * before arming), permanently latches {@code asyncExecutors=false}.
+     * non-executor types and allow-listed same-thread inline executors.
+     * Permanently latches {@code asyncExecutors=false} on any capture and
+     * contaminates the active window or tracked job when captured inside one.
      *
      * @param owner declaring owner class of the method reference
      */
@@ -3216,23 +3203,15 @@ public final class RequestGate {
             return;
         }
         String name = owner.getName();
-        if (!armed) {
-            noteUnarmedHandOffIfInFlight();
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(name);
-            return;
-        }
-        noteUntrackedAsync("untracked-executor:" + name, 0L);
+        recordUntrackedMethodRef("untracked-executor:" + name, name + "::submit");
     }
 
     /**
-     * Records an untracked async method reference capture. Inside an active
-     * request window or tracked job it contaminates that window; outside any
-     * window or job (including before arming) it permanently latches
-     * {@code asyncExecutors=false}.
+     * Records an untracked async method reference capture (e.g.
+     * {@code Thread::start}, {@code CompletableFuture::runAsync},
+     * {@code ScheduledExecutorService::schedule}). Permanently latches
+     * {@code asyncExecutors=false} on any capture and contaminates the active
+     * window or tracked job when captured inside one.
      *
      * @param reason contamination reason label describing the method reference
      */
@@ -3240,16 +3219,41 @@ public final class RequestGate {
         if (reason == null || reason.isEmpty()) {
             return;
         }
+        String api = reason.startsWith("untracked-async:method-ref:")
+                ? reason.substring("untracked-async:method-ref:".length())
+                : reason;
+        recordUntrackedMethodRef(reason, api);
+    }
+
+    /**
+     * Called from Spring's {@code SimpleApplicationEventMulticaster.setTaskExecutor}
+     * hook. Allows {@code null}, allow-listed inline executors, and hooked
+     * Spring executors; for any other executor (such as a plain JDK
+     * {@code ThreadPoolExecutor}), latches {@code asyncExecutors=false} so
+     * untracked Spring-to-JDK-pool event hand-offs never report honest.
+     *
+     * @param executor executor configured on the multicaster
+     */
+    public static void noteSpringMulticasterTaskExecutor(Object executor) {
+        if (executor == null) {
+            return;
+        }
+        if (OrderedPools.isInlineExecutor(executor)
+                || OrderedPools.isHookedSpringExecutorOrPendingInit(executor)) {
+            return;
+        }
+        String name = executor.getClass().getName();
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(reason);
+            KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                    "Spring SimpleApplicationEventMulticaster with " + name, false);
             return;
         }
-        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            KeployDedupAgent.noteObservedPreCapturedUntrackedExecutor(reason);
-            return;
+        KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                "Spring SimpleApplicationEventMulticaster with " + name, true);
+        if (INSIDE.get() != null || JobGate.runningAttribution() != null || JobGate.expiredRunningName() != null) {
+            noteUntrackedAsync("untracked-executor:" + name, 0L);
         }
-        noteUntrackedAsync(reason, 0L);
     }
 
     /**

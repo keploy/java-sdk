@@ -264,6 +264,53 @@ final class OrderedPools {
         }
     }
 
+    // Variant for Spring configuration hooks (e.g. SimpleApplicationEventMulticaster.setTaskExecutor)
+    // that may run before a Spring ThreadPoolTaskExecutor/ThreadPoolTaskScheduler is initialized:
+    // returns true when the executor extends a hooked Spring executor class without overriding
+    // execute/submit/doExecute AND either passes !orders(executor) now or is not yet initialized
+    // (in which case its hooked execute() verifies orders(executor) on every invocation).
+    static boolean isHookedSpringExecutorOrPendingInit(Object executor) {
+        if (executor == null) {
+            return false;
+        }
+        Class<?> cls = executor.getClass();
+        String hookedBase = null;
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            String name = c.getName();
+            if (SPRING_POOL.equals(name)
+                    || SPRING_SCHEDULER.equals(name)
+                    || SPRING_CONCURRENT.equals(name)
+                    || SPRING_SIMPLE_ASYNC.equals(name)) {
+                hookedBase = name;
+                break;
+            }
+        }
+        if (hookedBase == null || !ServerEntries.isSpringExecutorHooked(hookedBase)) {
+            return false;
+        }
+        try {
+            if (Boolean.TRUE.equals(OVERRIDES_SPRING_SUBMIT.get(cls))) {
+                return false;
+            }
+            if (SPRING_POOL.equals(hookedBase) || SPRING_SCHEDULER.equals(hookedBase)) {
+                Object m = (SPRING_POOL.equals(hookedBase) ? POOL : SCHEDULED_POOL).get(cls);
+                if (m instanceof Method) {
+                    try {
+                        ((Method) m).invoke(executor);
+                    } catch (InvocationTargetException ite) {
+                        if (ite.getCause() instanceof IllegalStateException) {
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+            }
+            return !orders(executor);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     // Whether a ThreadPoolExecutor subclass overrides beforeExecute,
     // afterExecute, newTaskFor, execute, submit, or (for
     // ScheduledThreadPoolExecutor) decorateTask, which may cast the queued

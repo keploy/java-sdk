@@ -185,8 +185,9 @@ public final class SmokeHarness {
         // Keploy fires its first test as soon as the app answers a health
         // check, so the agent has to be listening before main runs. This START
         // is main's first act and nothing waits for the control socket: an
-        // agent that binds it any later fails here.
-        command("START test-set-0/" + mode);
+        // agent that binds it any later fails here. Before any serverless END
+        // runs, windowCut is still true.
+        command("START test-set-0/" + mode, true);
 
         delete(DATA_SOCKET);
 
@@ -218,7 +219,9 @@ public final class SmokeHarness {
         if (Work.exercise(1) != 4) {
             throw new IllegalStateException("unexpected application result");
         }
-        command("END test-set-0/" + mode);
+        // Serverless END records probes with enteredCount == 0, latching
+        // windowCut=false (and asyncExecutors=false) for the rest of the JVM.
+        command("END test-set-0/" + mode, false);
 
         String json = next(records, mode);
         String report = null;
@@ -230,10 +233,15 @@ public final class SmokeHarness {
         // e.g. "smoke/Work" — not a source file like "Work.java". JaCoCo's id
         // of each class the app ran is the id of the bytes the index read,
         // so the record names no class in classMismatch: one named here
-        // would lose that class's coverage in Keploy.
+        // would lose that class's coverage in Keploy. Serverless runs also
+        // carry exact trailing "unverified":["no-server-entry"] with no
+        // contaminated or windowCut flags.
         if (!json.contains("\"id\":\"test-set-0/" + mode + "\"")
                 || !json.contains("smoke/Work")
-                || json.contains("\"classMismatch\"")) {
+                || json.contains("\"classMismatch\"")
+                || json.contains("\"contaminated\"")
+                || json.contains("\"windowCut\"")
+                || !json.endsWith("},\"unverified\":[\"no-server-entry\"]}")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
         if (report == null
@@ -303,16 +311,18 @@ public final class SmokeHarness {
         URLClassLoader loader = new URLClassLoader(new URL[] {new File(dir).toURI().toURL()}, null);
         try {
             Class<?> other = Class.forName("smoke.Work", false, loader);
-            command("START " + id);
+            command("START " + id, false);
             Object result = other.getMethod("exercise", int.class).invoke(null, 1);
-            command("END " + id);
+            command("END " + id, false);
             if (!Integer.valueOf(3).equals(result)) {
                 throw new IllegalStateException("the copy in " + dir + " did not run in " + mode + ": " + result);
             }
             String json = next(records, mode);
             if (!json.contains("\"id\":\"" + id + "\"")
                     || !json.contains("\"smoke/Work\":[")
-                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]")) {
+                    || json.contains("\"contaminated\"")
+                    || json.contains("\"windowCut\"")
+                    || !json.endsWith(",\"classMismatch\":[\"smoke/Work\"],\"unverified\":[\"no-server-entry\"]}")) {
                 throw new IllegalStateException("the record of a test that ran another copy of smoke/Work does"
                         + " not name it, alone, in classMismatch in " + mode + ": " + json);
             }
@@ -375,17 +385,22 @@ public final class SmokeHarness {
         }
     }
 
-    private static void command(String command) throws Exception {
+    private static void command(String command, boolean wantWindowCut) throws Exception {
         try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
             socket.connect(AFUNIXSocketAddress.of(CONTROL_SOCKET), 3000);
             OutputStream output = socket.getOutputStream();
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
-            // The whole answer: one line saying the command was taken (proto=3
-            // with capability flags), then the close.
+            // The whole answer: one line saying the command was taken (exact
+            // proto=3 caps grammar with pinned windowCut state), then the close.
             String ack = readAll(socket.getInputStream());
-            if (!ack.startsWith("ACK proto=3 ") || !ack.contains("caps=") || !ack.endsWith("\n")) {
-                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            String pattern = "^ACK proto=3 caps=windowCut=" + wantWindowCut
+                    + ",contaminated=true,classMismatch=true,background=(true|false),ackId=true,asyncExecutors="
+                    + (wantWindowCut ? "(true|false)" : "false")
+                    + ",listenerContamination=(true|false)\\n$";
+            if (!ack.matches(pattern)) {
+                throw new IllegalStateException("unexpected ACK for " + command + " (wantWindowCut="
+                        + wantWindowCut + "): " + ack);
             }
         }
     }
@@ -750,10 +765,14 @@ public final class TomcatHarness {
                 || !json.contains("\"id\":\"" + id + "\"")
                 || !json.contains("\"" + ADAPTER + "\":[")
                 || !json.contains("\"smoke/TomcatHarness$Tail\":[")
-                || json.contains("\"classMismatch\"")) {
+                || json.contains("\"classMismatch\"")
+                || json.contains("\"unverified\"")
+                || json.contains("\"contaminated\"")
+                || json.contains("\"windowCut\"")) {
             throw new IllegalStateException("the record of a request to Tomcat, with JaCoCo attached after"
                     + " keploy-sdk.jar, does not measure " + ADAPTER + " and the servlet's code after the"
-                    + " response with no class in classMismatch in " + mode + " (body " + body + "): " + json);
+                    + " response with no class in classMismatch or unverified/contaminated/windowCut in "
+                    + mode + " (body " + body + "): " + json);
         }
         System.out.println(mode + ": " + json);
         tomcat.stop();
@@ -781,8 +800,11 @@ public final class TomcatHarness {
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
             String ack = readAll(socket.getInputStream());
-            if (!ack.startsWith("ACK proto=3 ") || !ack.contains("caps=") || !ack.endsWith("\n")) {
-                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            String pattern = "^ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
+                    + "background=(true|false),ackId=true,asyncExecutors=(true|false),"
+                    + "listenerContamination=(true|false)\\n$";
+            if (!ack.matches(pattern)) {
+                throw new IllegalStateException("unexpected ACK for " + command + ": " + ack);
             }
         }
     }

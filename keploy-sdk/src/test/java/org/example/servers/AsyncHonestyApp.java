@@ -89,7 +89,10 @@ public final class AsyncHonestyApp {
         String mode = args[0];
         AutoCloseable server;
         int port;
-        if ("tomcat".equals(mode)) {
+        if ("tomcat".equals(mode) || "precaptured-tomcat".equals(mode)) {
+            if ("precaptured-tomcat".equals(mode)) {
+                PreCapturedDispatcher.touch();
+            }
             File base = Files.createTempDirectory("tomcat-honesty").toFile();
             Tomcat tomcat = new Tomcat();
             tomcat.setBaseDir(base.getPath());
@@ -240,6 +243,19 @@ public final class AsyncHonestyApp {
                 });
             } else if ("/method-ref".equals(path)) {
                 Collections.<Runnable>singletonList(() -> AsyncTail.ran()).forEach(PLAIN_POOL::execute);
+            } else if ("/lazy-method-ref".equals(path)) {
+                LazyInWindowDispatcher.dispatch(PLAIN_POOL, () -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("/spring-multicaster-plain".equals(path)) {
+                org.springframework.context.event.SimpleApplicationEventMulticaster mc =
+                        new org.springframework.context.event.SimpleApplicationEventMulticaster();
+                mc.setTaskExecutor(PLAIN_POOL);
+                AsyncTail.ran();
+            } else if ("/nio-async-file".equals(path)) {
+                NioAsyncFileHelper.touch();
+                AsyncTail.ran();
             } else if ("/virtual-thread-latch".equals(path)) {
                 final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
                 VIRTUAL_RELEASE_LATCH = release;
@@ -289,6 +305,36 @@ public final class AsyncHonestyApp {
             resp.setContentLength(body.length);
             resp.getOutputStream().write(body);
             resp.flushBuffer();
+        }
+    }
+
+    public static final class PreCapturedDispatcher {
+        private static final java.util.function.Consumer<Runnable> DISPATCH = PLAIN_POOL::execute;
+
+        public static void touch() {
+            DISPATCH.accept(() -> { });
+        }
+    }
+
+    public static final class LazyInWindowDispatcher {
+        private static volatile java.util.function.Consumer<Runnable> cached;
+
+        public static void dispatch(java.util.concurrent.Executor pool, Runnable task) {
+            if (cached == null) {
+                cached = pool::execute;
+            }
+            cached.accept(task);
+        }
+    }
+
+    public static final class NioAsyncFileHelper {
+        public static void touch() throws IOException {
+            File f = File.createTempFile("keploy-nio-honesty", ".tmp");
+            f.deleteOnExit();
+            try (java.nio.channels.AsynchronousFileChannel ch = java.nio.channels.AsynchronousFileChannel.open(
+                    f.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ch.size();
+            }
         }
     }
 

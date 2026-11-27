@@ -345,6 +345,63 @@ public class ForkedAsyncAndHonestyTest {
     }
 
     @Test(timeout = 120000)
+    public void forkedPreCapturedAndLazyMethodRefsAndLibraryHandOffsDropAsyncExecutorsAcrossReconnect()
+            throws Exception {
+        // 1. Pre-captured field Consumer<Runnable> dispatch = pool::execute initialized at startup
+        //    latches asyncExecutors=false in HELLO and stays false across TCP reconnect.
+        try (ForkedApp app = startFork("precaptured-tomcat", "2000", false, false, null, null)) {
+            // Trigger one START/END to ensure any startup-captured latch is reflected in HELLO.
+            app.runHttpTest("ts/pre-1", "/clean");
+            JsonObject latest = parseHello(app.lastHello);
+            assertTrue("windowCut stays true on Tomcat", latest.get("windowCut").getAsBoolean());
+            assertFalse("startup pre-captured pool::execute must latch asyncExecutors=false: " + app.lastHello,
+                    latest.get("asyncExecutors").getAsBoolean());
+
+            String reconnHello = app.reconnectAndReadHello();
+            JsonObject reconn = parseHello(reconnHello);
+            assertTrue("windowCut stays true across reconnect", reconn.get("windowCut").getAsBoolean());
+            assertFalse("asyncExecutors=false must stay latched across reconnect: " + reconnHello,
+                    reconn.get("asyncExecutors").getAsBoolean());
+        }
+
+        // 2. Lazy in-window capture (W1 captures pool::execute, W2 invokes cached ref) flips HELLO
+        //    to asyncExecutors=false before W1's COV and stays false across W2 and reconnect.
+        try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
+            JsonObject initial = parseHello(app.initialHello);
+            assertTrue("initial HELLO starts with asyncExecutors=true",
+                    initial.get("asyncExecutors").getAsBoolean());
+            String cov1 = app.runHttpTest("ts/lazy-w1", "/lazy-method-ref?ms=50");
+            assertTrue("W1 lazy capture must contaminate COV: " + cov1,
+                    cov1.contains("untracked-executor:"));
+            JsonObject afterW1 = parseHello(app.lastHello);
+            assertFalse("W1 lazy capture must refresh HELLO asyncExecutors=false: " + app.lastHello,
+                    afterW1.get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/lazy-w2", "/lazy-method-ref?ms=50");
+            JsonObject reconn = parseHello(app.reconnectAndReadHello());
+            assertFalse("lazy capture stays asyncExecutors=false across reconnect",
+                    reconn.get("asyncExecutors").getAsBoolean());
+        }
+
+        // 3. Spring SimpleApplicationEventMulticaster.setTaskExecutor(plainPool) drops asyncExecutors=false.
+        try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
+            assertTrue(parseHello(app.initialHello).get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/spring-mc", "/spring-multicaster-plain");
+            JsonObject afterMc = parseHello(app.lastHello);
+            assertFalse("Spring SimpleApplicationEventMulticaster with plain JDK pool must drop asyncExecutors=false: "
+                    + app.lastHello, afterMc.get("asyncExecutors").getAsBoolean());
+        }
+
+        // 4. JDK AsynchronousFileChannel usage drops asyncExecutors=false.
+        try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
+            assertTrue(parseHello(app.initialHello).get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/nio-afc", "/nio-async-file");
+            JsonObject afterNio = parseHello(app.lastHello);
+            assertFalse("JDK AsynchronousFileChannel must drop asyncExecutors=false: " + app.lastHello,
+                    afterNio.get("asyncExecutors").getAsBoolean());
+        }
+    }
+
+    @Test(timeout = 120000)
     public void forkedKafkaListenerHookEmitsTopicAndBeanAttributionInTcpCov() throws Exception {
         try (ForkedApp kafka = startFork("kafka", "2000", false, false, null, null)) {
             JsonObject hello = parseHello(kafka.initialHello);
@@ -367,6 +424,8 @@ public class ForkedAsyncAndHonestyTest {
         File classes = tmp.newFolder();
         for (Class<?> cls : new Class<?>[] {
                 AsyncHonestyApp.class, AsyncHonestyApp.AsyncServlet.class,
+                AsyncHonestyApp.PreCapturedDispatcher.class, AsyncHonestyApp.LazyInWindowDispatcher.class,
+                AsyncHonestyApp.NioAsyncFileHelper.class,
                 AsyncHonestyApp.SerializableOnlyExecutor.class, AsyncHonestyApp.ConcreteCustomPool.class,
                 AsyncHonestyApp.MyWorkerThread.class, AsyncHonestyApp.VirtualThreadLauncher.class,
                 AsyncHonestyApp.OrdersListenerBean.class, AsyncHonestyApp.FakeKafkaProps.class,
@@ -621,9 +680,9 @@ public class ForkedAsyncAndHonestyTest {
         final Process proc;
         final File log;
         final ServerSocket collector;
-        final Socket sdk;
-        final BufferedReader in;
-        final OutputStream out;
+        Socket sdk;
+        BufferedReader in;
+        OutputStream out;
         final int port;
         final String initialHello;
         String lastHello;
@@ -639,6 +698,21 @@ public class ForkedAsyncAndHonestyTest {
             this.port = port;
             this.initialHello = initialHello;
             this.lastHello = initialHello;
+        }
+
+        String reconnectAndReadHello() throws IOException {
+            try {
+                sdk.close();
+            } catch (IOException ignored) {
+            }
+            Socket next = collector.accept();
+            next.setSoTimeout(60000);
+            this.sdk = next;
+            this.in = new BufferedReader(new InputStreamReader(next.getInputStream(), StandardCharsets.UTF_8));
+            this.out = next.getOutputStream();
+            String hello = this.in.readLine();
+            this.lastHello = hello;
+            return hello;
         }
 
         String runHttpTest(String testId, String path) throws IOException {
