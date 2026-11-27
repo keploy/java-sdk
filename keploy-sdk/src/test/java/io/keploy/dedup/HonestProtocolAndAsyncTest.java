@@ -374,6 +374,35 @@ public class HonestProtocolAndAsyncTest {
             assertFalse("no contaminated field for old enterprise notMeasuredBy compat",
                     cov2.contains("\"contaminated\""));
             assertEquals("ACK ts/test-2", in.readLine());
+
+            // Gap after no-server-entry test-2 MUST suppress BACKGROUND on TCP and increment lost!
+            probes[0] = true;
+            send(out, "START ts/test-3");
+            assertEquals("ACK ts/test-3", in.readLine());
+            send(out, "NOP after-unverified-start");
+            assertEquals("no BACKGROUND emitted on TCP after no-server-entry test-2",
+                    "ACK after-unverified-start", in.readLine());
+
+            // Counted test-3 -> clean gap test-3->test-4 emits BACKGROUND carrying lost:1!
+            Object req3 = RequestGate.enter();
+            try {
+                probes[1] = true;
+            } finally {
+                RequestGate.exit(req3);
+            }
+            send(out, "END ts/test-3");
+            assertEquals("COV {\"id\":\"ts/test-3\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]}}",
+                    in.readLine());
+            assertEquals("ACK ts/test-3", in.readLine());
+
+            probes[0] = true;
+            send(out, "START ts/test-4");
+            assertEquals("ACK ts/test-4", in.readLine());
+            String bg34 = in.readLine();
+            assertTrue("clean TCP gap after test-3 must emit BACKGROUND with lost:1, got: " + bg34,
+                    bg34 != null && bg34.startsWith("BACKGROUND ")
+                            && bg34.contains("\"after\":\"ts/test-3\"")
+                            && bg34.contains("\"lost\":1"));
         } finally {
             DeferredRtLoader.agent = null;
         }

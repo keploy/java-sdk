@@ -119,10 +119,10 @@ public final class RequestGate {
     private static final long UNARMED_HANDOFF_THROTTLE_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     // Short grace for a Thread subclass registered right before start() while
     // still in Thread.State.NEW, and safety margin for Timer.cancel() wall-clock
-    // vs nanoTime() rounding (~1ms) so an already-firing one-shot task is never
-    // misclassified as cancelled-before-fire.
+    // vs nanoTime() rounding (covering Linux ~1ms and Windows ~15.6ms clock ticks)
+    // so an already-firing one-shot task is never misclassified as cancelled-before-fire.
     private static final long HANDLE_START_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
-    private static final long TIMER_CANCEL_MARGIN_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
+    private static final long TIMER_CANCEL_MARGIN_NANOS = TimeUnit.MILLISECONDS.toNanos(20);
     // Weakly-keyed maps of cancelled TimerTasks and Timers populated by rewritten
     // TimerTask.cancel() / Timer.cancel() call sites (zero JDK-internal reflection,
     // so no JDK 9-15 illegal-access warning when Keploy is absent).
