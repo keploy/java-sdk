@@ -296,37 +296,46 @@ public class ForkedAsyncAndHonestyTest {
 
         // External-JaCoCo prefix mode ("org/example/servers/") automatically rewrites
         // the dynamically defined org/example/servers/VirtualThreadHelper on load!
-        // Run each virtual thread for 2700ms and sleep 2200ms BEFORE /clean so the
-        // check occurs strictly PAST the default 2000ms untrackedTailWindowNanos,
-        // proving the post-call DUP + trackUntrackedThread liveness tracking end-to-end
-        // (and proving the window returns clean after the virtual thread exits).
+        // For each virtual-thread form:
+        //   1. Start a latch-held virtual thread during window 1 (assert untracked-async:*).
+        //   2. Immediately run a throwaway /clean window to CONSUME the one-time
+        //      untrackedTailReportedOnce report.
+        //   3. Sleep 2200ms (strictly past the default 2000ms untrackedTailWindowNanos)
+        //      while the virtual thread remains blocked on the latch.
+        //   4. Run /clean and assert tail:<window-1> — this CAN ONLY PASS if the
+        //      post-call DUP + trackUntrackedThread tracked Thread.isAlive().
+        //   5. Release the latch via /release-virtual and assert the next /clean is clean.
         try (ForkedApp app = startFork("tomcat", "2000", true, false, null, null)) {
-            String covDirect = app.runHttpTest("ts/vthread-1", "/virtual-thread?ms=2700");
+            String covDirect = app.runHttpTest("ts/vthread-1", "/virtual-thread-latch");
             assertTrue("Thread.startVirtualThread must contaminate COV (SF-D): " + covDirect,
                     covDirect.contains("\"untracked-async:virtual-thread\""));
 
-            Thread.sleep(2200); // Past default 2000ms base tail while virtual thread is still alive (~500ms left)!
-            String covAfterDirect = app.runHttpTest("ts/vthread-next", "/clean");
-            assertTrue("next window past 2s base tail while virtual thread is alive must carry tail (SF-D/SF-4): "
-                    + covAfterDirect,
+            // Consume one-time report so the later assertion genuinely depends on Thread.isAlive().
+            app.runHttpTest("ts/vthread-consume-once", "/clean");
+            Thread.sleep(2200); // Strictly past default 2000ms base tail while virtual thread is held on latch!
+            String covAfterDirect = app.runHttpTest("ts/vthread-still-alive", "/clean");
+            assertTrue("window past 2s base tail & after one-time report while virtual thread is alive "
+                    + "must carry tail (SF-D/SF-4): " + covAfterDirect,
                     covAfterDirect.contains("\"tail:ts/vthread-1\""));
 
-            Thread.sleep(800); // Virtual thread has now exited!
+            app.runHttpTest("ts/vthread-release", "/release-virtual");
             String covDirectDone = app.runHttpTest("ts/vthread-done", "/clean");
             assertFalse("window after virtual thread exits must be clean (SF-4): " + covDirectDone,
                     covDirectDone.contains("\"tail:ts/vthread-1\""));
 
-            String covBuilder = app.runHttpTest("ts/vbuilder-1", "/virtual-builder?ms=2700");
+            String covBuilder = app.runHttpTest("ts/vbuilder-1", "/virtual-builder-latch");
             assertTrue("Thread.ofVirtual().start() must contaminate COV (SF-D): " + covBuilder,
                     covBuilder.contains("\"untracked-async:thread-builder\""));
 
-            Thread.sleep(2200); // Past default 2000ms base tail while builder virtual thread is still alive!
-            String covAfterBuilder = app.runHttpTest("ts/vbuilder-next", "/clean");
-            assertTrue("next window past 2s base tail while builder virtual thread is alive must carry tail (SF-4): "
-                    + covAfterBuilder,
+            // Consume one-time report so the later assertion genuinely depends on Thread.isAlive().
+            app.runHttpTest("ts/vbuilder-consume-once", "/clean");
+            Thread.sleep(2200); // Strictly past default 2000ms base tail while builder virtual thread is held on latch!
+            String covAfterBuilder = app.runHttpTest("ts/vbuilder-still-alive", "/clean");
+            assertTrue("window past 2s base tail & after one-time report while builder virtual thread is alive "
+                    + "must carry tail (SF-4): " + covAfterBuilder,
                     covAfterBuilder.contains("\"tail:ts/vbuilder-1\""));
 
-            Thread.sleep(800); // Builder virtual thread has now exited!
+            app.runHttpTest("ts/vbuilder-release", "/release-virtual");
             String covBuilderDone = app.runHttpTest("ts/vbuilder-done", "/clean");
             assertFalse("window after builder virtual thread exits must be clean (SF-4): " + covBuilderDone,
                     covBuilderDone.contains("\"tail:ts/vbuilder-1\""));

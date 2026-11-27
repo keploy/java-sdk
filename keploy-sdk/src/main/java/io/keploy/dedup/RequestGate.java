@@ -355,10 +355,10 @@ public final class RequestGate {
         window.enteredCount.incrementAndGet();
         window.executing.incrementAndGet();
         window.running.incrementAndGet();
-        Window cur = current;
-        if (window != cur) {
+        if (window != current) {
             retainLingering(window, System.nanoTime());
-            if (cur != null) {
+            Window cur = current;
+            if (cur != null && cur != window) {
                 cur.contaminate("tail:" + window.label());
             }
         }
@@ -4476,6 +4476,11 @@ public final class RequestGate {
                 JobGate.exit(jt);
             }
         }
+
+        @Override
+        public String toString() {
+            return task.toString();
+        }
     }
 
     private static final class ScheduledContextCallable<V> implements Callable<V> {
@@ -4520,6 +4525,11 @@ public final class RequestGate {
             } finally {
                 JobGate.exit(jt);
             }
+        }
+
+        @Override
+        public String toString() {
+            return task.toString();
         }
     }
 

@@ -2266,6 +2266,9 @@ public class HonestProtocolAndAsyncTest {
             }
             assertTrue(rawStarted.await(5, TimeUnit.SECONDS));
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            // Consume one-time report first so the next window depends strictly on Thread.isAlive().
+            RequestGate.open("sfb-thread-consume-once", null);
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(80); // Past 30ms base tail while rawThread.isAlive() is STILL true!
             RequestGate.open("sfb-thread-still-alive", null);
             assertEquals("live raw thread must keep marking tail past base window (SF-B)",
@@ -2290,7 +2293,10 @@ public class HonestProtocolAndAsyncTest {
                 RequestGate.exit(reqP);
             }
             RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
-            Thread.sleep(100);
+            // Consume one-time report first so the next window depends strictly on !ScheduledFuture.isDone().
+            RequestGate.open("sfb-periodic-consume-once", null);
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            Thread.sleep(100); // Past 30ms base tail + 45ms delay/period while periodic is still uncancelled!
             RequestGate.open("sfb-periodic-alive", null);
             assertEquals("uncancelled periodic ScheduledFuture keeps marking tail (SF-B)",
                     Collections.singletonList("tail:sfb-periodic"),
@@ -2311,6 +2317,9 @@ public class HonestProtocolAndAsyncTest {
             CountDownLatch gen3Release = new CountDownLatch(1);
             CountDownLatch gen1Exited = new CountDownLatch(1);
             CountDownLatch gen2Exited = new CountDownLatch(1);
+            AtomicReference<String> gen1Running = new AtomicReference<>("unset");
+            AtomicReference<String> gen2Running = new AtomicReference<>("unset");
+            AtomicReference<String> gen3Running = new AtomicReference<>("unset");
             Object jTokC = JobGate.enter(new Object(), "scheduled");
             try {
                 RequestGate.execute(pool, () -> {
@@ -2319,18 +2328,18 @@ public class HonestProtocolAndAsyncTest {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                    assertNull("gen 1 expired", JobGate.running());
+                    gen1Running.set(JobGate.running());
                     RequestGate.execute(pool, () -> {
                         try {
                             gen1Exited.await(5, TimeUnit.SECONDS);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
-                        assertNull("gen 2 expired", JobGate.running());
+                        gen2Running.set(JobGate.running());
                         RequestGate.execute(pool, () -> {
                             try {
                                 gen2Exited.await(5, TimeUnit.SECONDS);
-                                assertNull("gen 3 expired", JobGate.running());
+                                gen3Running.set(JobGate.running());
                                 gen3Entered.countDown();
                                 gen3Release.await(5, TimeUnit.SECONDS);
                             } catch (InterruptedException e) {
@@ -2345,6 +2354,9 @@ public class HonestProtocolAndAsyncTest {
                 JobGate.exit(jTokC);
             }
             assertTrue("gen 3 entered after gen 1 and gen 2 exited", gen3Entered.await(10, TimeUnit.SECONDS));
+            assertNull("gen 1 expired so JobGate.running() must be null", gen1Running.get());
+            assertNull("gen 2 expired so JobGate.running() must be null", gen2Running.get());
+            assertNull("gen 3 expired so JobGate.running() must be null", gen3Running.get());
             long waitSingleRun = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (JobGate.activeRunCount() > 1 && System.nanoTime() < waitSingleRun) {
                 Thread.sleep(5);
@@ -2430,6 +2442,9 @@ public class HonestProtocolAndAsyncTest {
                 List<String> tsContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
                 assertTrue("rewritten TaskScheduler.schedule must flag (SF-E): " + tsContams,
                         tsContams.contains("untracked-async:schedule"));
+                // Consume one-time report first so the next window depends strictly on !ScheduledFuture.isDone().
+                RequestGate.open("sfe-ts-consume-once", null);
+                RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
                 Thread.sleep(60); // Past 30ms base tail while ScheduledFuture is still pending!
                 RequestGate.open("sfe-ts-alive", null);
                 assertEquals("TaskScheduler ScheduledFuture keeps tail active until cancelled (SF-B/SF-E)",
@@ -2658,6 +2673,9 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("one-shot Timer.schedule flags untracked-async:timer",
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:timer"));
+            // Consume one-time report first so the next window proves delay-extended expiry (> 30ms base tail).
+            RequestGate.open("sf2-timer-oneshot-consume-once", null);
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(75); // Past 30ms base tail, well before 180ms + 30ms extended tail!
             RequestGate.open("sf2-timer-oneshot-next", null);
             assertEquals("one-shot Timer delay must extend tail past base window (SF-2)",
@@ -2680,6 +2698,9 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("periodic Timer.scheduleAtFixedRate flags untracked-async:timer",
                     RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
                             .contains("untracked-async:timer"));
+            // Consume one-time report first so the next window depends strictly on periodic TimerTask liveness.
+            RequestGate.open("sf2-timer-periodic-consume-once", null);
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(100); // Past 30ms + 5ms + 25ms tail while TimerTask is still in Timer's queue!
             RequestGate.open("sf2-timer-periodic-alive", null);
             assertEquals("periodic TimerTask held by Timer queue keeps tail active (SF-2)",
@@ -2720,6 +2741,9 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("END must not block on delayed scheduled task (SF-3)", sf3Out.drained);
             assertTrue("SF-3 flags untracked-async:schedule", sf3Out.contaminations.contains("untracked-async:schedule"));
             assertTrue("gen 1 completed", gen1Done.await(5, TimeUnit.SECONDS));
+            // Consume one-time report first so the next window proves gen-2 ScheduledFuture / delay tracking!
+            RequestGate.open("sf3-gen2-consume-once", null);
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
             Thread.sleep(50); // Past gen 1 completion + 30ms base tail while gen 2 is still pending!
             RequestGate.open("sf3-while-gen2-pending", null);
             assertEquals("gen 2 ScheduledFuture tracked via propagated context keeps tail active (SF-3)",
