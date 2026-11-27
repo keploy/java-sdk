@@ -89,6 +89,27 @@ public class DedupWireFormatTest {
     }
 
     @Test
+    public void unverifiedNoServerEntrySitsOutsideContaminatedForEnterpriseCompat() {
+        Map<String, List<Integer>> probes = new LinkedHashMap<>();
+        probes.put("com/foo/Bar", Arrays.asList(0, 1));
+
+        // Uncounted-server window (e.g. WebFlux/gRPC/Armeria/Helidon):
+        // must carry NO "contaminated" key (so released enterprise DedupRecord.notMeasuredBy
+        // keeps measuring it) and MUST carry "unverified":["no-server-entry"] for v3 collectors.
+        String json = KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                Collections.<String>emptyList(), Collections.singletonList("no-server-entry"));
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]},"
+                + "\"unverified\":[\"no-server-entry\"]}", json);
+        assertTrue("must omit contaminated for old enterprise notMeasuredBy compat",
+                !json.contains("\"contaminated\""));
+
+        // Omitted when empty.
+        assertEquals("{\"id\":\"t\",\"executedLinesByFile\":{\"com/foo/Bar\":[0,1]}}",
+                KeployDedupAgent.toDedupJson("t", probes, Collections.<String>emptyList(), false,
+                        Collections.<String>emptyList(), Collections.<String>emptyList()));
+    }
+
+    @Test
     public void covPayloadWithNoCoverageSerializesEmptyMap() {
         String json = KeployDedupAgent.toDedupJson(
                 "test-set-0/empty", Collections.<String, List<Integer>>emptyMap());

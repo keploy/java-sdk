@@ -154,6 +154,18 @@ public final class JobGate {
         RequestGate.noteExternalUntrackedTail(reason, extraTailNanos);
     }
 
+    // Marks the currently open JobGate window without starting a blind
+    // time-based tail when the caller is tracking a concrete handle's liveness.
+    static void markUntrackedWindowOnly(String reason) {
+        if (reason == null || reason.isEmpty() || !RequestGate.isArmed()) {
+            return;
+        }
+        Window active = window;
+        if (active != null) {
+            active.mark(reason);
+        }
+    }
+
     // expiredAttribution returns an already-expired Attribution if this thread
     // is currently executing an expired handed-off job Run. Verified executors
     // wrap hand-offs with this expired Attribution so multi-hop self-resubmitting
@@ -301,15 +313,18 @@ public final class JobGate {
     // here on lands in the test. Handed-off tasks that have run past
     // handedJobMaxNanos are NOT forgotten while they are still executing:
     // they remain in RUNNING until exit() runs and mark every window opened
-    // while still alive with "job-tail:<name>".
-    static void open() {
+    // while still alive with "job-tail:<name>". Returns true if any expired
+    // job-tail run was added to the newly opened window.
+    static boolean open() {
         RequestGate.arm();
         long now = System.nanoTime();
         List<String> expired = null;
+        boolean hasJobTail = false;
         Window opened = new Window();
         window = opened;
         for (Run run : RUNNING) {
             if (run.isExpired(now)) {
+                hasJobTail = true;
                 opened.mark("job-tail:" + run.name);
                 if (EXPIRED_LOGGED.add(run.name)) {
                     if (expired == null) {
@@ -328,6 +343,7 @@ public final class JobGate {
                         + " ms; marking overlapping windows with job-tail:" + jobName + " until it finishes");
             }
         }
+        return hasJobTail;
     }
 
     // close ends the window, after its END read the test's hits, and names

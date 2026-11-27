@@ -73,6 +73,50 @@ final class OrderedPools {
     // What lookup caches hold for a class with no matching public method.
     private static final Object NONE = new Object();
 
+    // Known same-thread inline executors whose execute/submit runs synchronously
+    // on the calling thread: neither wrapped nor flagged as untracked-executor.
+    private static final Set<String> INLINE_EXECUTORS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "org.springframework.core.task.SyncTaskExecutor",
+            "com.google.common.util.concurrent.DirectExecutor",
+            "com.google.common.util.concurrent.MoreExecutors$DirectExecutor",
+            "com.google.common.util.concurrent.DirectExecutorService")));
+
+    private static final String SPRING_ASYNC_TASK_EXECUTOR =
+            "org.springframework.core.task.AsyncTaskExecutor";
+
+    // Whether a class implements Spring's AsyncTaskExecutor (which extends
+    // java.util.concurrent.Executor, not ExecutorService, and defines submit/
+    // submitListenable/submitCompletable).
+    private static final ClassValue<Boolean> IS_SPRING_ASYNC_TASK_EXECUTOR = new ClassValue<Boolean>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            return implementsInterfaceByName(type, SPRING_ASYNC_TASK_EXECUTOR);
+        }
+    };
+
+    private static boolean implementsInterfaceByName(Class<?> type, String interfaceName) {
+        for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+            if (interfaceName.equals(c.getName())) {
+                return true;
+            }
+            for (Class<?> iface : c.getInterfaces()) {
+                if (implementsInterfaceByName(iface, interfaceName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static boolean isInlineExecutor(Object executor) {
+        return executor != null && INLINE_EXECUTORS.contains(executor.getClass().getName());
+    }
+
+    static boolean isSpringAsyncTaskExecutor(Object receiver) {
+        return receiver instanceof java.util.concurrent.Executor
+                && Boolean.TRUE.equals(IS_SPRING_ASYNC_TASK_EXECUTOR.get(receiver.getClass()));
+    }
+
     // Spring classes whose pool accessor throws IllegalStateException while
     // not initialized, as their execute and submit do.
     private static final String SPRING_POOL = "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor";
@@ -325,6 +369,9 @@ final class OrderedPools {
         if (JDK_FINALIZABLE_DELEGATED.equals(className)
                 || JDK_AUTO_SHUTDOWN_DELEGATED.equals(className)
                 || JDK_THREAD_PER_TASK.equals(className)) {
+            return false;
+        }
+        if (depth > 0 && INLINE_EXECUTORS.contains(className)) {
             return false;
         }
         if (JDK_DELEGATED.equals(className) || JDK_DELEGATED_SCHEDULED.equals(className)) {

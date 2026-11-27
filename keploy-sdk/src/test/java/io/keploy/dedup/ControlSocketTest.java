@@ -52,7 +52,7 @@ import org.newsclub.net.unix.AFUNIXSocketChannel;
  * test as soon as the app answers its health check, so the socket must listen
  * by the time start() (premain, before the app's main) returns. Every command
  * the SDK reads gets one answer line before the close:
- * "ACK proto=3 caps=windowCut=...,contaminated=...,classMismatch=...,background=...,asyncExecutors=...,listenerContamination=..."
+ * "ACK proto=3 caps=windowCut=...,contaminated=...,classMismatch=...,background=...,ackId=true,asyncExecutors=...,listenerContamination=..."
  * if it was taken, "IGNORED proto=3" if not. Keploy reads a close with no
  * answer from an SDK that says proto&gt;=2 as a command not taken, so only a
  * connection closed with nothing sent may go unanswered.
@@ -68,7 +68,7 @@ public class ControlSocketTest {
     private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
     private static final String TAKEN =
             "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
-            + "background=false,asyncExecutors=false,listenerContamination=false\n";
+            + "background=false,ackId=true,asyncExecutors=false,listenerContamination=false\n";
     private static final String IGNORED = "IGNORED proto=3\n";
 
     private String savedControlPath;

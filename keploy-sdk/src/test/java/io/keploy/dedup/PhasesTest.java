@@ -51,7 +51,7 @@ public class PhasesTest {
             "keploy.build.tag"};
     private static final String TAKEN =
             "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
-            + "background=false,asyncExecutors=false,listenerContamination=false\n";
+            + "background=false,ackId=true,asyncExecutors=false,listenerContamination=false\n";
     private static final String MS = "\\d+\\.\\d\\d";
     // The one app class, and the probes a test ran in it.
     private static final String SHOP = "com/acme/Shop";

@@ -277,8 +277,10 @@ public class ForkedAsyncAndHonestyTest {
             assertNotEquals("distinct JVM restart must generate a distinct jvmNonce",
                     jettyNonce, hello.get("jvmNonce").getAsString());
             String cov = uncounted.runHttpTest("ts/uncounted-1", "/clean");
-            assertTrue("uncounted server recording probes must fail closed with no-server-entry: " + cov,
-                    cov.contains("\"contaminated\":[\"no-server-entry\"]"));
+            assertTrue("uncounted server recording probes must emit unverified no-server-entry: " + cov,
+                    cov.contains("\"unverified\":[\"no-server-entry\"]"));
+            assertFalse("uncounted server must NOT put no-server-entry in contaminated (enterprise compat): " + cov,
+                    cov.contains("\"contaminated\""));
             assertNotNull("JDK HttpServer must refresh HELLO with windowCut=false", uncounted.lastHello);
             JsonObject latest = parseHello(uncounted.lastHello);
             assertFalse("JDK HttpServer must declare windowCut=false: " + uncounted.lastHello,

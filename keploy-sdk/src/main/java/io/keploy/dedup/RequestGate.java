@@ -3,6 +3,7 @@ package io.keploy.dedup;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -116,6 +118,31 @@ public final class RequestGate {
             new ConcurrentLinkedQueue<>();
     private static final int MAX_UNTRACKED_HANDLES = 64;
     private static final long UNARMED_HANDOFF_THROTTLE_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
+    // Short grace for a Thread subclass registered right before start() while
+    // still in Thread.State.NEW, and for one-shot TimerTasks when TimerTask.state
+    // cannot be read reflectively (JDK 16+ without --add-opens java.base/java.util).
+    private static final long HANDLE_START_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+    private static final long HANDLE_TIMER_ONESHOT_GRACE_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+    // Weakly-keyed sets of cancelled TimerTasks and Timers populated by rewritten
+    // TimerTask.cancel() / Timer.cancel() call sites so cancelled timers stop
+    // contaminating immediately even on JDK 16+ without --add-opens.
+    private static final ConcurrentHashMap<WeakIdentityKey, Boolean> CANCELLED_TIMER_TASKS =
+            new ConcurrentHashMap<>();
+    private static final ReferenceQueue<Object> DEAD_TIMER_TASK_KEYS = new ReferenceQueue<>();
+    private static final ConcurrentHashMap<WeakIdentityKey, Boolean> CANCELLED_TIMERS =
+            new ConcurrentHashMap<>();
+    private static final ReferenceQueue<Object> DEAD_TIMER_KEYS = new ReferenceQueue<>();
+    private static final Field TIMER_TASK_STATE_FIELD = findTimerTaskStateField();
+
+    private static Field findTimerTaskStateField() {
+        try {
+            Field f = TimerTask.class.getDeclaredField("state");
+            f.setAccessible(true);
+            return f;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
 
     // The window of the test running, made anew at each START and when END
     // waits: END waits only for the requests that came in since the START,
@@ -313,6 +340,8 @@ public final class RequestGate {
         externalUntrackedTailExpiresAtNanos = 0L;
         externalUntrackedTailReason = null;
         EXTERNAL_UNTRACKED_HANDLES.clear();
+        CANCELLED_TIMER_TASKS.clear();
+        CANCELLED_TIMERS.clear();
         LINGERING.clear();
         current = new Window(null);
     }
@@ -439,6 +468,9 @@ public final class RequestGate {
             return null;
         }
         if (task instanceof Handed) {
+            if (OrderedPools.isInlineExecutor(executor)) {
+                return task;
+            }
             if (OrderedPools.orders(executor)) {
                 Handed existing = (Handed) task;
                 existing.releaseIfPending();
@@ -452,6 +484,9 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            return task;
+        }
+        if (OrderedPools.isInlineExecutor(executor)) {
             return task;
         }
         if (task instanceof Comparable) {
@@ -498,6 +533,9 @@ public final class RequestGate {
             return null;
         }
         if (task instanceof HandedCall) {
+            if (OrderedPools.isInlineExecutor(executor)) {
+                return task;
+            }
             if (OrderedPools.orders(executor)) {
                 @SuppressWarnings("unchecked")
                 HandedCall<T> existing = (HandedCall<T>) task;
@@ -512,6 +550,9 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            return task;
+        }
+        if (OrderedPools.isInlineExecutor(executor)) {
             return task;
         }
         if (task instanceof Comparable) {
@@ -556,6 +597,9 @@ public final class RequestGate {
             return null;
         }
         if (supplier instanceof HandedSupplier) {
+            if (OrderedPools.isInlineExecutor(executor)) {
+                return supplier;
+            }
             if (OrderedPools.orders(executor)) {
                 @SuppressWarnings("unchecked")
                 HandedSupplier<T> existing = (HandedSupplier<T>) supplier;
@@ -570,6 +614,9 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            return supplier;
+        }
+        if (OrderedPools.isInlineExecutor(executor)) {
             return supplier;
         }
         if (supplier instanceof Comparable) {
@@ -817,7 +864,7 @@ public final class RequestGate {
             if (explicitExecutor == null) {
                 return null;
             }
-            if (OrderedPools.orders(explicitExecutor)) {
+            if (!OrderedPools.isInlineExecutor(explicitExecutor) && OrderedPools.orders(explicitExecutor)) {
                 markUntrackedExecutor(window, job, explicitExecutor, "unknown");
                 return null;
             }
@@ -3004,44 +3051,154 @@ public final class RequestGate {
     }
 
     /**
-     * Checks at runtime whether an executor receiver is a hooked and verified
-     * Spring executor before a non-JDK {@code execute}/{@code submit} call,
-     * flagging {@code untracked-executor:<runtimeClass>} only when it is not.
+     * Checks at runtime whether a receiver of {@code execute(Runnable)} is an
+     * untracked {@link Executor}, ignoring non-{@link Executor} helpers,
+     * allow-listed same-thread inline executors, and hooked/verified Spring
+     * executors.
      *
-     * @param receiver target executor receiver
+     * @param receiver target receiver of {@code execute(Runnable)}
      */
     public static void noteIfUntrackedExecutor(Object receiver) {
-        if (!armed) {
-            if (receiver != null) {
-                noteUnarmedHandOffIfInFlight();
-            }
+        if (!(receiver instanceof Executor)) {
             return;
         }
-        if (receiver == null) {
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
             return;
         }
         if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
             return;
         }
-        if (OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
             return;
         }
         noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
     }
 
     /**
+     * Checks at runtime whether a receiver of {@code submit*} is an untracked
+     * {@link ExecutorService}, {@link CompletionService}, or Spring
+     * {@code AsyncTaskExecutor}, ignoring non-executor helpers, allow-listed
+     * same-thread inline executors, and hooked/verified Spring executors.
+     *
+     * @param receiver target receiver of {@code submit*}
+     */
+    public static void noteIfUntrackedSubmit(Object receiver) {
+        if (!(receiver instanceof ExecutorService)
+                && !(receiver instanceof CompletionService)
+                && !OrderedPools.isSpringAsyncTaskExecutor(receiver)) {
+            return;
+        }
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return;
+        }
+        if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
+            return;
+        }
+        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+            return;
+        }
+        noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
+    }
+
+    /**
+     * Records cancellation of a {@link Timer} so tracked {@link TimerTask}
+     * handles scheduled on it stop driving tail contamination immediately.
+     *
+     * @param timer cancelled timer
+     */
+    public static void noteTimerCancelled(Timer timer) {
+        if (timer == null || !armed) {
+            return;
+        }
+        drainDeadTimerKeys();
+        CANCELLED_TIMERS.put(new WeakIdentityKey(timer, DEAD_TIMER_KEYS), Boolean.TRUE);
+    }
+
+    /**
+     * Records cancellation when {@code target} is a {@link TimerTask} so its
+     * tracked handle stops driving tail contamination immediately even on
+     * JDK 16+ without {@code --add-opens java.base/java.util}.
+     *
+     * @param target receiver of {@code cancel()}
+     */
+    public static void noteIfTimerTaskCancelled(Object target) {
+        if (!(target instanceof TimerTask) || !armed) {
+            return;
+        }
+        drainDeadTimerTaskKeys();
+        CANCELLED_TIMER_TASKS.put(new WeakIdentityKey(target, DEAD_TIMER_TASK_KEYS), Boolean.TRUE);
+    }
+
+    private static void drainDeadTimerTaskKeys() {
+        for (Reference<?> ref; (ref = DEAD_TIMER_TASK_KEYS.poll()) != null; ) {
+            CANCELLED_TIMER_TASKS.remove(ref);
+        }
+    }
+
+    private static void drainDeadTimerKeys() {
+        for (Reference<?> ref; (ref = DEAD_TIMER_KEYS.poll()) != null; ) {
+            CANCELLED_TIMERS.remove(ref);
+        }
+    }
+
+    private static boolean isTimerTaskCancelled(TimerTask task) {
+        if (task == null || CANCELLED_TIMER_TASKS.isEmpty()) {
+            return false;
+        }
+        drainDeadTimerTaskKeys();
+        return CANCELLED_TIMER_TASKS.containsKey(new LookupKey(task));
+    }
+
+    private static boolean isTimerCancelled(Timer timer) {
+        if (timer == null || CANCELLED_TIMERS.isEmpty()) {
+            return false;
+        }
+        drainDeadTimerKeys();
+        return CANCELLED_TIMERS.containsKey(new LookupKey(timer));
+    }
+
+    private static int readTimerTaskState(TimerTask task) {
+        Field f = TIMER_TASK_STATE_FIELD;
+        if (f == null || task == null) {
+            return -1;
+        }
+        try {
+            return f.getInt(task);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static long safeScheduledExecutionTime(TimerTask task) {
+        if (task == null) {
+            return 0L;
+        }
+        try {
+            return task.scheduledExecutionTime();
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+    }
+
+    /**
      * Checks whether {@code target} is a {@link Thread} instance before a
      * non-{@code java.lang.Thread} {@code start()} call, flags an untracked
      * thread start if so, and weakly tracks the thread's liveness so tail
-     * contamination persists while the thread remains alive.
+     * contamination persists only while the thread remains alive.
      *
      * @param target receiver of {@code start()}
      */
     public static void noteIfThread(Object target) {
-        if (target instanceof Thread) {
-            noteUntrackedAsync("untracked-async:thread-start", 0L);
-            trackUntrackedHandleForCurrent(target, false);
+        if (!(target instanceof Thread)) {
+            return;
         }
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return;
+        }
+        noteTrackedUntrackedAsync("untracked-async:thread-start", target, false);
     }
 
     /**
@@ -3053,8 +3210,28 @@ public final class RequestGate {
      * @param thread returned thread instance
      */
     public static void trackUntrackedThread(Object thread) {
+        trackUntrackedThread(thread, null);
+    }
+
+    /**
+     * Flags and weakly tracks a newly started {@link Thread} so subsequent
+     * windows remain marked with tail contamination only while the thread stays
+     * alive (no blind 2 s tail once dead).
+     *
+     * @param thread returned thread instance
+     * @param reason contamination label for the originating window
+     */
+    public static void trackUntrackedThread(Object thread, String reason) {
+        if (!armed) {
+            if (thread instanceof Thread) {
+                noteUnarmedHandOffIfInFlight();
+            }
+            return;
+        }
         if (thread instanceof Thread) {
-            trackUntrackedHandleForCurrent(thread, true);
+            noteTrackedUntrackedAsync(reason, thread, true);
+        } else if (reason != null && !reason.isEmpty()) {
+            noteUntrackedAsync(reason, 0L);
         }
     }
 
@@ -3066,40 +3243,104 @@ public final class RequestGate {
      * @param future returned future instance
      */
     public static void trackUntrackedFuture(Object future) {
+        trackUntrackedFuture(future, null);
+    }
+
+    /**
+     * Flags and weakly tracks a returned {@link Future} so subsequent windows
+     * remain marked with tail contamination only while the future is not done
+     * or cancelled (no blind 2 s or delay-based tail once done/cancelled).
+     *
+     * @param future returned future instance
+     * @param reason contamination label for the originating window
+     */
+    public static void trackUntrackedFuture(Object future, String reason) {
+        if (!armed) {
+            if (future instanceof Future) {
+                noteUnarmedHandOffIfInFlight();
+            }
+            return;
+        }
         if (future instanceof Future) {
-            trackUntrackedHandleForCurrent(future, true);
+            noteTrackedUntrackedAsync(reason, future, true);
+        } else if (reason != null && !reason.isEmpty()) {
+            noteUntrackedAsync(reason, 0L);
         }
     }
 
-    private static void trackUntrackedHandleForCurrent(Object handle, boolean alreadyStarted) {
-        if (!armed || handle == null) {
+    private static void noteTrackedUntrackedAsync(String reason, Object target, boolean alreadyStarted) {
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
             return;
         }
+        if (target == null) {
+            if (reason != null && !reason.isEmpty()) {
+                noteUntrackedAsync(reason, 0L);
+            }
+            return;
+        }
+        long now = System.nanoTime();
+        noteTrackedHandle(reason, new UntrackedHandle(target, alreadyStarted, now), now);
+    }
+
+    private static void noteTrackedTimerTask(Timer timer, TimerTask task, long delayMillis, long periodMillis,
+            boolean periodic) {
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return;
+        }
+        if (task == null) {
+            noteUntrackedAsync("untracked-async:timer", 0L);
+            return;
+        }
+        long now = System.nanoTime();
+        UntrackedHandle handle = UntrackedHandle.forTimerTask(timer, task, delayMillis, periodMillis, periodic, now);
+        noteTrackedHandle("untracked-async:timer", handle, now);
+    }
+
+    private static void noteTrackedHandle(String reason, UntrackedHandle handle, long now) {
         Window window = INSIDE.get();
         if (window != null) {
-            window.addUntrackedHandle(handle, alreadyStarted);
+            if (reason != null && !reason.isEmpty()) {
+                window.contaminateTracked(reason);
+            }
+            window.addUntrackedHandle(handle, now);
             if (window != current) {
-                retainLingering(window, System.nanoTime());
+                retainLingering(window, now);
             }
             return;
         }
-        if (JobGate.runningAttribution() != null || JobGate.expiredAttribution() != null) {
-            if (!addHandleToQueue(EXTERNAL_UNTRACKED_HANDLES, handle, alreadyStarted)) {
-                noteExternalUntrackedTail("job", maxLingeringNanos);
+        String effectiveReason = reason;
+        if (JobGate.runningAttribution() != null) {
+            if (effectiveReason != null && !effectiveReason.isEmpty()) {
+                JobGate.markUntrackedWindowOnly(effectiveReason);
+            }
+            externalUntrackedTailReason = effectiveReason == null || effectiveReason.isEmpty() ? "job" : effectiveReason;
+            if (!addHandleToQueue(EXTERNAL_UNTRACKED_HANDLES, handle, now)) {
+                noteExternalUntrackedTail(effectiveReason, maxLingeringNanos);
+            }
+            return;
+        }
+        String expiredJob = JobGate.expiredRunningName();
+        if (expiredJob != null) {
+            String jobReason = "job-tail:" + expiredJob;
+            JobGate.markUntrackedWindowOnly(jobReason);
+            externalUntrackedTailReason = jobReason;
+            if (!addHandleToQueue(EXTERNAL_UNTRACKED_HANDLES, handle, now)) {
+                noteExternalUntrackedTail(jobReason, maxLingeringNanos);
             }
         }
     }
 
-    private static boolean addHandleToQueue(ConcurrentLinkedQueue<UntrackedHandle> queue, Object handle,
-            boolean alreadyStarted) {
-        long now = System.nanoTime();
+    private static boolean addHandleToQueue(ConcurrentLinkedQueue<UntrackedHandle> queue, UntrackedHandle handle,
+            long now) {
         if (queue.size() >= MAX_UNTRACKED_HANDLES) {
             sweepUntrackedHandles(queue, now);
             if (queue.size() >= MAX_UNTRACKED_HANDLES) {
                 return false;
             }
         }
-        queue.add(new UntrackedHandle(handle, alreadyStarted, now));
+        queue.add(handle);
         return true;
     }
 
@@ -3116,14 +3357,6 @@ public final class RequestGate {
             }
         }
         return anyAlive;
-    }
-
-    private static long boundedDelayNanos(long delay, TimeUnit unit) {
-        if (delay <= 0L || unit == null) {
-            return 0L;
-        }
-        long nanos = unit.toNanos(delay);
-        return nanos <= 0L ? 0L : Math.min(nanos, maxLingeringNanos);
     }
 
     private static Runnable wrapScheduledContext(ScheduledExecutorService executor, Runnable command) {
@@ -3168,9 +3401,12 @@ public final class RequestGate {
      */
     public static ScheduledFuture<?> schedule(ScheduledExecutorService executor, Runnable command,
             long delay, TimeUnit unit) {
-        noteUntrackedAsync("untracked-async:schedule", boundedDelayNanos(delay, unit));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return executor.schedule(command, delay, unit);
+        }
         ScheduledFuture<?> sf = executor.schedule(wrapScheduledContext(executor, command), delay, unit);
-        trackUntrackedHandleForCurrent(sf, true);
+        noteTrackedUntrackedAsync("untracked-async:schedule", sf, true);
         return sf;
     }
 
@@ -3186,9 +3422,12 @@ public final class RequestGate {
      */
     public static <V> ScheduledFuture<V> schedule(ScheduledExecutorService executor, Callable<V> callable,
             long delay, TimeUnit unit) {
-        noteUntrackedAsync("untracked-async:schedule", boundedDelayNanos(delay, unit));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return executor.schedule(callable, delay, unit);
+        }
         ScheduledFuture<V> sf = executor.schedule(wrapScheduledContext(executor, callable), delay, unit);
-        trackUntrackedHandleForCurrent(sf, true);
+        noteTrackedUntrackedAsync("untracked-async:schedule", sf, true);
         return sf;
     }
 
@@ -3205,11 +3444,13 @@ public final class RequestGate {
      */
     public static ScheduledFuture<?> scheduleAtFixedRate(ScheduledExecutorService executor, Runnable command,
             long initialDelay, long period, TimeUnit unit) {
-        long extra = boundedDelayNanos(initialDelay, unit) + boundedDelayNanos(period, unit);
-        noteUntrackedAsync("untracked-async:schedule", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return executor.scheduleAtFixedRate(command, initialDelay, period, unit);
+        }
         ScheduledFuture<?> sf = executor.scheduleAtFixedRate(
                 wrapScheduledContext(executor, command), initialDelay, period, unit);
-        trackUntrackedHandleForCurrent(sf, true);
+        noteTrackedUntrackedAsync("untracked-async:schedule", sf, true);
         return sf;
     }
 
@@ -3226,11 +3467,13 @@ public final class RequestGate {
      */
     public static ScheduledFuture<?> scheduleWithFixedDelay(ScheduledExecutorService executor, Runnable command,
             long initialDelay, long delay, TimeUnit unit) {
-        long extra = boundedDelayNanos(initialDelay, unit) + boundedDelayNanos(delay, unit);
-        noteUntrackedAsync("untracked-async:schedule", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            return executor.scheduleWithFixedDelay(command, initialDelay, delay, unit);
+        }
         ScheduledFuture<?> sf = executor.scheduleWithFixedDelay(
                 wrapScheduledContext(executor, command), initialDelay, delay, unit);
-        trackUntrackedHandleForCurrent(sf, true);
+        noteTrackedUntrackedAsync("untracked-async:schedule", sf, true);
         return sf;
     }
 
@@ -3250,8 +3493,13 @@ public final class RequestGate {
      * @param delay execution delay in milliseconds
      */
     public static void timerSchedule(Timer timer, TimerTask task, long delay) {
-        noteUntrackedAsync("untracked-async:timer", boundedDelayNanos(delay, TimeUnit.MILLISECONDS));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.schedule(task, delay);
+            return;
+        }
         timer.schedule(task, delay);
+        noteTrackedTimerTask(timer, task, delay, 0L, false);
     }
 
     /**
@@ -3262,8 +3510,14 @@ public final class RequestGate {
      * @param time execution time
      */
     public static void timerSchedule(Timer timer, TimerTask task, Date time) {
-        noteUntrackedAsync("untracked-async:timer", boundedDelayNanos(dateDelayMillis(time), TimeUnit.MILLISECONDS));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.schedule(task, time);
+            return;
+        }
+        long delay = dateDelayMillis(time);
         timer.schedule(task, time);
+        noteTrackedTimerTask(timer, task, delay, 0L, false);
     }
 
     /**
@@ -3275,11 +3529,13 @@ public final class RequestGate {
      * @param period period in milliseconds
      */
     public static void timerSchedule(Timer timer, TimerTask task, long delay, long period) {
-        long extra = boundedDelayNanos(delay, TimeUnit.MILLISECONDS)
-                + boundedDelayNanos(period, TimeUnit.MILLISECONDS);
-        noteUntrackedAsync("untracked-async:timer", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.schedule(task, delay, period);
+            return;
+        }
         timer.schedule(task, delay, period);
-        trackUntrackedHandleForCurrent(task, true);
+        noteTrackedTimerTask(timer, task, delay, period, true);
     }
 
     /**
@@ -3291,11 +3547,14 @@ public final class RequestGate {
      * @param period period in milliseconds
      */
     public static void timerSchedule(Timer timer, TimerTask task, Date firstTime, long period) {
-        long extra = boundedDelayNanos(dateDelayMillis(firstTime), TimeUnit.MILLISECONDS)
-                + boundedDelayNanos(period, TimeUnit.MILLISECONDS);
-        noteUntrackedAsync("untracked-async:timer", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.schedule(task, firstTime, period);
+            return;
+        }
+        long delay = dateDelayMillis(firstTime);
         timer.schedule(task, firstTime, period);
-        trackUntrackedHandleForCurrent(task, true);
+        noteTrackedTimerTask(timer, task, delay, period, true);
     }
 
     /**
@@ -3307,11 +3566,13 @@ public final class RequestGate {
      * @param period period in milliseconds
      */
     public static void timerScheduleAtFixedRate(Timer timer, TimerTask task, long delay, long period) {
-        long extra = boundedDelayNanos(delay, TimeUnit.MILLISECONDS)
-                + boundedDelayNanos(period, TimeUnit.MILLISECONDS);
-        noteUntrackedAsync("untracked-async:timer", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.scheduleAtFixedRate(task, delay, period);
+            return;
+        }
         timer.scheduleAtFixedRate(task, delay, period);
-        trackUntrackedHandleForCurrent(task, true);
+        noteTrackedTimerTask(timer, task, delay, period, true);
     }
 
     /**
@@ -3323,11 +3584,14 @@ public final class RequestGate {
      * @param period period in milliseconds
      */
     public static void timerScheduleAtFixedRate(Timer timer, TimerTask task, Date firstTime, long period) {
-        long extra = boundedDelayNanos(dateDelayMillis(firstTime), TimeUnit.MILLISECONDS)
-                + boundedDelayNanos(period, TimeUnit.MILLISECONDS);
-        noteUntrackedAsync("untracked-async:timer", Math.min(extra, maxLingeringNanos));
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            timer.scheduleAtFixedRate(task, firstTime, period);
+            return;
+        }
+        long delay = dateDelayMillis(firstTime);
         timer.scheduleAtFixedRate(task, firstTime, period);
-        trackUntrackedHandleForCurrent(task, true);
+        noteTrackedTimerTask(timer, task, delay, period, true);
     }
 
     /**
@@ -3373,9 +3637,13 @@ public final class RequestGate {
      * @param thread thread to start
      */
     public static void startThread(Thread thread) {
-        noteUntrackedAsync("untracked-async:thread-start");
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            thread.start();
+            return;
+        }
         thread.start();
-        trackUntrackedHandleForCurrent(thread, true);
+        noteTrackedUntrackedAsync("untracked-async:thread-start", thread, true);
     }
 
     /**
@@ -3633,17 +3901,18 @@ public final class RequestGate {
 
     // open starts the window of a test: from now on, END waits for the
     // requests that come in, and for no request that came in before.
-    static void open() {
-        open(null, null);
+    static boolean open() {
+        return open(null, null);
     }
 
     // open(testId, prevActiveTestId) opens a fresh test window, records
     // armed-mid-flight while any unarmed request/job remains in flight (or
     // once after unarmed traffic occurred prior to arming), and marks the new
     // window contaminated ("tail:<prevTestId>") if the previous test was cut,
-    // unclosed, had an untracked async hand-off, or any prior window still has
-    // running > 0.
-    static void open(String testId, String prevActiveTestId) {
+    // unclosed, had a blind untracked async hand-off, or any prior window still
+    // has running > 0 or live tracked handles. Returns true if any tail:,
+    // job-tail:, or armed-mid-flight reason was added to the newly opened window.
+    static boolean open(String testId, String prevActiveTestId) {
         arm();
         drainDeadHands();
         long now = System.nanoTime();
@@ -3668,12 +3937,13 @@ public final class RequestGate {
         if (prev != null) {
             prev.sweepCancelledFutures();
             boolean prevRunning = prev.running.get() > 0;
-            boolean prevUntracked = prev.hadUntrackedAsync;
-            if (prevRunning || prevUntracked) {
+            boolean prevAliveHandles = prev.hasAliveUntrackedHandles(now);
+            boolean prevBlindUntracked = prev.hasBlindUntrackedAsync;
+            if (prevRunning || prevAliveHandles || prevBlindUntracked || prev.untrackedHandlesOverflowed) {
                 if (prev.testId == null && prevActiveTestId != null && !prevActiveTestId.isEmpty()) {
                     prev.fallbackId = prevActiveTestId;
                 }
-                if (prevUntracked && prev.untrackedTailExpiresAtNanos == 0L) {
+                if (prevBlindUntracked && prev.untrackedTailExpiresAtNanos == 0L) {
                     prev.extendUntrackedTail(now, 0L);
                 }
                 retainLingering(prev, now);
@@ -3706,7 +3976,7 @@ public final class RequestGate {
                     || aliveHandles
                     || (!lingeringExpired && (lingering.running.get() > 0 || lingering.untrackedHandlesOverflowed));
             boolean reportCut = lingering.wasCut && !lingering.cutReportedOnce;
-            boolean untrackedActive = lingering.hadUntrackedAsync
+            boolean untrackedActive = lingering.hasBlindUntrackedAsync
                     && (!lingering.untrackedTailReportedOnce
                             || (now - lingering.untrackedTailExpiresAtNanos) < 0L);
             if (stillRunning || reportCut || untrackedActive) {
@@ -3714,12 +3984,12 @@ public final class RequestGate {
                 if (reportCut) {
                     lingering.cutReportedOnce = true;
                 }
-                if (lingering.hadUntrackedAsync) {
+                if (lingering.hasBlindUntrackedAsync) {
                     lingering.untrackedTailReportedOnce = true;
                 }
             }
             boolean cutDone = !lingering.wasCut || lingering.cutReportedOnce;
-            boolean untrackedDone = !lingering.hadUntrackedAsync
+            boolean untrackedDone = !lingering.hasBlindUntrackedAsync
                     || (lingering.untrackedTailReportedOnce
                             && (now - lingering.untrackedTailExpiresAtNanos) >= 0L);
             if (!stillRunning && cutDone && untrackedDone) {
@@ -3728,12 +3998,13 @@ public final class RequestGate {
                 // concurrent Hand.enter / addUntrackedHandle / noteUntrackedAsync.
                 if (lingering.executing.get() > 0
                         || lingering.hasAliveUntrackedHandles(now)
-                        || (lingering.hadUntrackedAsync
+                        || (lingering.hasBlindUntrackedAsync
                                 && (now - lingering.untrackedTailExpiresAtNanos) < 0L)) {
                     LINGERING.add(lingering);
                 }
             }
         }
+        return next.hasOpeningTail();
     }
 
     private static void retainLingering(Window window, long now) {
@@ -3753,14 +4024,14 @@ public final class RequestGate {
                         || aliveHandles
                         || (!lingeringExpired && (existing.running.get() > 0 || existing.untrackedHandlesOverflowed));
                 boolean cutDone = !existing.wasCut || existing.cutReportedOnce;
-                boolean untrackedDone = !existing.hadUntrackedAsync
+                boolean untrackedDone = !existing.hasBlindUntrackedAsync
                         || (existing.untrackedTailReportedOnce
                                 && (now - existing.untrackedTailExpiresAtNanos) >= 0L);
                 if (!stillRunning && cutDone && untrackedDone) {
                     LINGERING.remove(existing);
                     if (existing.executing.get() > 0
                             || existing.hasAliveUntrackedHandles(now)
-                            || (existing.hadUntrackedAsync
+                            || (existing.hasBlindUntrackedAsync
                                     && (now - existing.untrackedTailExpiresAtNanos) < 0L)) {
                         LINGERING.add(existing);
                     }
@@ -3791,9 +4062,8 @@ public final class RequestGate {
 
     // awaitWindow closes the current window, optionally waits up to
     // timeoutNanos for its requests/tasks to finish, retains the window in
-    // LINGERING if cut, still running, or carrying an untracked async hand-off,
-    // and returns its outcome (drained, waited, enteredCount, and accumulated
-    // contaminations).
+    // LINGERING if cut, still running, carrying a blind untracked async
+    // hand-off, or holding alive tracked handles, and returns its outcome.
     static WindowOutcome awaitWindow(long timeoutNanos, boolean wait) {
         drainDeadHands();
         Window window = current;
@@ -3802,21 +4072,27 @@ public final class RequestGate {
         int initialRunning = window.running.get();
         if (!wait) {
             long now = System.nanoTime();
-            if (window.hadUntrackedAsync) {
+            if (window.hasBlindUntrackedAsync) {
                 window.extendUntrackedTail(now, 0L);
             }
-            if (initialRunning > 0 || window.hadUntrackedAsync) {
+            if (initialRunning > 0 || window.hasBlindUntrackedAsync
+                    || window.hasAliveUntrackedHandles(now) || window.untrackedHandlesOverflowed) {
                 retainLingering(window, now);
             }
-            return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations());
+            return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations(),
+                    window.hadUntrackedAsync);
         }
         if (initialRunning <= 0) {
-            if (window.hadUntrackedAsync) {
-                long now = System.nanoTime();
+            long now = System.nanoTime();
+            if (window.hasBlindUntrackedAsync) {
                 window.extendUntrackedTail(now, 0L);
+            }
+            if (window.hasBlindUntrackedAsync || window.hasAliveUntrackedHandles(now)
+                    || window.untrackedHandlesOverflowed) {
                 retainLingering(window, now);
             }
-            return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations());
+            return new WindowOutcome(true, false, window.enteredCount.get(), window.contaminations(),
+                    window.hadUntrackedAsync);
         }
         boolean drained = false;
         // Set before the count is read again: an exit that takes the count
@@ -3848,17 +4124,20 @@ public final class RequestGate {
         } finally {
             window.waiter = null;
         }
-        if (!drained || window.hadUntrackedAsync) {
-            long now = System.nanoTime();
+        long now = System.nanoTime();
+        boolean needsRetain = !drained || window.hasBlindUntrackedAsync
+                || window.hasAliveUntrackedHandles(now) || window.untrackedHandlesOverflowed;
+        if (needsRetain) {
             if (!drained) {
                 window.wasCut = true;
             }
-            if (window.hadUntrackedAsync) {
+            if (window.hasBlindUntrackedAsync) {
                 window.extendUntrackedTail(now, 0L);
             }
             retainLingering(window, now);
         }
-        return new WindowOutcome(drained, true, window.enteredCount.get(), window.contaminations());
+        return new WindowOutcome(drained, true, window.enteredCount.get(), window.contaminations(),
+                window.hadUntrackedAsync);
     }
 
     static final class WindowOutcome {
@@ -3866,26 +4145,54 @@ public final class RequestGate {
         final boolean waited;
         final int enteredCount;
         final List<String> contaminations;
+        final boolean hadUntrackedAsync;
 
-        WindowOutcome(boolean drained, boolean waited, int enteredCount, List<String> contaminations) {
+        WindowOutcome(boolean drained, boolean waited, int enteredCount, List<String> contaminations,
+                boolean hadUntrackedAsync) {
             this.drained = drained;
             this.waited = waited;
             this.enteredCount = enteredCount;
             this.contaminations = contaminations;
+            this.hadUntrackedAsync = hadUntrackedAsync;
         }
     }
 
     private static final class UntrackedHandle {
 
         private final WeakReference<Object> ref;
+        private final WeakReference<Timer> timerRef;
         private final boolean alreadyStarted;
         private final long registeredAtNanos;
+        private final boolean timerPeriodic;
+        private final long timerExpectedFireAtNanos;
+        private final long timerPeriodMillis;
         private volatile boolean observedAlive;
 
         private UntrackedHandle(Object target, boolean alreadyStarted, long registeredAtNanos) {
+            this(target, null, alreadyStarted, registeredAtNanos, false, 0L, 0L);
+        }
+
+        private UntrackedHandle(Object target, Timer timer, boolean alreadyStarted, long registeredAtNanos,
+                boolean timerPeriodic, long timerExpectedFireAtNanos, long timerPeriodMillis) {
             this.ref = new WeakReference<Object>(target);
+            this.timerRef = timer == null ? null : new WeakReference<Timer>(timer);
             this.alreadyStarted = alreadyStarted;
             this.registeredAtNanos = registeredAtNanos;
+            this.timerPeriodic = timerPeriodic;
+            this.timerExpectedFireAtNanos = timerExpectedFireAtNanos;
+            this.timerPeriodMillis = timerPeriodMillis;
+        }
+
+        private static UntrackedHandle forTimerTask(Timer timer, TimerTask task, long delayMillis,
+                long periodMillis, boolean periodic, long now) {
+            long safeDelayMs = delayMillis > 0L ? delayMillis : 0L;
+            long delayNanos = TimeUnit.MILLISECONDS.toNanos(safeDelayMs);
+            if (delayNanos < 0L) {
+                delayNanos = maxLingeringNanos;
+            }
+            long expectedFire = now + delayNanos;
+            long safePeriodMs = periodMillis > 0L ? periodMillis : 1L;
+            return new UntrackedHandle(task, timer, true, now, periodic, expectedFire, safePeriodMs);
         }
 
         private boolean isActive(long now) {
@@ -3899,20 +4206,45 @@ public final class RequestGate {
                     observedAlive = true;
                     return true;
                 }
-                if (alreadyStarted || observedAlive) {
+                if (alreadyStarted || observedAlive || t.getState() == Thread.State.TERMINATED) {
                     return false;
                 }
-                // Registered immediately before subThread.start(): keep active
-                // briefly in case the OS thread hasn't transitioned to alive yet.
-                return (now - registeredAtNanos) < untrackedTailWindowNanos;
+                // Registered immediately before subThread.start() and still NEW:
+                // keep active briefly in case the OS thread hasn't transitioned yet.
+                long grace = Math.min(HANDLE_START_GRACE_NANOS, untrackedTailWindowNanos);
+                return (now - registeredAtNanos) < grace;
             }
             if (target instanceof Future) {
                 return !isFutureTerminated((Future<?>) target);
             }
             if (target instanceof TimerTask) {
-                // Timer's internal TaskQueue holds periodic TimerTasks strongly
-                // while scheduled, so weak reachability errs toward flagging.
-                return true;
+                TimerTask task = (TimerTask) target;
+                if (isTimerTaskCancelled(task)) {
+                    return false;
+                }
+                Timer t = timerRef == null ? null : timerRef.get();
+                if (t != null && isTimerCancelled(t)) {
+                    return false;
+                }
+                int state = readTimerTaskState(task);
+                if (state >= 0) {
+                    // java.util.TimerTask states: VIRGIN=0, SCHEDULED=1, EXECUTED=2, CANCELLED=3
+                    return state == 1;
+                }
+                // Fallback when TimerTask.state cannot be read reflectively (JDK 16+ without --add-opens):
+                if (!timerPeriodic) {
+                    long grace = Math.min(HANDLE_TIMER_ONESHOT_GRACE_NANOS, untrackedTailWindowNanos);
+                    return (now - timerExpectedFireAtNanos) < grace;
+                }
+                if ((now - timerExpectedFireAtNanos) < 0L) {
+                    return true;
+                }
+                long execMillis = safeScheduledExecutionTime(task);
+                if (execMillis <= 0L) {
+                    return (now - registeredAtNanos) < maxLingeringNanos;
+                }
+                long slackMillis = Math.max(timerPeriodMillis * 2L, 150L);
+                return System.currentTimeMillis() <= execMillis + timerPeriodMillis + slackMillis;
             }
             return false;
         }
@@ -3936,7 +4268,11 @@ public final class RequestGate {
         private volatile Thread waiter;
         private volatile boolean wasCut;
         private volatile boolean cutReportedOnce;
+        // True when any untracked async (blind or handle-tracked) occurred in this window.
         private volatile boolean hadUntrackedAsync;
+        // True ONLY when an untracked async WITHOUT a tracked liveness handle occurred
+        // (drives the time-based untrackedTailWindowNanos fallback).
+        private volatile boolean hasBlindUntrackedAsync;
         private volatile long untrackedTailExpiresAtNanos;
         private volatile boolean untrackedTailReportedOnce;
         private volatile long lingeringSinceNanos;
@@ -3946,8 +4282,8 @@ public final class RequestGate {
         @SuppressWarnings("rawtypes")
         private volatile ConcurrentHashMap futures;
         // Weak handles to live untracked Threads, ScheduledFutures, and
-        // periodic TimerTasks started in this window so tail contamination
-        // persists while they stay alive.
+        // TimerTasks started in this window so tail contamination persists
+        // strictly while they stay alive.
         @SuppressWarnings("rawtypes")
         private volatile ConcurrentLinkedQueue untrackedHandles;
         private volatile boolean untrackedHandlesOverflowed;
@@ -3988,8 +4324,23 @@ public final class RequestGate {
             }
             if (reason.startsWith("untracked-")) {
                 hadUntrackedAsync = true;
+                hasBlindUntrackedAsync = true;
                 extendUntrackedTail(System.nanoTime(), extraTailNanos);
             }
+            addContamReason(reason);
+        }
+
+        private void contaminateTracked(String reason) {
+            if (reason == null || reason.isEmpty()) {
+                return;
+            }
+            if (reason.startsWith("untracked-")) {
+                hadUntrackedAsync = true;
+            }
+            addContamReason(reason);
+        }
+
+        private void addContamReason(String reason) {
             if (contamCount.get() < JobGate.KEPT && contamSet.add(reason)) {
                 if (contamCount.incrementAndGet() <= JobGate.KEPT) {
                     contamOrder.add(reason);
@@ -3998,6 +4349,16 @@ public final class RequestGate {
                     contamCount.decrementAndGet();
                 }
             }
+        }
+
+        private boolean hasOpeningTail() {
+            for (String reason : contamOrder) {
+                if (reason.startsWith("tail:") || reason.startsWith("job-tail:")
+                        || "armed-mid-flight".equals(reason)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private List<String> contaminations() {
@@ -4079,9 +4440,9 @@ public final class RequestGate {
             return (ConcurrentLinkedQueue<UntrackedHandle>) untrackedHandles;
         }
 
-        private void addUntrackedHandle(Object target, boolean alreadyStarted) {
+        private void addUntrackedHandle(UntrackedHandle handle, long now) {
             hadUntrackedAsync = true;
-            if (!addHandleToQueue(untrackedHandlesQueue(true), target, alreadyStarted)) {
+            if (!addHandleToQueue(untrackedHandlesQueue(true), handle, now)) {
                 untrackedHandlesOverflowed = true;
             }
         }

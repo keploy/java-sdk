@@ -180,6 +180,7 @@ final class ServerEntries implements ClassFileTransformer {
             "java/lang/Thread$Builder$OfVirtual",
             "java/lang/Thread$Builder$OfPlatform",
             "java/util/Timer",
+            "java/util/TimerTask",
             "org/springframework/scheduling/TaskScheduler",
             "com/google/common/util/concurrent/Futures",
             "com/google/common/util/concurrent/ListenableFuture",
@@ -196,7 +197,7 @@ final class ServerEntries implements ClassFileTransformer {
     private static final Set<String> TARGET_ASYNC_METHOD_NAMES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "execute", "submit", "submitListenable", "submitCompletable",
             "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
-            "invokeAny", "fork", "subscribe", "start", "startVirtualThread",
+            "invokeAny", "fork", "subscribe", "start", "startVirtualThread", "cancel",
             "addListener", "addCallback", "transform", "transformAsync", "catching", "catchingAsync",
             "poll", "basicConsume", "receive", "setMessageListener")));
 
@@ -903,20 +904,23 @@ final class ServerEntries implements ClassFileTransformer {
         }
     }
 
-    private static boolean isSingleArgExecutorSubmitOrExecute(String mname, String desc) {
-        if ("execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc)) {
-            return true;
-        }
-        if (("submit".equals(mname) || "submitListenable".equals(mname) || "submitCompletable".equals(mname))
+    private static boolean isSingleArgExecutorExecute(String mname, String desc) {
+        return "execute".equals(mname) && "(Ljava/lang/Runnable;)V".equals(desc);
+    }
+
+    private static boolean isSingleArgExecutorSubmit(String mname, String desc) {
+        return ("submit".equals(mname) || "submitListenable".equals(mname) || "submitCompletable".equals(mname))
                 && (desc.startsWith("(Ljava/lang/Runnable;)")
-                        || desc.startsWith("(Ljava/util/concurrent/Callable;)"))) {
-            return true;
-        }
-        return false;
+                        || desc.startsWith("(Ljava/util/concurrent/Callable;)"));
+    }
+
+    private static boolean isSingleArgExecutorSubmitOrExecute(String mname, String desc) {
+        return isSingleArgExecutorExecute(mname, desc) || isSingleArgExecutorSubmit(mname, desc);
     }
 
     private static boolean isTwoArgExecutorSubmit(String mname, String desc) {
-        return "submit".equals(mname) && desc.startsWith("(Ljava/lang/Runnable;Ljava/lang/Object;)");
+        return "submit".equals(mname)
+                && "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;".equals(desc);
     }
 
     private static boolean isForkJoinTaskSubmission(String owner, String mname, String desc) {
@@ -1313,6 +1317,15 @@ final class ServerEntries implements ClassFileTransformer {
                                         "(Ljava/util/Timer;" + desc.substring(1), false);
                                 return;
                             }
+                            if ("cancel".equals(mname) && "()V".equals(desc)) {
+                                changed[0] = true;
+                                ensureExtraStack(1);
+                                super.visitInsn(Opcodes.DUP);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteTimerCancelled",
+                                        "(Ljava/util/Timer;)V", false);
+                                super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                                return;
+                            }
                         }
                         if (opcode == Opcodes.INVOKEVIRTUAL
                                 && "java/lang/Thread".equals(owner)
@@ -1327,37 +1340,48 @@ final class ServerEntries implements ClassFileTransformer {
                                 && "java/lang/Thread".equals(owner)
                                 && "startVirtualThread".equals(mname)
                                 && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
-                            emitUntrackedFlag("untracked-async:virtual-thread");
+                            changed[0] = true;
+                            ensureExtraStack(2);
                             super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
                             super.visitInsn(Opcodes.DUP);
+                            super.visitLdcInsn("untracked-async:virtual-thread");
                             super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedThread",
-                                    "(Ljava/lang/Object;)V", false);
+                                    "(Ljava/lang/Object;Ljava/lang/String;)V", false);
                             return;
                         }
                         if ((opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
                                 && "start".equals(mname)
                                 && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
-                            emitUntrackedFlag("untracked-async:thread-builder");
+                            changed[0] = true;
+                            ensureExtraStack(2);
                             super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
                             super.visitInsn(Opcodes.DUP);
+                            super.visitLdcInsn("untracked-async:thread-builder");
                             super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedThread",
-                                    "(Ljava/lang/Object;)V", false);
+                                    "(Ljava/lang/Object;Ljava/lang/String;)V", false);
                             return;
                         }
                         // Flag-only async submission sites (task untouched, 100% app-safe).
                         if (isGuavaAsyncCall(opcode, owner, mname, desc)) {
                             emitUntrackedFlag("untracked-async:guava-future");
                         } else if (opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE) {
-                            if (isSingleArgExecutorSubmitOrExecute(mname, desc)) {
-                                // Decide at runtime by actual receiver so Spring interfaces
-                                // (TaskExecutor/AsyncTaskExecutor) and subclasses have zero
-                                // false positives when hooked+verified AND zero false negatives
-                                // when backed by VirtualThreadTaskExecutor/custom pools.
+                            if (isSingleArgExecutorExecute(mname, desc)) {
+                                // Decide at runtime by actual receiver (must be java.util.concurrent.Executor,
+                                // neither an allow-listed inline executor nor a hooked+verified Spring executor).
                                 changed[0] = true;
                                 ensureExtraStack(2);
                                 super.visitInsn(Opcodes.DUP2);
                                 super.visitInsn(Opcodes.POP);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfUntrackedExecutor",
+                                        "(Ljava/lang/Object;)V", false);
+                            } else if (isSingleArgExecutorSubmit(mname, desc)) {
+                                // Decide at runtime by actual receiver (must be ExecutorService,
+                                // CompletionService, or Spring AsyncTaskExecutor).
+                                changed[0] = true;
+                                ensureExtraStack(2);
+                                super.visitInsn(Opcodes.DUP2);
+                                super.visitInsn(Opcodes.POP);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfUntrackedSubmit",
                                         "(Ljava/lang/Object;)V", false);
                             } else if (isTwoArgExecutorSubmit(mname, desc)) {
                                 emitUntrackedFlag("untracked-executor:" + owner.replace('/', '.'));
@@ -1366,15 +1390,19 @@ final class ServerEntries implements ClassFileTransformer {
                             } else if (isTimerSchedule(owner, mname, desc)) {
                                 emitUntrackedFlag("untracked-async:timer");
                             } else if (isUntrackedScheduleOrInvokeAny(mname, desc)) {
-                                emitUntrackedFlag("untracked-async:" + ("invokeAny".equals(mname)
-                                        ? "invokeAny" : "schedule"));
-                                if (desc.endsWith(")Ljava/util/concurrent/ScheduledFuture;")) {
+                                if (!"invokeAny".equals(mname)
+                                        && desc.endsWith(")Ljava/util/concurrent/ScheduledFuture;")) {
+                                    changed[0] = true;
+                                    ensureExtraStack(2);
                                     super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
                                     super.visitInsn(Opcodes.DUP);
+                                    super.visitLdcInsn("untracked-async:schedule");
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "trackUntrackedFuture",
-                                            "(Ljava/lang/Object;)V", false);
+                                            "(Ljava/lang/Object;Ljava/lang/String;)V", false);
                                     return;
                                 }
+                                emitUntrackedFlag("untracked-async:" + ("invokeAny".equals(mname)
+                                        ? "invokeAny" : "schedule"));
                             } else if ("fork".equals(mname)
                                     && "()Ljava/util/concurrent/ForkJoinTask;".equals(desc)) {
                                 emitUntrackedFlag("untracked-async:fork");
@@ -1388,6 +1416,16 @@ final class ServerEntries implements ClassFileTransformer {
                                 ensureExtraStack(1);
                                 super.visitInsn(Opcodes.DUP);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfThread",
+                                        "(Ljava/lang/Object;)V", false);
+                            } else if (opcode == Opcodes.INVOKEVIRTUAL
+                                    && "cancel".equals(mname) && "()Z".equals(desc)) {
+                                // Track TimerTask.cancel() calls so cancelled TimerTasks stop
+                                // driving tail contamination immediately even on JDK 16+ without
+                                // --add-opens java.base/java.util.
+                                changed[0] = true;
+                                ensureExtraStack(1);
+                                super.visitInsn(Opcodes.DUP);
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfTimerTaskCancelled",
                                         "(Ljava/lang/Object;)V", false);
                             }
                         }

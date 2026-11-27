@@ -96,8 +96,14 @@ public final class KeployDedupAgent {
 
     static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
             boolean windowCut, List<String> contaminated) {
+        return toDedupJson(id, probesByClass, classMismatch, windowCut, contaminated,
+                Collections.<String>emptyList());
+    }
+
+    static String toDedupJson(String id, Map<String, List<Integer>> probesByClass, List<String> classMismatch,
+            boolean windowCut, List<String> contaminated, List<String> unverified) {
         return GSON.toJson(new DedupPayload(id,
-                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated)));
+                new TestCoverage(probesByClass, classMismatch, windowCut, contaminated, unverified)));
     }
 
     // encodeBytecodeFrame builds the bytecode frame the SDK writes to the
@@ -192,6 +198,7 @@ public final class KeployDedupAgent {
                 + ",contaminated=" + contaminated
                 + ",classMismatch=" + classMismatch
                 + ",background=" + background
+                + ",ackId=true"
                 + ",asyncExecutors=" + asyncExecutors
                 + ",listenerContamination=" + listenerContamination;
     }
@@ -338,14 +345,14 @@ public final class KeployDedupAgent {
     }
 
     // Merges RequestGate contaminations (tail, untracked-executor,
-    // untracked-async, armed-mid-flight), JobGate contaminations, and
-    // no-server-entry, deduplicated in order and capped at JobGate.NAMES with
-    // "+N" overflow.
-    static List<String> mergeContaminations(List<String> requestContams, List<String> jobContams,
-            boolean noServerEntry) {
+    // untracked-async, armed-mid-flight) and JobGate contaminations,
+    // deduplicated in order and capped at JobGate.NAMES with "+N" overflow.
+    // Note: "no-server-entry" is NOT merged here — it is carried in the separate
+    // "unverified" JSON field so older enterprise collectors keep measuring
+    // uncounted servers while v3 collectors fail closed.
+    static List<String> mergeContaminations(List<String> requestContams, List<String> jobContams) {
         if ((requestContams == null || requestContams.isEmpty())
-                && (jobContams == null || jobContams.isEmpty())
-                && !noServerEntry) {
+                && (jobContams == null || jobContams.isEmpty())) {
             return Collections.emptyList();
         }
         LinkedHashSet<String> merged = new LinkedHashSet<>();
@@ -359,9 +366,6 @@ public final class KeployDedupAgent {
             for (String item : jobContams) {
                 overflow = addContaminationItem(merged, overflow, item);
             }
-        }
-        if (noServerEntry) {
-            merged.add("no-server-entry");
         }
         if (merged.size() <= JobGate.NAMES && overflow == 0) {
             return new ArrayList<>(merged);
@@ -1026,6 +1030,7 @@ public final class KeployDedupAgent {
         // receiver may ask between an END and a START). Like activeTestId,
         // only the worker thread uses it.
         private String lastEndedTestId;
+        private boolean lastEndedHadUntrackedAsync;
         // The between-tests hits the last START cleared, for a receiver that
         // asked for them: made into a record and sent once that START's
         // answer is written and its connection closed, off the time Keploy
@@ -1209,22 +1214,31 @@ public final class KeployDedupAgent {
                 String prevActive = activeTestId;
                 activeTestId = "";
                 String after = lastEndedTestId;
+                boolean prevUntracked = lastEndedHadUntrackedAsync;
                 lastEndedTestId = null;
+                lastEndedHadUntrackedAsync = false;
                 // Warm up app classes once before the first measured window so
                 // one-time <clinit> lines aren't charged to the first test.
                 collector.warmup();
                 phases.mark("warmup");
                 List<ProbeScan.Hit> cleared = new ArrayList<>();
-                if (!collector.begin(command.testId, prevActive, phases, cleared)) {
+                boolean[] suppressBackground = {false};
+                if (!collector.begin(command.testId, prevActive, phases, cleared, suppressBackground)) {
                     return false;
                 }
                 activeTestId = command.testId;
                 // Only what ran since a test's coverage was read: before the
                 // first test it is the app's start and the warmup, and after
                 // a START with no END, or an END not taken, that test's own
-                // hits.
+                // hits. Also suppress gaps that may hold a previous test's
+                // async/cut/job tail so those probes are never calibrated as
+                // background.
                 if (after != null && !cleared.isEmpty() && publisher.backgroundAsked()) {
-                    pendingBackground = new BackgroundWindow(after, command.testId, cleared);
+                    if (prevUntracked || suppressBackground[0]) {
+                        publisher.noteBackgroundLost();
+                    } else {
+                        pendingBackground = new BackgroundWindow(after, command.testId, cleared);
+                    }
                 }
                 return true;
             }
@@ -1233,6 +1247,7 @@ public final class KeployDedupAgent {
             // taken (another test's id, its hits lost, its send failed), what
             // the next START clears may be a test's own hits.
             lastEndedTestId = null;
+            lastEndedHadUntrackedAsync = false;
             if (!command.testId.equals(activeTestId)) {
                 log(Level.SEVERE,
                         "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -1252,8 +1267,11 @@ public final class KeployDedupAgent {
                 List<String> jobContams = JobGate.close();
                 boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
                         && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0 && jobContams.isEmpty();
+                List<String> unverified = noServerEntry
+                        ? Collections.singletonList("no-server-entry")
+                        : Collections.<String>emptyList();
                 TestCoverage coverage = raw.ended(cut,
-                        mergeContaminations(outcome.contaminations, jobContams, noServerEntry));
+                        mergeContaminations(outcome.contaminations, jobContams), unverified);
                 if (coverage.probesByClass.isEmpty()) {
                     log(Level.FINE, "No Java coverage collected for " + command.testId, null);
                 }
@@ -1262,6 +1280,7 @@ public final class KeployDedupAgent {
                 // test's own late hits: not a window, as after an END not
                 // taken.
                 lastEndedTestId = cut ? null : command.testId;
+                lastEndedHadUntrackedAsync = !cut && outcome.hadUntrackedAsync;
                 return true;
             } catch (Exception e) {
                 // Not ACK for the same reason: nothing reached Keploy.
@@ -1370,6 +1389,7 @@ public final class KeployDedupAgent {
         // every START and every END until its record is sent, so what the next
         // START clears ran strictly between two tests.
         private String lastEndedTestId;
+        private boolean lastEndedHadUntrackedAsync;
         // Opt-in per TCP connection via "BACKGROUND" command so older collectors
         // never receive unexpected BACKGROUND frames.
         private boolean backgroundRequested;
@@ -1455,6 +1475,7 @@ public final class KeployDedupAgent {
             synchronized (testCaseLock) {
                 activeTestId = "";
                 lastEndedTestId = null;
+                lastEndedHadUntrackedAsync = false;
                 backgroundRequested = false;
                 ackWithId = false;
                 lastHelloSent = null;
@@ -1472,7 +1493,15 @@ public final class KeployDedupAgent {
                 // removal eligibility on this declaration and refresh it if a later
                 // HELLO arrives after server/JaCoCo initialization completes.
                 synchronized (testCaseLock) {
-                    maybeSendUpdatedHello(out);
+                    try {
+                        maybeSendUpdatedHello(out);
+                    } catch (RuntimeException e) {
+                        log(Level.FINE, "Failed to compute connect-time HELLO; falling back to minimal HELLO", e);
+                        String fallback = buildHelloFrame("", "", "", "", "", "",
+                                false, false, false, false, true, true, false, false);
+                        writeLine(out, fallback);
+                        lastHelloSent = fallback;
+                    }
                     out.flush();
                 }
                 String line;
@@ -1542,15 +1571,18 @@ public final class KeployDedupAgent {
                     String prevActive = activeTestId;
                     activeTestId = "";
                     String after = lastEndedTestId;
+                    boolean prevUntracked = lastEndedHadUntrackedAsync;
                     lastEndedTestId = null;
+                    lastEndedHadUntrackedAsync = false;
                     boolean reset;
                     List<ProbeScan.Hit> cleared = new ArrayList<>();
+                    boolean[] suppressBackground = {false};
                     try {
                         // Warm up app classes once before the first measured window so
                         // one-time <clinit> lines aren't charged to the first test.
                         collector.warmup();
                         phases.mark("warmup");
-                        reset = collector.begin(command.testId, prevActive, phases, cleared);
+                        reset = collector.begin(command.testId, prevActive, phases, cleared, suppressBackground);
                     } catch (RuntimeException e) {
                         // Not taken, and the connection goes on: thrown past
                         // here, it ended this thread, and no later command
@@ -1573,9 +1605,14 @@ public final class KeployDedupAgent {
                     ack(out, command.testId);
                     // Emit BACKGROUND after START's ACK (matching the unix path)
                     // so building coverageIndex.report() / JSON never delays the
-                    // test's START barrier.
+                    // test's START barrier. Suppress gaps that may hold a
+                    // previous test's async/cut/job tail and count them in lost.
                     if (reset && after != null && !cleared.isEmpty() && backgroundRequested) {
-                        writeBackgroundFrame(out, after, command.testId, cleared);
+                        if (prevUntracked || suppressBackground[0]) {
+                            backgroundLost++;
+                        } else {
+                            writeBackgroundFrame(out, after, command.testId, cleared);
+                        }
                     }
                     return;
                 }
@@ -1585,6 +1622,7 @@ public final class KeployDedupAgent {
                     // after an END not taken or cut, what the next START clears
                     // may hold this test's own hits.
                     lastEndedTestId = null;
+                    lastEndedHadUntrackedAsync = false;
                     if (!command.testId.equals(activeTestId)) {
                         log(Level.SEVERE,
                                 "Ignoring mismatched END command. expected=" + activeTestId + ", actual="
@@ -1605,16 +1643,21 @@ public final class KeployDedupAgent {
                     // exception would shift the collector onto the next test's frames.
                     TestCoverage coverage;
                     boolean cut;
+                    boolean hadUntrackedAsync;
                     try {
                         RequestGate.WindowOutcome outcome = collector.awaitRequests(command.testId, phases);
                         cut = !outcome.drained;
+                        hadUntrackedAsync = outcome.hadUntrackedAsync;
                         TestCoverage raw = collector.capture(phases);
                         List<String> jobContams = JobGate.close();
                         boolean noServerEntry = transformerAdded && collector.endWaitMillis > 0
                                 && !raw.probesByClass.isEmpty() && outcome.enteredCount == 0
                                 && jobContams.isEmpty();
+                        List<String> unverified = noServerEntry
+                                ? Collections.singletonList("no-server-entry")
+                                : Collections.<String>emptyList();
                         coverage = raw.ended(cut,
-                                mergeContaminations(outcome.contaminations, jobContams, noServerEntry));
+                                mergeContaminations(outcome.contaminations, jobContams), unverified);
                     } catch (Exception e) {
                         // Not taken, as on the unix socket: an empty COV is
                         // the frame of a test that ran no line of the app.
@@ -1649,6 +1692,7 @@ public final class KeployDedupAgent {
                         // at the ACK.
                         writeLine(out, cov);
                         lastEndedTestId = cut ? null : command.testId;
+                        lastEndedHadUntrackedAsync = !cut && hadUntrackedAsync;
                         // Ride the bytecode+manifest over this same raw-TCP channel
                         // (the only app->proxy path the replay agent doesn't mock-
                         // intercept), when the manifest has grown. A failure building
@@ -1956,16 +2000,21 @@ public final class KeployDedupAgent {
 
         // begin clears what the app's classes ran since the last test ended,
         // so that none of it is charged to the next test, and says whether
-        // it did.
-        private boolean begin(String testId, String prevActiveTestId, Phases phases, List<ProbeScan.Hit> cleared) {
+        // it did. Sets suppressBackground[0] = true when opening the new window
+        // added any tail:, job-tail:, or armed-mid-flight contamination.
+        private boolean begin(String testId, String prevActiveTestId, Phases phases, List<ProbeScan.Hit> cleared,
+                boolean[] suppressBackground) {
             // A job running now, or that starts before END reads the hits,
             // runs in this test's window: opened before the clear, as what
             // a job ran before is cleared only once it has ended.
-            JobGate.open();
+            boolean jobTail = JobGate.open();
             // This test's requests come in from now on; END waits for them
             // alone. Any cut/lingering prior window marks this window
             // contaminated ("tail:<prevTestId>") until drained.
-            RequestGate.open(testId, prevActiveTestId);
+            boolean reqTail = RequestGate.open(testId, prevActiveTestId);
+            if (suppressBackground != null && suppressBackground.length > 0) {
+                suppressBackground[0] = jobTail || reqTail;
+            }
             ProbeScan scan = probeScan();
             if (scan != null) {
                 try {
@@ -3197,6 +3246,16 @@ public final class KeployDedupAgent {
             return backgroundAskedBy != null;
         }
 
+        synchronized void noteBackgroundLost() {
+            Object key = receiverKey(socketFile);
+            if (key == null || !key.equals(backgroundAskedBy)) {
+                backgroundAskedBy = null;
+                backgroundLost = 0;
+                return;
+            }
+            backgroundLost++;
+        }
+
         // sendBackground sends a between-tests window's hits (classes makes
         // them, only when they go out) to the receiver that asked for them,
         // after the INDEX report when that receiver does not have it yet.
@@ -3286,6 +3345,7 @@ public final class KeployDedupAgent {
         private final List<String> classMismatch;
         private final Boolean windowCut;
         private final List<String> contaminated;
+        private final List<String> unverified;
 
         private DedupPayload(String id, TestCoverage coverage) {
             this.id = id;
@@ -3293,13 +3353,15 @@ public final class KeployDedupAgent {
             this.classMismatch = coverage.classMismatch.isEmpty() ? null : coverage.classMismatch;
             this.windowCut = coverage.windowCut ? Boolean.TRUE : null;
             this.contaminated = coverage.contaminated.isEmpty() ? null : coverage.contaminated;
+            this.unverified = coverage.unverified.isEmpty() ? null : coverage.unverified;
         }
     }
 
     // TestCoverage is a test's coverage as its END read it: the probes hit
     // by class, the classes among them that are not the class the index
     // read, whether the END was cut (its requests still ran at the end of
-    // its wait), and the scheduled jobs that ran in its window.
+    // its wait), the jobs/tails that contaminated its window, and any v3-only
+    // unverified signals (such as "no-server-entry").
     private static final class TestCoverage {
 
         static final TestCoverage NONE = new TestCoverage(Collections.<String, List<Integer>>emptyMap(),
@@ -3309,24 +3371,27 @@ public final class KeployDedupAgent {
         final List<String> classMismatch;
         final boolean windowCut;
         final List<String> contaminated;
+        final List<String> unverified;
 
         TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch) {
-            this(probesByClass, classMismatch, false, Collections.<String>emptyList());
+            this(probesByClass, classMismatch, false, Collections.<String>emptyList(),
+                    Collections.<String>emptyList());
         }
 
         TestCoverage(Map<String, List<Integer>> probesByClass, List<String> classMismatch, boolean windowCut,
-                List<String> contaminated) {
+                List<String> contaminated, List<String> unverified) {
             this.probesByClass = probesByClass;
             this.classMismatch = classMismatch;
             this.windowCut = windowCut;
             this.contaminated = contaminated;
+            this.unverified = unverified;
         }
 
         // ended is this coverage as its END sends it: cut when it was read
-        // at the end of a wait its requests outran, and with the jobs that
-        // ran in its window.
-        TestCoverage ended(boolean cut, List<String> jobs) {
-            return new TestCoverage(probesByClass, classMismatch, cut, jobs);
+        // at the end of a wait its requests outran, with contaminations and
+        // any unverified signals.
+        TestCoverage ended(boolean cut, List<String> jobs, List<String> unverified) {
+            return new TestCoverage(probesByClass, classMismatch, cut, jobs, unverified);
         }
     }
 

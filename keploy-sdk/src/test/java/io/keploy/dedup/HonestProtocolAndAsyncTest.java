@@ -363,12 +363,15 @@ public class HonestProtocolAndAsyncTest {
             assertTrue("early BACKGROUND opt-in must take effect once JaCoCo starts, got: " + bg,
                     bg != null && bg.startsWith("BACKGROUND ") && bg.contains("\"com/acme/Shop\":[0]"));
 
-            // Uncounted server (probes > 0 while enteredCount == 0, e.g. Netty/WebFlux) -> contaminated: ["no-server-entry"]!
+            // Uncounted server (probes > 0 while enteredCount == 0, e.g. Netty/WebFlux) ->
+            // unverified: ["no-server-entry"] with NO "contaminated" field (old enterprise compat)!
             probes[1] = true;
             send(out, "END ts/test-2");
             String cov2 = in.readLine();
             assertEquals("COV {\"id\":\"ts/test-2\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]},"
-                    + "\"contaminated\":[\"no-server-entry\"]}", cov2);
+                    + "\"unverified\":[\"no-server-entry\"]}", cov2);
+            assertFalse("no contaminated field for old enterprise notMeasuredBy compat",
+                    cov2.contains("\"contaminated\""));
             assertEquals("ACK ts/test-2", in.readLine());
         } finally {
             DeferredRtLoader.agent = null;
@@ -1437,7 +1440,7 @@ public class HonestProtocolAndAsyncTest {
 
         String reply1 = sendUnix(KeployDedupAgent.controlSocketPath, "START ts/u1");
         assertEquals("ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
-                + "background=false,asyncExecutors=true,listenerContamination=true\n", reply1);
+                + "background=false,ackId=true,asyncExecutors=true,listenerContamination=true\n", reply1);
         assertTrue("unix reply must stay well under 1024 bytes", reply1.length() < 1024);
         assertFalse("caps token must contain no spaces",
                 reply1.trim().substring("ACK proto=3 ".length()).contains(" "));
@@ -1446,7 +1449,7 @@ public class HonestProtocolAndAsyncTest {
         System.setProperty(ASYNC_CALLSITES_PROPERTY, "off");
         String reply2 = sendUnix(KeployDedupAgent.controlSocketPath, "START ts/u2");
         assertEquals("ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
-                + "background=false,asyncExecutors=false,listenerContamination=true\n", reply2);
+                + "background=false,ackId=true,asyncExecutors=false,listenerContamination=true\n", reply2);
         System.clearProperty(ASYNC_CALLSITES_PROPERTY);
     }
 
@@ -2798,6 +2801,507 @@ public class HonestProtocolAndAsyncTest {
             workerPool.shutdownNow();
             stpe.shutdownNow();
         }
+    }
+
+    public static final class PlainSyncTxHelper {
+        public void execute(Runnable action) {
+            action.run();
+        }
+
+        public Object submit(Runnable action) {
+            action.run();
+            return "ok";
+        }
+    }
+
+    public static final class CustomWorkerThread extends Thread {
+        public CustomWorkerThread(Runnable r) {
+            super(r, "r9-custom-thread");
+            setDaemon(true);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void r9DeltaRegressionsNonExecutorSyncHelperTrackedHandleLivenessInlineExecutorsAndBackgroundSuppression()
+            throws Exception {
+        ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(1);
+        java.util.Timer timer = new java.util.Timer(true);
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
+        try {
+            // Blocker 2: Bytecode-rewritten plain synchronous helper TxHelper.execute(Runnable)
+            // and TxHelper.submit(Runnable) (NOT implementing Executor/ExecutorService) MUST NOT
+            // contaminate the current window or any subsequent window!
+            byte[] callerRaw = generateTxHelperAndTimerCancelCaller("com/acme/R9DeltaCaller");
+            byte[] callerRewritten = ServerEntries.wrapExecutorCalls(callerRaw);
+            assertNotNull("R9DeltaCaller must be rewritten by ServerEntries.wrapExecutorCalls", callerRewritten);
+            Class<?> caller = new ByteLoader(getClass().getClassLoader())
+                    .define("com.acme.R9DeltaCaller", callerRewritten);
+
+            RequestGate.disarm();
+            RequestGate.open("b2-sync-helper", null);
+            Object reqB2 = RequestGate.enter();
+            AtomicBoolean execRan = new AtomicBoolean(false);
+            AtomicBoolean submitRan = new AtomicBoolean(false);
+            try {
+                PlainSyncTxHelper helper = new PlainSyncTxHelper();
+                caller.getMethod("callSyncHelper", PlainSyncTxHelper.class, Runnable.class, Runnable.class)
+                        .invoke(null, helper,
+                                (Runnable) () -> execRan.set(true),
+                                (Runnable) () -> submitRan.set(true));
+            } finally {
+                RequestGate.exit(reqB2);
+            }
+            assertTrue("TxHelper.execute ran", execRan.get());
+            assertTrue("TxHelper.submit ran", submitRan.get());
+            assertEquals("non-Executor TxHelper.execute/submit must NOT contaminate current window (B2)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.open("b2-next-window", null);
+            assertEquals("non-Executor TxHelper.execute/submit must NOT taint subsequent window (B2)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // Positive control for B2: a real custom Executor/ExecutorService still gets flagged!
+            RequestGate.open("b2-real-custom-exec", null);
+            Object reqCustomExec = RequestGate.enter();
+            Executor customExec = r -> r.run();
+            try {
+                RequestGate.noteIfUntrackedExecutor(customExec);
+            } finally {
+                RequestGate.exit(reqCustomExec);
+            }
+            RequestGate.WindowOutcome customExecOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("real custom Executor must still be flagged: " + customExecOut.contaminations,
+                    customExecOut.contaminations.contains("untracked-executor:" + customExec.getClass().getName()));
+
+            // Should-Fix 1(a): Request schedules a 30s timeout and cancels it before returning ->
+            // next request MUST be CLEAN (no 32s tail: taint)!
+            RequestGate.disarm();
+            RequestGate.open("sf1a-timeout", null);
+            Object reqTimeout = RequestGate.enter();
+            try {
+                ScheduledFuture<?> timeout = RequestGate.schedule(stpe, () -> { }, 30, TimeUnit.SECONDS);
+                assertTrue("30s timeout cancelled before returning", timeout.cancel(false));
+            } finally {
+                RequestGate.exit(reqTimeout);
+            }
+            RequestGate.WindowOutcome sf1aOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("originating window still notes schedule",
+                    sf1aOut.contaminations.contains("untracked-async:schedule"));
+            RequestGate.open("sf1a-next-clean", null);
+            assertEquals("cancelled 30s timeout must NOT taint subsequent window (SF1a)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // Should-Fix 1(b): Thread.start() + join() before response -> next request MUST be CLEAN!
+            RequestGate.disarm();
+            RequestGate.open("sf1b-thread-join", null);
+            Object reqJoin = RequestGate.enter();
+            try {
+                Thread t = new Thread(() -> { }, "sf1b-joined");
+                RequestGate.startThread(t);
+                t.join(5000);
+                assertFalse("thread terminated before END", t.isAlive());
+            } finally {
+                RequestGate.exit(reqJoin);
+            }
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            RequestGate.open("sf1b-next-clean", null);
+            assertEquals("joined Thread.start() must NOT leave 2s tail taint on next window (SF1b)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // Also verify bytecode-rewritten Thread subclass start() + join() before response -> CLEAN!
+            RequestGate.disarm();
+            RequestGate.open("sf1b-subthread-join", null);
+            Object reqSubJoin = RequestGate.enter();
+            try {
+                CustomWorkerThread sub = new CustomWorkerThread(() -> { });
+                caller.getMethod("startCustomThread", CustomWorkerThread.class).invoke(null, sub);
+                sub.join(5000);
+                assertFalse("subclass thread terminated before END", sub.isAlive());
+            } finally {
+                RequestGate.exit(reqSubJoin);
+            }
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            RequestGate.open("sf1b-subthread-next-clean", null);
+            assertEquals("joined Thread subclass must NOT taint next window (SF1b)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // Should-Fix 1(c): Periodic TimerTask cancelled and retained strongly in a field ->
+            // next request MUST be CLEAN!
+            RequestGate.disarm();
+            java.util.TimerTask retainedTask = new NoopTimerTask();
+            RequestGate.open("sf1c-timer-cancel", null);
+            Object reqTimer = RequestGate.enter();
+            try {
+                caller.getMethod("scheduleAndCancelPeriodic", java.util.Timer.class, java.util.TimerTask.class)
+                        .invoke(null, timer, retainedTask);
+            } finally {
+                RequestGate.exit(reqTimer);
+            }
+            RequestGate.WindowOutcome sf1cOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("originating window notes untracked-async:timer",
+                    sf1cOut.contaminations.contains("untracked-async:timer"));
+            RequestGate.open("sf1c-next-clean", null);
+            assertEquals("cancelled periodic TimerTask retained in a field must NOT taint next window (SF1c)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            assertNotNull("keep strong reference alive past assertion", retainedTask);
+
+            // Also verify one-shot TimerTask with 30s delay cancelled before returning -> CLEAN!
+            RequestGate.disarm();
+            java.util.TimerTask retainedOneShot = new NoopTimerTask();
+            RequestGate.open("sf1c-oneshot-cancel", null);
+            Object reqOneShot = RequestGate.enter();
+            try {
+                caller.getMethod("scheduleAndCancelOneShot", java.util.Timer.class, java.util.TimerTask.class)
+                        .invoke(null, timer, retainedOneShot);
+            } finally {
+                RequestGate.exit(reqOneShot);
+            }
+            RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            RequestGate.open("sf1c-oneshot-next-clean", null);
+            assertEquals("cancelled one-shot 30s TimerTask must NOT taint next window (SF1c)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            assertNotNull("keep strong reference alive", retainedOneShot);
+
+            // Should-Fix 3: Known same-thread inline executors (Spring SyncTaskExecutor,
+            // ConcurrentTaskExecutor(SyncTaskExecutor), and Guava DirectExecutor) are
+            // NEITHER wrapped NOR flagged untracked-executor!
+            RequestGate.disarm();
+            org.springframework.core.task.SyncTaskExecutor syncExec =
+                    new org.springframework.core.task.SyncTaskExecutor();
+            org.springframework.scheduling.concurrent.ConcurrentTaskExecutor concurrentDefault =
+                    new org.springframework.scheduling.concurrent.ConcurrentTaskExecutor(syncExec);
+            Class<?> guavaDirectCls = new ByteLoader(getClass().getClassLoader()).define(
+                    "com.google.common.util.concurrent.DirectExecutor",
+                    generateInlineExecutorClass("com/google/common/util/concurrent/DirectExecutor"));
+            Executor guavaDirect = (Executor) guavaDirectCls.getDeclaredConstructor().newInstance();
+
+            RequestGate.open("sf3-inline", null);
+            Object reqInline = RequestGate.enter();
+            AtomicBoolean inlineRan1 = new AtomicBoolean(false);
+            AtomicBoolean inlineRan2 = new AtomicBoolean(false);
+            try {
+                Runnable raw1 = () -> inlineRan1.set(true);
+                Runnable raw2 = () -> inlineRan2.set(true);
+                assertSame("SyncTaskExecutor must NOT wrap task", raw1, RequestGate.hand(syncExec, raw1));
+                assertSame("Guava DirectExecutor must NOT wrap task", raw2, RequestGate.hand(guavaDirect, raw2));
+                RequestGate.execute(syncExec, raw1);
+                RequestGate.execute(guavaDirect, raw2);
+                RequestGate.noteIfUntrackedExecutor(syncExec);
+                RequestGate.noteIfUntrackedExecutor(guavaDirect);
+                assertFalse("ConcurrentTaskExecutor(SyncTaskExecutor) must be allow-listed",
+                        OrderedPools.orders(concurrentDefault));
+            } finally {
+                RequestGate.exit(reqInline);
+            }
+            assertTrue("SyncTaskExecutor task executed", inlineRan1.get());
+            assertTrue("Guava DirectExecutor task executed", inlineRan2.get());
+            assertEquals("known inline executors must NOT contaminate current window (SF3)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            RequestGate.open("sf3-inline-next", null);
+            assertEquals("known inline executors must NOT taint next window (SF3)",
+                    Collections.<String>emptyList(),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+
+            // Should-Fix 4: Minimal connect-time fallback HELLO format is valid JSON with empty identity.
+            String minimalHello = KeployDedupAgent.buildHelloFrame("", "", "", "", "", "",
+                    false, false, false, false, true, true, false, false);
+            JsonObject minObj = parseHello(minimalHello);
+            assertEquals(3, minObj.get("proto").getAsInt());
+            assertEquals("", minObj.get("sdkVersion").getAsString());
+            assertEquals("", minObj.get("jvmNonce").getAsString());
+            assertEquals("", minObj.get("buildId").getAsString());
+            assertFalse(minObj.get("windowCut").getAsBoolean());
+            assertTrue(minObj.get("ackId").getAsBoolean());
+            assertTrue(minObj.get("nopResync").getAsBoolean());
+        } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            timer.cancel();
+            stpe.shutdownNow();
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void untrackedAsyncThreadSuppressesBackgroundAndIncrementsBackgroundLostOnTcpAndUnix() throws Exception {
+        byte[] shopBytes = new byte[] {31, 32, 33};
+        File shop = new File(tmp.newFolder("bg-suppress-classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 4);
+
+        // 1. TCP transport: test-1 calls RequestGate.startThread(audit), audit hits probe[2]
+        //    in the gap after END test-1 -> START test-2 MUST NOT emit BACKGROUND(after=test-1, before=test-2)
+        //    and MUST increment backgroundLost so the next clean gap reports "lost":1!
+        collector = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+        collector.setSoTimeout(30000);
+        System.setProperty(ENDPOINT_PROPERTY, "127.0.0.1:" + collector.getLocalPort());
+        System.setProperty(WARMUP_DISABLED_PROPERTY, "true");
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertNotNull(parseHello(in.readLine()));
+            send(out, "ACK_ID");
+            send(out, "BACKGROUND");
+
+            send(out, "START ts/test-1");
+            assertEquals("ACK ts/test-1", in.readLine());
+            CountDownLatch allowAudit = new CountDownLatch(1);
+            CountDownLatch auditDone = new CountDownLatch(1);
+            Object req1 = RequestGate.enter();
+            try {
+                probes[0] = true;
+                Thread audit = new Thread(() -> {
+                    try {
+                        allowAudit.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    probes[2] = true;
+                    auditDone.countDown();
+                }, "tcp-audit-thread");
+                audit.setDaemon(true);
+                RequestGate.startThread(audit);
+            } finally {
+                RequestGate.exit(req1);
+            }
+            send(out, "END ts/test-1");
+            String cov1 = in.readLine();
+            assertTrue("test-1 flags untracked-async:thread-start: " + cov1,
+                    cov1.contains("\"untracked-async:thread-start\""));
+            assertEquals("ACK ts/test-1", in.readLine());
+
+            // Audit thread runs in the gap between END test-1 and START test-2 and finishes.
+            allowAudit.countDown();
+            assertTrue("audit ran in gap", auditDone.await(5, TimeUnit.SECONDS));
+
+            // START test-2 clears probe[2] but MUST NOT emit BACKGROUND!
+            send(out, "START ts/test-2");
+            assertEquals("ACK ts/test-2", in.readLine());
+            assertFalse("gap probe cleared", probes[2]);
+            send(out, "NOP check-no-bg");
+            assertEquals("no BACKGROUND emitted for gap holding test-1's audit tail",
+                    "ACK check-no-bg", in.readLine());
+
+            // Clean test-2 -> END test-2 -> real background hit -> START test-3 emits BACKGROUND with lost:1!
+            Object req2 = RequestGate.enter();
+            try {
+                probes[1] = true;
+            } finally {
+                RequestGate.exit(req2);
+            }
+            send(out, "END ts/test-2");
+            String cov2 = in.readLine();
+            assertTrue("test-2 COV received", cov2.startsWith("COV "));
+            assertEquals("ACK ts/test-2", in.readLine());
+
+            probes[3] = true; // genuine background hit between test-2 and test-3
+            send(out, "START ts/test-3");
+            assertEquals("ACK ts/test-3", in.readLine());
+            String bgLine = in.readLine();
+            assertNotNull("clean gap emits BACKGROUND", bgLine);
+            assertTrue("BACKGROUND frame expected, got: " + bgLine, bgLine.startsWith("BACKGROUND "));
+            assertTrue("BACKGROUND carries after=ts/test-2: " + bgLine,
+                    bgLine.contains("\"after\":\"ts/test-2\""));
+            assertTrue("BACKGROUND reports lost:1 from suppressed gap: " + bgLine,
+                    bgLine.contains("\"lost\":1"));
+        } finally {
+            KeployDedupAgent.stop();
+            collector.close();
+            collector = null;
+        }
+
+        // 2. Unix transport: verify the exact same suppression + lost:1 counter!
+        System.clearProperty(ENDPOINT_PROPERTY);
+        File sockDir = tmp.newFolder("unix-bg-suppress");
+        KeployDedupAgent.controlSocketPath = new File(sockDir, "ctrl.sock").getAbsolutePath();
+        KeployDedupAgent.dataSocketPath = new File(sockDir, "data.sock").getAbsolutePath();
+        java.util.concurrent.BlockingQueue<String> records = new java.util.concurrent.LinkedBlockingQueue<>();
+        org.newsclub.net.unix.AFUNIXServerSocket dataServer = org.newsclub.net.unix.AFUNIXServerSocket.newInstance();
+        dataServer.bind(org.newsclub.net.unix.AFUNIXSocketAddress.of(new File(KeployDedupAgent.dataSocketPath)));
+        Thread dataReader = new Thread(() -> {
+            while (!dataServer.isClosed()) {
+                try (Socket conn = dataServer.accept();
+                     BufferedReader r = new BufferedReader(
+                             new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        sb.append(l);
+                    }
+                    if (sb.length() > 0) {
+                        records.add(sb.toString());
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+        }, "unix-data-reader");
+        dataReader.setDaemon(true);
+        dataReader.start();
+        try {
+            assertTrue(KeployDedupAgent.start());
+            assertTrue(sendUnixControl("BACKGROUND").startsWith("ACK proto=3"));
+            assertTrue(sendUnixControl("START ts/u1").startsWith("ACK proto=3"));
+            CountDownLatch allowAudit = new CountDownLatch(1);
+            CountDownLatch auditDone = new CountDownLatch(1);
+            Object req1 = RequestGate.enter();
+            try {
+                probes[0] = true;
+                Thread audit = new Thread(() -> {
+                    try {
+                        allowAudit.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    probes[2] = true;
+                    auditDone.countDown();
+                }, "unix-audit-thread");
+                audit.setDaemon(true);
+                RequestGate.startThread(audit);
+            } finally {
+                RequestGate.exit(req1);
+            }
+            assertTrue(sendUnixControl("END ts/u1").startsWith("ACK proto=3"));
+            allowAudit.countDown();
+            assertTrue(auditDone.await(5, TimeUnit.SECONDS));
+
+            assertTrue(sendUnixControl("START ts/u2").startsWith("ACK proto=3"));
+            Object req2 = RequestGate.enter();
+            try {
+                probes[1] = true;
+            } finally {
+                RequestGate.exit(req2);
+            }
+            assertTrue(sendUnixControl("END ts/u2").startsWith("ACK proto=3"));
+
+            probes[3] = true;
+            assertTrue(sendUnixControl("START ts/u3").startsWith("ACK proto=3"));
+
+            // Drain data records and verify no BACKGROUND for u1->u2 and BACKGROUND for u2->u3 has lost:1!
+            String bgU2U3 = null;
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (System.nanoTime() < deadline) {
+                String rec = records.poll(200, TimeUnit.MILLISECONDS);
+                if (rec == null) {
+                    continue;
+                }
+                assertFalse("must NOT emit BACKGROUND for gap after u1: " + rec,
+                        rec.contains("\"kind\":\"background\"") && rec.contains("\"after\":\"ts/u1\""));
+                if (rec.contains("\"kind\":\"background\"") && rec.contains("\"after\":\"ts/u2\"")) {
+                    bgU2U3 = rec;
+                    break;
+                }
+            }
+            assertNotNull("expected BACKGROUND for clean gap u2->u3", bgU2U3);
+            assertTrue("Unix BACKGROUND must carry lost:1 for suppressed u1->u2 gap: " + bgU2U3,
+                    bgU2U3.contains("\"lost\":1"));
+        } finally {
+            KeployDedupAgent.stop();
+            dataServer.close();
+        }
+    }
+
+    private static String sendUnixControl(String command) throws IOException {
+        try (org.newsclub.net.unix.AFUNIXSocket s = org.newsclub.net.unix.AFUNIXSocket.newInstance()) {
+            s.connect(org.newsclub.net.unix.AFUNIXSocketAddress.of(new File(KeployDedupAgent.controlSocketPath)));
+            s.setSoTimeout(10000);
+            OutputStream out = s.getOutputStream();
+            out.write((command + "\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            BufferedReader r = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+            return r.readLine();
+        }
+    }
+
+    private static byte[] generateInlineExecutorClass(String className) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object",
+                new String[] {"java/util/concurrent/Executor"});
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "execute", "(Ljava/lang/Runnable;)V", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/lang/Runnable", "run", "()V", true);
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(1, 2);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateTxHelperAndTimerCancelCaller(String className) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+
+        String txOwner = PlainSyncTxHelper.class.getName().replace('.', '/');
+        MethodVisitor m1 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "callSyncHelper",
+                "(L" + txOwner + ";Ljava/lang/Runnable;Ljava/lang/Runnable;)V", null, null);
+        m1.visitCode();
+        m1.visitVarInsn(Opcodes.ALOAD, 0);
+        m1.visitVarInsn(Opcodes.ALOAD, 1);
+        m1.visitMethodInsn(Opcodes.INVOKEVIRTUAL, txOwner, "execute", "(Ljava/lang/Runnable;)V", false);
+        m1.visitVarInsn(Opcodes.ALOAD, 0);
+        m1.visitVarInsn(Opcodes.ALOAD, 2);
+        m1.visitMethodInsn(Opcodes.INVOKEVIRTUAL, txOwner, "submit",
+                "(Ljava/lang/Runnable;)Ljava/lang/Object;", false);
+        m1.visitInsn(Opcodes.POP);
+        m1.visitInsn(Opcodes.RETURN);
+        m1.visitMaxs(0, 0);
+        m1.visitEnd();
+
+        String subOwner = CustomWorkerThread.class.getName().replace('.', '/');
+        MethodVisitor m2 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "startCustomThread",
+                "(L" + subOwner + ";)V", null, null);
+        m2.visitCode();
+        m2.visitVarInsn(Opcodes.ALOAD, 0);
+        m2.visitMethodInsn(Opcodes.INVOKEVIRTUAL, subOwner, "start", "()V", false);
+        m2.visitInsn(Opcodes.RETURN);
+        m2.visitMaxs(0, 0);
+        m2.visitEnd();
+
+        MethodVisitor m3 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "scheduleAndCancelPeriodic",
+                "(Ljava/util/Timer;Ljava/util/TimerTask;)V", null, null);
+        m3.visitCode();
+        m3.visitVarInsn(Opcodes.ALOAD, 0);
+        m3.visitVarInsn(Opcodes.ALOAD, 1);
+        m3.visitLdcInsn(5L);
+        m3.visitLdcInsn(25L);
+        m3.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/Timer",
+                "scheduleAtFixedRate", "(Ljava/util/TimerTask;JJ)V", false);
+        m3.visitVarInsn(Opcodes.ALOAD, 1);
+        m3.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/TimerTask", "cancel", "()Z", false);
+        m3.visitInsn(Opcodes.POP);
+        m3.visitInsn(Opcodes.RETURN);
+        m3.visitMaxs(0, 0);
+        m3.visitEnd();
+
+        MethodVisitor m4 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "scheduleAndCancelOneShot",
+                "(Ljava/util/Timer;Ljava/util/TimerTask;)V", null, null);
+        m4.visitCode();
+        m4.visitVarInsn(Opcodes.ALOAD, 0);
+        m4.visitVarInsn(Opcodes.ALOAD, 1);
+        m4.visitLdcInsn(30000L);
+        m4.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/Timer",
+                "schedule", "(Ljava/util/TimerTask;J)V", false);
+        m4.visitVarInsn(Opcodes.ALOAD, 1);
+        m4.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/TimerTask", "cancel", "()Z", false);
+        m4.visitInsn(Opcodes.POP);
+        m4.visitInsn(Opcodes.RETURN);
+        m4.visitMaxs(0, 0);
+        m4.visitEnd();
+
+        cw.visitEnd();
+        return cw.toByteArray();
     }
 
     private static byte[] generateTimerAndBranchyClass(String className) {
