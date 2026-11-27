@@ -345,6 +345,10 @@ final class ServerEntries implements ClassFileTransformer {
         HOOKED_SPRING_CLASSES.add(binaryClassName);
     }
 
+    static void unmarkSpringExecutorHookedForTests(String binaryClassName) {
+        HOOKED_SPRING_CLASSES.remove(binaryClassName);
+    }
+
     static boolean hadServerHookFailure() {
         return serverHookFailed;
     }
@@ -1287,6 +1291,26 @@ final class ServerEntries implements ClassFileTransformer {
                                 changed[0] = true;
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, stageHelperName(mname),
                                         "(Ljava/util/concurrent/CompletionStage;" + desc.substring(1), false);
+                                return;
+                            }
+                        }
+                        if (opcode == Opcodes.INVOKEVIRTUAL && "java/util/Timer".equals(owner)) {
+                            if ("schedule".equals(mname)
+                                    && ("(Ljava/util/TimerTask;J)V".equals(desc)
+                                            || "(Ljava/util/TimerTask;Ljava/util/Date;)V".equals(desc)
+                                            || "(Ljava/util/TimerTask;JJ)V".equals(desc)
+                                            || "(Ljava/util/TimerTask;Ljava/util/Date;J)V".equals(desc))) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "timerSchedule",
+                                        "(Ljava/util/Timer;" + desc.substring(1), false);
+                                return;
+                            }
+                            if ("scheduleAtFixedRate".equals(mname)
+                                    && ("(Ljava/util/TimerTask;JJ)V".equals(desc)
+                                            || "(Ljava/util/TimerTask;Ljava/util/Date;J)V".equals(desc))) {
+                                changed[0] = true;
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "timerScheduleAtFixedRate",
+                                        "(Ljava/util/Timer;" + desc.substring(1), false);
                                 return;
                             }
                         }

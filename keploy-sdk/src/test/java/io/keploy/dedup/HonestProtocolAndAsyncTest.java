@@ -2326,9 +2326,11 @@ public class HonestProtocolAndAsyncTest {
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
+                        assertNull("gen 2 expired", JobGate.running());
                         RequestGate.execute(pool, () -> {
                             try {
                                 gen2Exited.await(5, TimeUnit.SECONDS);
+                                assertNull("gen 3 expired", JobGate.running());
                                 gen3Entered.countDown();
                                 gen3Release.await(5, TimeUnit.SECONDS);
                             } catch (InterruptedException e) {
@@ -2343,6 +2345,11 @@ public class HonestProtocolAndAsyncTest {
                 JobGate.exit(jTokC);
             }
             assertTrue("gen 3 entered after gen 1 and gen 2 exited", gen3Entered.await(10, TimeUnit.SECONDS));
+            long waitSingleRun = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (JobGate.activeRunCount() > 1 && System.nanoTime() < waitSingleRun) {
+                Thread.sleep(5);
+            }
+            assertEquals("only gen 3 run remains active after gen 1 and gen 2 exited", 1, JobGate.activeRunCount());
             JobGate.open();
             List<String> gen3Contams = JobGate.close();
             gen3Release.countDown();
@@ -2355,7 +2362,7 @@ public class HonestProtocolAndAsyncTest {
 
             // SF-E: Real bytecode-rewritten call sites via ServerEntries.wrapExecutorCalls for
             //       TaskExecutor interface, TaskScheduler.schedule, Timer.schedule,
-            //       ForkJoinPool.execute/submit(ForkJoinTask), and Guava addListener/Futures.addCallback!
+            //       ForkJoinPool.execute(ForkJoinTask), and ListenableFuture.addListener!
             byte[] sfEBytes = ServerEntries.wrapExecutorCalls(generateSfEBytecodeClass("com/acme/SfECallSites"));
             assertNotNull("SfECallSites must be rewritten by ServerEntries.wrapExecutorCalls", sfEBytes);
             Class<?> sfEClass = new ByteLoader(getClass().getClassLoader()).define("com.acme.SfECallSites", sfEBytes);
@@ -2398,6 +2405,7 @@ public class HonestProtocolAndAsyncTest {
                 assertTrue("rewritten TaskExecutor.execute on unhooked impl must flag (SF-E): " + customTeContams,
                         customTeContams.contains("untracked-executor:" + customTe.getClass().getName()));
             } finally {
+                ServerEntries.unmarkSpringExecutorHookedForTests(springTe.getClass().getName());
                 springTe.shutdown();
             }
 
@@ -2571,6 +2579,275 @@ public class HonestProtocolAndAsyncTest {
 
         cw.visitEnd();
         return cw.toByteArray();
+    }
+
+    @Test(timeout = 60000)
+    public void r5RegressionsLateStartContaminatesCurrentWindowTimerDelayAndPeriodicMultiHopScheduledRetryAndBranchyFrames()
+            throws Exception {
+        ThreadPoolExecutor singlePool = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        ThreadPoolExecutor workerPool = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>());
+        ScheduledThreadPoolExecutor stpe = new ScheduledThreadPoolExecutor(2);
+        java.util.Timer oneShotTimer = new java.util.Timer(true);
+        java.util.Timer periodicTimer = new java.util.Timer(true);
+        long savedTailWindow = RequestGate.untrackedTailWindowNanos;
+        long savedMaxLingering = RequestGate.maxLingeringNanos;
+        try {
+            // SF-1: A queued task from an old window A whose idle permit expired
+            //       and was dropped from LINGERING MUST immediately contaminate
+            //       the CURRENT open window M when it finally starts executing
+            //       (even if it both starts and exits completely inside M)!
+            RequestGate.disarm();
+            RequestGate.maxLingeringNanos = TimeUnit.MILLISECONDS.toNanos(50);
+            CountDownLatch blockerRunning = new CountDownLatch(1);
+            CountDownLatch releaseBlocker = new CountDownLatch(1);
+            // External untracked blocker occupying singlePool's sole worker thread.
+            singlePool.execute(latchTask(blockerRunning, releaseBlocker));
+            assertTrue(blockerRunning.await(5, TimeUnit.SECONDS));
+
+            CountDownLatch lateTaskDone = new CountDownLatch(1);
+            RequestGate.open("sf1-late", null);
+            Object reqA = RequestGate.enter();
+            try {
+                RequestGate.execute(singlePool, lateTaskDone::countDown);
+            } finally {
+                RequestGate.exit(reqA);
+            }
+            assertFalse("A is cut while late task sits queued", RequestGate.await(TimeUnit.MILLISECONDS.toNanos(15)));
+            Thread.sleep(90); // Past 50ms maxLingeringNanos while executing == 0.
+            // First open past cap reports cut once & drops A from LINGERING.
+            RequestGate.open("sf1-dropper", null);
+            RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(20), true);
+
+            // Open window M: A is already gone from LINGERING so M opens clean!
+            RequestGate.open("sf1-target-m", null);
+            // Release blocker so A's late task starts AND completes inside M!
+            releaseBlocker.countDown();
+            assertTrue("late task completed inside M", lateTaskDone.await(5, TimeUnit.SECONDS));
+            List<String> mContams = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations;
+            assertTrue("window M open when late task ran must be flagged tail:sf1-late (SF-1): " + mContams,
+                    mContams.contains("tail:sf1-late"));
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+
+            // SF-2: Rewritten java.util.Timer one-shot (delay-aware tail) and
+            //       periodic scheduleAtFixedRate (weak TimerTask liveness).
+            byte[] timerBytes = ServerEntries.wrapExecutorCalls(generateTimerAndBranchyClass("com/acme/TimerAndBranchy"));
+            assertNotNull("TimerAndBranchy must be rewritten by ServerEntries.wrapExecutorCalls", timerBytes);
+            Class<?> timerClass = new ByteLoader(getClass().getClassLoader())
+                    .define("com.acme.TimerAndBranchy", timerBytes);
+
+            // SF-2a: One-shot Timer.schedule(TimerTask, long delay) past 30ms base tail
+            //        remains flagged through delay + base tail!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            CountDownLatch oneShotRan = new CountDownLatch(1);
+            RequestGate.open("sf2-timer-oneshot", null);
+            Object reqT1 = RequestGate.enter();
+            try {
+                timerClass.getMethod("scheduleOneShot", java.util.Timer.class, java.util.TimerTask.class, long.class)
+                        .invoke(null, oneShotTimer, new java.util.TimerTask() {
+                            @Override
+                            public void run() {
+                                oneShotRan.countDown();
+                            }
+                        }, 180L);
+            } finally {
+                RequestGate.exit(reqT1);
+            }
+            assertTrue("one-shot Timer.schedule flags untracked-async:timer",
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                            .contains("untracked-async:timer"));
+            Thread.sleep(75); // Past 30ms base tail, well before 180ms + 30ms extended tail!
+            RequestGate.open("sf2-timer-oneshot-next", null);
+            assertEquals("one-shot Timer delay must extend tail past base window (SF-2)",
+                    Collections.singletonList("tail:sf2-timer-oneshot"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            assertTrue(oneShotRan.await(5, TimeUnit.SECONDS));
+
+            // SF-2b: Periodic Timer.scheduleAtFixedRate(TimerTask, long, long) stays
+            //        flagged past base tail + delay + period while scheduled!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            RequestGate.open("sf2-timer-periodic", null);
+            Object reqT2 = RequestGate.enter();
+            try {
+                timerClass.getMethod("schedulePeriodic", java.util.Timer.class, long.class, long.class)
+                        .invoke(null, periodicTimer, 5L, 25L);
+            } finally {
+                RequestGate.exit(reqT2);
+            }
+            assertTrue("periodic Timer.scheduleAtFixedRate flags untracked-async:timer",
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                            .contains("untracked-async:timer"));
+            Thread.sleep(100); // Past 30ms + 5ms + 25ms tail while TimerTask is still in Timer's queue!
+            RequestGate.open("sf2-timer-periodic-alive", null);
+            assertEquals("periodic TimerTask held by Timer queue keeps tail active (SF-2)",
+                    Collections.singletonList("tail:sf2-timer-periodic"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            periodicTimer.cancel();
+
+            // SF-3: Multi-hop self-rescheduling retry loop on ScheduledThreadPoolExecutor
+            //       (gen 1 -> gen 2 -> downstream workerPool.execute) propagates window
+            //       context across hops without making END wait for delayed tasks!
+            RequestGate.disarm();
+            RequestGate.untrackedTailWindowNanos = TimeUnit.MILLISECONDS.toNanos(30);
+            CountDownLatch gen1Done = new CountDownLatch(1);
+            CountDownLatch gen2Started = new CountDownLatch(1);
+            CountDownLatch gen2Release = new CountDownLatch(1);
+            CountDownLatch downstreamStarted = new CountDownLatch(1);
+            CountDownLatch downstreamRelease = new CountDownLatch(1);
+            RequestGate.open("sf3-retry", null);
+            Object reqS3 = RequestGate.enter();
+            try {
+                RequestGate.schedule(stpe, () -> {
+                    // Gen 1 finishes quickly after scheduling Gen 2 with a 120ms delay.
+                    RequestGate.schedule(stpe, () -> {
+                        gen2Started.countDown();
+                        try {
+                            gen2Release.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        RequestGate.execute(workerPool, latchTask(downstreamStarted, downstreamRelease));
+                    }, 120, TimeUnit.MILLISECONDS);
+                    gen1Done.countDown();
+                }, 10, TimeUnit.MILLISECONDS);
+            } finally {
+                RequestGate.exit(reqS3);
+            }
+            RequestGate.WindowOutcome sf3Out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("END must not block on delayed scheduled task (SF-3)", sf3Out.drained);
+            assertTrue("SF-3 flags untracked-async:schedule", sf3Out.contaminations.contains("untracked-async:schedule"));
+            assertTrue("gen 1 completed", gen1Done.await(5, TimeUnit.SECONDS));
+            Thread.sleep(50); // Past gen 1 completion + 30ms base tail while gen 2 is still pending!
+            RequestGate.open("sf3-while-gen2-pending", null);
+            assertEquals("gen 2 ScheduledFuture tracked via propagated context keeps tail active (SF-3)",
+                    Collections.singletonList("tail:sf3-retry"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            assertTrue("gen 2 started", gen2Started.await(5, TimeUnit.SECONDS));
+            gen2Release.countDown();
+            assertTrue("downstream workerPool task started from gen 2", downstreamStarted.await(5, TimeUnit.SECONDS));
+            Thread.sleep(50); // Past 30ms base tail after gen 2 exited while downstream workerPool task still runs!
+            RequestGate.open("sf3-while-downstream-running", null);
+            assertEquals("downstream workerPool task launched by gen 2 keeps tail:sf3-retry (SF-3)",
+                    Collections.singletonList("tail:sf3-retry"),
+                    RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations);
+            downstreamRelease.countDown();
+
+            // Branchy + try/catch StackMapTable verifier fixture (V17 on JDK 17+, V1_8 on JDK 8):
+            // proves post-call DUP + trackUntrackedFuture passes strict JVM verification with
+            // branches and exception handlers!
+            org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler springTs =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
+            springTs.initialize();
+            try {
+                RequestGate.disarm();
+                RequestGate.open("sf5-branchy", null);
+                Object reqBr = RequestGate.enter();
+                ScheduledFuture<?> brFut;
+                try {
+                    brFut = (ScheduledFuture<?>) timerClass.getMethod("branchySchedule",
+                            org.springframework.scheduling.TaskScheduler.class, Runnable.class,
+                            java.util.Date.class, boolean.class)
+                            .invoke(null, springTs, (Runnable) () -> { },
+                                    new java.util.Date(System.currentTimeMillis() + 5000), Boolean.TRUE);
+                } finally {
+                    RequestGate.exit(reqBr);
+                }
+                assertNotNull(brFut);
+                brFut.cancel(false);
+                assertTrue("branchy rewritten TaskScheduler.schedule flags untracked-async:schedule",
+                        RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true).contaminations
+                                .contains("untracked-async:schedule"));
+            } finally {
+                springTs.shutdown();
+            }
+        } finally {
+            RequestGate.untrackedTailWindowNanos = savedTailWindow;
+            RequestGate.maxLingeringNanos = savedMaxLingering;
+            oneShotTimer.cancel();
+            periodicTimer.cancel();
+            singlePool.shutdownNow();
+            workerPool.shutdownNow();
+            stpe.shutdownNow();
+        }
+    }
+
+    private static byte[] generateTimerAndBranchyClass(String className) {
+        String spec = System.getProperty("java.specification.version", "1.8");
+        int classVersion = (!spec.startsWith("1.") && Integer.parseInt(spec) >= 17) ? Opcodes.V17 : Opcodes.V1_8;
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+        cw.visit(classVersion, Opcodes.ACC_PUBLIC, className, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+
+        // scheduleOneShot(Timer, TimerTask, long) -> void
+        MethodVisitor m1 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "scheduleOneShot",
+                "(Ljava/util/Timer;Ljava/util/TimerTask;J)V", null, null);
+        m1.visitCode();
+        m1.visitVarInsn(Opcodes.ALOAD, 0);
+        m1.visitVarInsn(Opcodes.ALOAD, 1);
+        m1.visitVarInsn(Opcodes.LLOAD, 2);
+        m1.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/Timer", "schedule", "(Ljava/util/TimerTask;J)V", false);
+        m1.visitInsn(Opcodes.RETURN);
+        m1.visitMaxs(0, 0);
+        m1.visitEnd();
+
+        // schedulePeriodic(Timer, long delay, long period) -> creates unreferenced TimerTask so only Timer holds it
+        MethodVisitor m2 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "schedulePeriodic",
+                "(Ljava/util/Timer;JJ)V", null, null);
+        m2.visitCode();
+        m2.visitVarInsn(Opcodes.ALOAD, 0);
+        String noopTask = NoopTimerTask.class.getName().replace('.', '/');
+        m2.visitTypeInsn(Opcodes.NEW, noopTask);
+        m2.visitInsn(Opcodes.DUP);
+        m2.visitMethodInsn(Opcodes.INVOKESPECIAL, noopTask, "<init>", "()V", false);
+        m2.visitVarInsn(Opcodes.LLOAD, 1);
+        m2.visitVarInsn(Opcodes.LLOAD, 3);
+        m2.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/Timer",
+                "scheduleAtFixedRate", "(Ljava/util/TimerTask;JJ)V", false);
+        m2.visitInsn(Opcodes.RETURN);
+        m2.visitMaxs(0, 0);
+        m2.visitEnd();
+
+        // branchySchedule(TaskScheduler, Runnable, Date, boolean) with if/else + try/catch + StackMapTable frames
+        MethodVisitor m3 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "branchySchedule",
+                "(Lorg/springframework/scheduling/TaskScheduler;Ljava/lang/Runnable;Ljava/util/Date;Z)"
+                        + "Ljava/util/concurrent/ScheduledFuture;", null, null);
+        m3.visitCode();
+        org.objectweb.asm.Label tryStart = new org.objectweb.asm.Label();
+        org.objectweb.asm.Label tryEnd = new org.objectweb.asm.Label();
+        org.objectweb.asm.Label catchBlock = new org.objectweb.asm.Label();
+        org.objectweb.asm.Label elseBranch = new org.objectweb.asm.Label();
+        m3.visitTryCatchBlock(tryStart, tryEnd, catchBlock, "java/lang/RuntimeException");
+        m3.visitLabel(tryStart);
+        m3.visitVarInsn(Opcodes.ILOAD, 3);
+        m3.visitJumpInsn(Opcodes.IFEQ, elseBranch);
+        m3.visitVarInsn(Opcodes.ALOAD, 0);
+        m3.visitVarInsn(Opcodes.ALOAD, 1);
+        m3.visitVarInsn(Opcodes.ALOAD, 2);
+        m3.visitMethodInsn(Opcodes.INVOKEINTERFACE, "org/springframework/scheduling/TaskScheduler",
+                "schedule", "(Ljava/lang/Runnable;Ljava/util/Date;)Ljava/util/concurrent/ScheduledFuture;", true);
+        m3.visitLabel(tryEnd);
+        m3.visitInsn(Opcodes.ARETURN);
+        m3.visitLabel(elseBranch);
+        m3.visitInsn(Opcodes.ACONST_NULL);
+        m3.visitInsn(Opcodes.ARETURN);
+        m3.visitLabel(catchBlock);
+        m3.visitInsn(Opcodes.POP);
+        m3.visitInsn(Opcodes.ACONST_NULL);
+        m3.visitInsn(Opcodes.ARETURN);
+        m3.visitMaxs(0, 0);
+        m3.visitEnd();
+
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    public static final class NoopTimerTask extends java.util.TimerTask {
+        @Override
+        public void run() {
+        }
     }
 
     @Test(timeout = 60000)
