@@ -1071,6 +1071,11 @@ final class ServerEntries implements ClassFileTransformer {
                 ? loader.getResourceAsStream(resource)
                 : ClassLoader.getSystemResourceAsStream(resource)) {
             if (in == null) {
+                // Bounded walk: if an intermediate supertype's bytecode is unavailable via
+                // getResourceAsStream and not yet cached, return false without failing class
+                // loading. Every allowlisted server (Tomcat/Jetty/Undertow) implements
+                // AsyncContext directly, and non-allowlisted containers fail closed at the
+                // JDK thread-start sink anyway.
                 return false;
             }
             ClassReader parentReader = new ClassReader(in);

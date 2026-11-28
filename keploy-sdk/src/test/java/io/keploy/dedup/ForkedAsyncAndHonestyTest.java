@@ -651,6 +651,214 @@ public class ForkedAsyncAndHonestyTest {
         }
     }
 
+    @Test(timeout = 240000)
+    public void forkedJakartaTomcat10AsyncContextStartAfterCompleteNeverLeaks() throws Exception {
+        // Spring Boot 3/4 Jakarta Servlet row: uses tomcat-embed-core 10.1.34 staged by the
+        // JDK 17+ Maven profile into target/tomcat10 (skipped cleanly on JDK 8/11).
+        File tomcat10Dir = new File("target/tomcat10");
+        File[] jars = tomcat10Dir.isDirectory()
+                ? tomcat10Dir.listFiles((d, name) -> name.startsWith("tomcat-embed-core-") && name.endsWith(".jar"))
+                : null;
+        org.junit.Assume.assumeTrue("Jakarta Tomcat 10 row requires JDK 17+ profile (target/tomcat10)",
+                jars != null && jars.length > 0);
+        File tomcat10Jar = jars[0];
+
+        File srcDir = tmp.newFolder("jakarta-src");
+        File outDir = tmp.newFolder("jakarta-classes");
+        File pkgDir = new File(srcDir, "org/example/jakarta");
+        assertTrue(pkgDir.mkdirs());
+        File tailSrc = new File(pkgDir, "JakartaAsyncTail.java");
+        Files.write(tailSrc.toPath(), (
+                "package org.example.jakarta;\n"
+                + "public final class JakartaAsyncTail {\n"
+                + "    private static volatile int hits;\n"
+                + "    public static void ran() { hits++; }\n"
+                + "}\n").getBytes(StandardCharsets.UTF_8));
+        File appSrc = new File(pkgDir, "JakartaTomcatAsyncApp.java");
+        Files.write(appSrc.toPath(), (
+                "package org.example.jakarta;\n"
+                + "import jakarta.servlet.AsyncContext;\n"
+                + "import jakarta.servlet.http.HttpServlet;\n"
+                + "import jakarta.servlet.http.HttpServletRequest;\n"
+                + "import jakarta.servlet.http.HttpServletResponse;\n"
+                + "import java.io.File;\n"
+                + "import java.io.IOException;\n"
+                + "import java.nio.charset.StandardCharsets;\n"
+                + "import java.nio.file.Files;\n"
+                + "import org.apache.catalina.Context;\n"
+                + "import org.apache.catalina.Wrapper;\n"
+                + "import org.apache.catalina.startup.Tomcat;\n"
+                + "public final class JakartaTomcatAsyncApp {\n"
+                + "    public static void main(String[] args) throws Exception {\n"
+                + "        File base = Files.createTempDirectory(\"tomcat10-jk\").toFile();\n"
+                + "        Tomcat tomcat = new Tomcat();\n"
+                + "        tomcat.setBaseDir(base.getPath());\n"
+                + "        tomcat.setPort(0);\n"
+                + "        Context context = tomcat.addContext(\"\", base.getPath());\n"
+                + "        Wrapper w = Tomcat.addServlet(context, \"async\", new HttpServlet() {\n"
+                + "            @Override\n"
+                + "            protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {\n"
+                + "                String path = req.getPathInfo() == null ? \"/\" : req.getPathInfo();\n"
+                + "                long ms = req.getParameter(\"ms\") == null ? 0L : Long.parseLong(req.getParameter(\"ms\"));\n"
+                + "                if (\"/async-after-complete\".equals(path)) {\n"
+                + "                    final AsyncContext ctx = req.startAsync();\n"
+                + "                    final long delay = ms;\n"
+                + "                    ctx.start(() -> {\n"
+                + "                        try {\n"
+                + "                            byte[] ok = \"ok\".getBytes(StandardCharsets.UTF_8);\n"
+                + "                            HttpServletResponse ar = (HttpServletResponse) ctx.getResponse();\n"
+                + "                            ar.setContentType(\"text/plain\");\n"
+                + "                            ar.setContentLength(ok.length);\n"
+                + "                            ar.getOutputStream().write(ok);\n"
+                + "                            ar.flushBuffer();\n"
+                + "                        } catch (IOException ignored) {\n"
+                + "                        } finally {\n"
+                + "                            ctx.complete();\n"
+                + "                        }\n"
+                + "                        try { Thread.sleep(delay); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }\n"
+                + "                        JakartaAsyncTail.ran();\n"
+                + "                    });\n"
+                + "                    return;\n"
+                + "                }\n"
+                + "                byte[] body = \"ok\".getBytes(StandardCharsets.UTF_8);\n"
+                + "                resp.setContentType(\"text/plain\");\n"
+                + "                resp.setContentLength(body.length);\n"
+                + "                resp.getOutputStream().write(body);\n"
+                + "                resp.flushBuffer();\n"
+                + "            }\n"
+                + "        });\n"
+                + "        w.setAsyncSupported(true);\n"
+                + "        context.addServletMappingDecoded(\"/*\", \"async\");\n"
+                + "        tomcat.start();\n"
+                + "        System.out.println(\"PORT \" + tomcat.getConnector().getLocalPort());\n"
+                + "        System.out.flush();\n"
+                + "        while (System.in.read() >= 0) { }\n"
+                + "        tomcat.stop();\n"
+                + "        System.exit(0);\n"
+                + "    }\n"
+                + "}\n").getBytes(StandardCharsets.UTF_8));
+
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        assertNotNull("JDK compiler required for Jakarta Tomcat 10 row", compiler);
+        int rc = compiler.run(null, null, null, "-cp", tomcat10Jar.getAbsolutePath(),
+                "-d", outDir.getAbsolutePath(), tailSrc.getAbsolutePath(), appSrc.getAbsolutePath());
+        assertEquals("compile JakartaTomcatAsyncApp", 0, rc);
+
+        String jakartaTail = "org/example/jakarta/JakartaAsyncTail";
+        for (boolean prefixMode : new boolean[] {true, false}) {
+            String label = "jakarta-tomcat10 mode=" + (prefixMode ? "prefix" : "index");
+            // 1. Short endWait=80ms: post-complete runnable outlives END -> W1 windowCut:true + W2 tail.
+            try (ForkedApp app = startJakartaTomcat10Fork(outDir, tomcat10Jar, "80", prefixMode)) {
+                JsonObject hello = parseHello(app.initialHello);
+                assertTrue(label + " must declare windowCut=true: " + app.initialHello,
+                        hello.get("windowCut").getAsBoolean());
+                app.runHttpTest("jk/warm", "/clean");
+                assertTrue(label + " must keep asyncExecutors=true after /clean: " + app.lastHello,
+                        parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                String cov1 = app.runHttpTest("jk/cut", "/async-after-complete?ms=400");
+                assertTrue(label + " W1 must report windowCut:true: " + cov1,
+                        cov1.contains("\"windowCut\":true"));
+                String cov2 = app.runHttpTest("jk/next", "/clean");
+                assertTrue(label + " W2 must carry tail:jk/cut: " + cov2,
+                        cov2.contains("\"tail:jk/cut\""));
+                Thread.sleep(600);
+                String cov3 = app.runHttpTest("jk/drained", "/clean");
+                assertFalse(label + " W3 after drain must not be windowCut: " + cov3, cov3.contains("windowCut"));
+                assertFalse(label + " W3 after drain must not be contaminated: " + cov3,
+                        cov3.contains("contaminated"));
+                String log = readFile(app.log);
+                assertTrue(label + " log must confirm jakarta AsyncContextImpl hook: " + log,
+                        log.contains("Keploy dedup counts Servlet AsyncContext.start tasks"
+                                + " (org.apache.catalina.core.AsyncContextImpl)"));
+            }
+            // 2. Sufficient endWait=2000ms: AsyncTail lands IN-WINDOW in W1 with zero contamination.
+            try (ForkedApp app = startJakartaTomcat10Fork(outDir, tomcat10Jar, "2000", prefixMode)) {
+                String cov1 = app.runHttpTest("jk/inwindow", "/async-after-complete?ms=250");
+                assertFalse(label + " sufficient wait must not cut: " + cov1, cov1.contains("windowCut"));
+                assertFalse(label + " sufficient wait must not contaminate W1: " + cov1,
+                        cov1.contains("contaminated"));
+                assertTrue(label + " post-complete JakartaAsyncTail must land IN-WINDOW in W1: " + cov1,
+                        cov1.contains("\"" + jakartaTail + "\""));
+                String cov2 = app.runHttpTest("jk/clean", "/clean");
+                assertFalse(label + " W2 must be clean: " + cov2, cov2.contains("contaminated"));
+                assertFalse(label + " W2 must not contain JakartaAsyncTail: " + cov2,
+                        cov2.contains("\"" + jakartaTail + "\""));
+            }
+        }
+    }
+
+    private ForkedApp startJakartaTomcat10Fork(File jakartaClassesDir, File tomcat10Jar, String endWait,
+            boolean externalJacocoPrefixMode) throws Exception {
+        ServerSocket collector = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        collector.setSoTimeout(60000);
+        List<String> cmd = new ArrayList<>();
+        cmd.add(new File(System.getProperty("java.home"), "bin/java").getPath());
+        cmd.add("-Djava.io.tmpdir=" + tmp.newFolder().getPath());
+        if (externalJacocoPrefixMode) {
+            File jacocoJar = tmp.newFile("jacocoagent-jk-" + System.nanoTime() + ".jar");
+            AgentJar.extractTo(jacocoJar);
+            cmd.add("-javaagent:" + jacocoJar.getPath() + "=includes=org.example.*,output=none");
+        }
+        cmd.add("-javaagent:" + sdkJar().getPath());
+
+        List<String> cp = new ArrayList<>();
+        cp.add(jakartaClassesDir.getAbsolutePath());
+        File[] tomcat10Jars = tomcat10Jar.getParentFile().listFiles((d, name) -> name.endsWith(".jar"));
+        if (tomcat10Jars != null) {
+            for (File jar : tomcat10Jars) {
+                cp.add(jar.getAbsolutePath());
+            }
+        } else {
+            cp.add(tomcat10Jar.getAbsolutePath());
+        }
+        for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+            String base = new File(entry).getName();
+            if (base.startsWith("tomcat-embed-") || base.startsWith("tomcat-annotations-")
+                    || base.startsWith("javax.servlet") || base.startsWith("jetty-")
+                    || base.startsWith("undertow-")) {
+                continue;
+            }
+            cp.add(new File(entry).getAbsolutePath());
+        }
+        cmd.add("-cp");
+        cmd.add(String.join(File.pathSeparator, cp));
+        cmd.add("org.example.jakarta.JakartaTomcatAsyncApp");
+
+        File log = tmp.newFile("fork-jakarta-tomcat10-" + System.nanoTime() + ".log");
+        ProcessBuilder pb = new ProcessBuilder(cmd)
+                .directory(tmp.newFolder())
+                .redirectErrorStream(true)
+                .redirectOutput(log);
+        Map<String, String> env = pb.environment();
+        env.keySet().removeIf(k -> k.startsWith("KEPLOY_") || k.equals("JAVA_TOOL_OPTIONS")
+                || k.equals("JDK_JAVA_OPTIONS") || k.equals("_JAVA_OPTIONS"));
+        if (!externalJacocoPrefixMode) {
+            env.put("KEPLOY_JAVA_CLASS_DIRS", jakartaClassesDir.getAbsolutePath());
+        }
+        env.put("KEPLOY_COVERAGE_ENDPOINT", "127.0.0.1:" + collector.getLocalPort());
+        env.put("KEPLOY_JAVA_DEDUP_WARMUP_DISABLED", "true");
+        env.put("KEPLOY_JAVA_END_WAIT_MS", endWait);
+        env.put("KEPLOY_DEDUP_POD_UID", "pod-uid-jk");
+        env.put("KEPLOY_DEDUP_POD_NAME", "pod-name-jk");
+        env.put("KEPLOY_DEDUP_SESSION_ID", "session-jk");
+
+        Process proc = pb.start();
+        try {
+            int port = waitForPort(log, proc);
+            Socket sdk = collector.accept();
+            sdk.setSoTimeout(60000);
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            OutputStream out = sdk.getOutputStream();
+            String hello = in.readLine();
+            return new ForkedApp(proc, log, collector, sdk, in, out, port, hello);
+        } catch (Throwable t) {
+            proc.destroyForcibly();
+            collector.close();
+            throw t;
+        }
+    }
+
     @Test(timeout = 420000)
     public void forkedAppSubPoolsAndReflectiveStartupWorkersFailClosed() throws Exception {
         // Isolated forks in both prefix and index modes for app/library JDK pool

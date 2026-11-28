@@ -569,6 +569,207 @@ public class JdkSinkBridgeTest {
     }
 
     @Test
+    public void asyncContextHookFailsClosedWhenLoaderCannotSeeRequestGate() {
+        final ServerEntries transformer = new ServerEntries(true);
+        final byte[] javaxImpl = generateAsyncContextImpl(
+                "org/example/isolated/IsolatedJavaxAsyncCtx", "java/lang/Object",
+                new String[] {"javax/servlet/AsyncContext"});
+        final byte[] jakartaImpl = generateAsyncContextImpl(
+                "org/example/isolated/IsolatedJakartaAsyncCtx", "java/lang/Object",
+                new String[] {"jakarta/servlet/AsyncContext"});
+        ClassLoader isolatedLoader = new ClassLoader(null) { };
+        java.util.Set<String> savedUnhooked = ServerEntries.snapshotUnhookedAsyncDispatchers();
+        try {
+            ServerEntries.setHookStatusForTests(false, false, false, false, false);
+            assertFalse("fresh asyncHookFailed must be false", ServerEntries.hadAsyncHookFailure());
+            byte[] outJavax = transformer.transform(isolatedLoader,
+                    "org/example/isolated/IsolatedJavaxAsyncCtx", null, null, javaxImpl);
+            assertEquals("unaccessible loader must leave bytecode untouched", null, outJavax);
+            assertTrue("javax AsyncContext in loader without RequestGate must set hadAsyncHookFailure()",
+                    ServerEntries.hadAsyncHookFailure());
+
+            ServerEntries.setHookStatusForTests(false, false, false, false, false);
+            byte[] outJakarta = transformer.transform(isolatedLoader,
+                    "org/example/isolated/IsolatedJakartaAsyncCtx", null, null, jakartaImpl);
+            assertEquals("unaccessible loader must leave jakarta bytecode untouched", null, outJakarta);
+            assertTrue("jakarta AsyncContext in loader without RequestGate must set hadAsyncHookFailure()",
+                    ServerEntries.hadAsyncHookFailure());
+        } finally {
+            ServerEntries.setHookStatusForTests(false, false, false, false, false);
+            ServerEntries.restoreUnhookedAsyncDispatchers(savedUnhooked);
+        }
+    }
+
+    @Test
+    public void jvmInternalAndServerAllowlistEntriesHaveExplicitBehaviourRows() throws Exception {
+        ExecutorService plain = Executors.newSingleThreadExecutor();
+        Thread plainThread = new Thread(() -> { });
+        Runnable plainTask = () -> { };
+        String[] callerOut = new String[1];
+        try {
+            // 1. JVM_INTERNAL_CALLER_CLASSES (exact count + behaviour at Thread/TPE/STPE/Timer sinks).
+            String[] expectedJvmCallers = {
+                "java.lang.ApplicationShutdownHooks",
+                "java.lang.ProcessHandleImpl",
+                "java.lang.ProcessImpl",
+                "java.lang.UNIXProcess",
+                "jdk.internal.ref.CleanerImpl",
+                "jdk.internal.ref.CleanerFactory",
+                "sun.misc.Cleaner",
+                "java.lang.ref.Cleaner",
+                "java.util.logging.LogManager",
+                "sun.net.www.http.KeepAliveCache",
+                "sun.net.www.http.KeepAliveCache$1",
+                "java.lang.VirtualThread",
+                "java.util.concurrent.DelayScheduler",
+                "jdk.internal.misc.Signal",
+                "sun.misc.Signal",
+            };
+            assertEquals("exact count of JVM_INTERNAL_CALLER_CLASSES",
+                    expectedJvmCallers.length, SinkAllowlist.JVM_INTERNAL_CALLER_CLASSES.size());
+            for (String cls : expectedJvmCallers) {
+                assertFalse("no package wildcards: " + cls, cls.endsWith(".") || cls.endsWith("*"));
+                assertTrue("behaviour: JVM caller allowed at Thread.start: " + cls,
+                        SinkAllowlist.isAllowlistedThreadStart(plainThread, cls, callerOut));
+                assertEquals(cls, callerOut[0]);
+                assertTrue("behaviour: JVM caller allowed at TPE.execute: " + cls,
+                        SinkAllowlist.isAllowlistedTpeExecute(plain, plainTask, cls, callerOut));
+                assertTrue("behaviour: JVM caller allowed at STPE.delayedExecute: " + cls,
+                        SinkAllowlist.isAllowlistedStpeDelayedExecute(plain, plainTask, cls, callerOut));
+                assertTrue("behaviour: JVM caller allowed at Timer.sched: " + cls,
+                        SinkAllowlist.isAllowlistedTimerSched(new Object(), plainTask, cls, callerOut));
+            }
+            assertTrue("behaviour: java.lang.VirtualThread allowed at FJP.submit",
+                    SinkAllowlist.isAllowlistedFjpSubmit(ForkJoinPool.commonPool(), plainTask,
+                            "java.lang.VirtualThread", callerOut));
+
+            // 2. JVM_INTERNAL_THREAD_CLASSES (exact count + zero wildcards).
+            String[] expectedJvmThreads = {
+                "java.lang.ref.Reference$ReferenceHandler",
+                "java.lang.ref.Finalizer$FinalizerThread",
+                "jdk.internal.ref.CleanerImpl$InnocuousThread",
+                "jdk.internal.misc.InnocuousThread",
+                "sun.misc.InnocuousThread",
+                "jdk.internal.misc.CarrierThread",
+                "java.util.logging.LogManager$Cleaner",
+            };
+            assertEquals("exact count of JVM_INTERNAL_THREAD_CLASSES",
+                    expectedJvmThreads.length, SinkAllowlist.JVM_INTERNAL_THREAD_CLASSES.size());
+            for (String cls : expectedJvmThreads) {
+                assertTrue("expected JVM thread class: " + cls,
+                        SinkAllowlist.JVM_INTERNAL_THREAD_CLASSES.contains(cls));
+                assertFalse("no package wildcards: " + cls, cls.endsWith(".") || cls.endsWith("*"));
+            }
+
+            // 3. SERVER_THREAD_START_CALLERS (exact count + behaviour at Thread.start).
+            String[] expectedServerThreadCallers = {
+                "org.apache.tomcat.util.net.AbstractEndpoint",
+                "org.apache.tomcat.util.net.NioEndpoint",
+                "org.apache.tomcat.util.net.Nio2Endpoint",
+                "org.apache.tomcat.util.net.AprEndpoint",
+                "org.apache.tomcat.util.threads.ThreadPoolExecutor",
+                "org.apache.tomcat.util.threads.ScheduledThreadPoolExecutor",
+                "org.apache.catalina.core.StandardServer",
+                "org.apache.catalina.core.ContainerBase",
+                "org.apache.catalina.startup.Catalina",
+                "org.apache.juli.AsyncFileHandler$LoggerExecutorService",
+                "org.eclipse.jetty.util.thread.QueuedThreadPool",
+                "org.eclipse.jetty.util.thread.ScheduledExecutorScheduler",
+                "org.eclipse.jetty.util.thread.ExecutorThreadPool",
+                "org.eclipse.jetty.util.thread.TimerScheduler",
+                "org.xnio.nio.NioXnioWorker",
+                "org.xnio.XnioWorker",
+                "org.quartz.simpl.SimpleThreadPool",
+                "org.quartz.core.QuartzScheduler",
+            };
+            assertEquals("exact count of SERVER_THREAD_START_CALLERS",
+                    expectedServerThreadCallers.length, SinkAllowlist.SERVER_THREAD_START_CALLERS.size());
+            for (String cls : expectedServerThreadCallers) {
+                assertFalse("no package wildcards: " + cls, cls.endsWith(".") || cls.endsWith("*"));
+                assertTrue("behaviour: server thread caller allowed at Thread.start: " + cls,
+                        SinkAllowlist.isAllowlistedThreadStart(plainThread, cls, callerOut));
+                assertEquals(cls, callerOut[0]);
+            }
+
+            // 4. SERVER_POOL_CALLERS (exact count + behaviour at TPE & STPE).
+            String[] expectedServerPoolCallers = {
+                "org.apache.tomcat.util.net.AbstractEndpoint",
+                "org.apache.tomcat.util.net.NioEndpoint",
+                "org.apache.tomcat.util.net.Nio2Endpoint",
+                "org.apache.tomcat.util.net.AprEndpoint",
+                "org.apache.tomcat.util.threads.ScheduledThreadPoolExecutor",
+                "org.apache.catalina.core.StandardServer",
+                "org.apache.catalina.core.ContainerBase",
+                "org.eclipse.jetty.util.thread.ScheduledExecutorScheduler",
+                "org.eclipse.jetty.util.thread.ExecutorThreadPool",
+                "org.xnio.XnioWorker",
+            };
+            assertEquals("exact count of SERVER_POOL_CALLERS",
+                    expectedServerPoolCallers.length, SinkAllowlist.SERVER_POOL_CALLERS.size());
+            for (String cls : expectedServerPoolCallers) {
+                assertFalse("no package wildcards: " + cls, cls.endsWith(".") || cls.endsWith("*"));
+                assertTrue("behaviour: server pool caller allowed at TPE: " + cls,
+                        SinkAllowlist.isAllowlistedTpeExecute(plain, plainTask, cls, callerOut));
+                assertTrue("behaviour: server pool caller allowed at STPE: " + cls,
+                        SinkAllowlist.isAllowlistedStpeDelayedExecute(plain, plainTask, cls, callerOut));
+            }
+
+            // 5. VirtualThread & TimerScheduler server caller behaviour rows.
+            assertTrue("behaviour: Tomcat VirtualThreadExecutor allowed at VirtualThread.start",
+                    SinkAllowlist.isAllowlistedVirtualThreadStart(plainThread,
+                            "org.apache.tomcat.util.threads.VirtualThreadExecutor", callerOut));
+            assertTrue("behaviour: Tomcat StandardVirtualThreadExecutor allowed at VirtualThread.start",
+                    SinkAllowlist.isAllowlistedVirtualThreadStart(plainThread,
+                            "org.apache.catalina.core.StandardVirtualThreadExecutor", callerOut));
+            assertTrue("behaviour: Jetty TimerScheduler allowed at Timer.sched",
+                    SinkAllowlist.isAllowlistedTimerSched(new Object(), plainTask,
+                            "org.eclipse.jetty.util.thread.TimerScheduler", callerOut));
+
+            // 6. Real server worker Thread, pool, and JobGate-hooked task instances behave as allowlisted.
+            Thread tomcatTaskThread = new org.apache.tomcat.util.threads.TaskThread(
+                    Thread.currentThread().getThreadGroup(), plainTask, "test-task-thread");
+            assertTrue("behaviour: Tomcat TaskThread allowed at Thread.start even from test caller",
+                    SinkAllowlist.isAllowlistedThreadStart(tomcatTaskThread, JdkSinkBridgeTest.class.getName(),
+                            callerOut));
+
+            org.apache.tomcat.util.threads.ThreadPoolExecutor tomcatPool =
+                    new org.apache.tomcat.util.threads.ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                            new org.apache.tomcat.util.threads.TaskQueue());
+            java.util.concurrent.ScheduledExecutorService delegateSched = Executors.newSingleThreadScheduledExecutor();
+            org.apache.tomcat.util.threads.ScheduledThreadPoolExecutor tomcatSched =
+                    new org.apache.tomcat.util.threads.ScheduledThreadPoolExecutor(delegateSched);
+            try {
+                assertTrue("behaviour: Tomcat ThreadPoolExecutor allowed at TPE.execute",
+                        SinkAllowlist.isAllowlistedTpeExecute(tomcatPool, plainTask,
+                                JdkSinkBridgeTest.class.getName(), callerOut));
+                assertTrue("behaviour: Tomcat ScheduledThreadPoolExecutor allowed at STPE.delayedExecute",
+                        SinkAllowlist.isAllowlistedStpeDelayedExecute(tomcatSched, plainTask,
+                                JdkSinkBridgeTest.class.getName(), callerOut));
+            } finally {
+                tomcatPool.shutdownNow();
+                tomcatSched.shutdownNow();
+                delegateSched.shutdownNow();
+            }
+
+            Runnable schedMethodRunnable = new org.springframework.scheduling.support.ScheduledMethodRunnable(
+                    this, JdkSinkBridgeTest.class.getMethod("unarmedHandOffOutsideWindowLatchesAsyncExecutorsFalse"));
+            assertTrue("behaviour: JobGate-hooked ScheduledMethodRunnable allowed at TPE & STPE",
+                    SinkAllowlist.isAllowlistedTpeExecute(plain, schedMethodRunnable,
+                            JdkSinkBridgeTest.class.getName(), callerOut));
+            assertTrue("behaviour: JobGate-hooked ScheduledMethodRunnable allowed at STPE",
+                    SinkAllowlist.isAllowlistedStpeDelayedExecute(plain, schedMethodRunnable,
+                            JdkSinkBridgeTest.class.getName(), callerOut));
+
+            // Pin exact sizes of SERVER_WORKER_THREAD_CLASSES, SERVER_POOL_CLASSES, SERVER_TASK_CLASSES.
+            assertEquals(7, SinkAllowlist.SERVER_WORKER_THREAD_CLASSES.size());
+            assertEquals(3, SinkAllowlist.SERVER_POOL_CLASSES.size());
+            assertEquals(9, SinkAllowlist.SERVER_TASK_CLASSES.size());
+        } finally {
+            plain.shutdownNow();
+        }
+    }
+
+    @Test
     public void unarmedHandOffOutsideWindowLatchesAsyncExecutorsFalse() {
         boolean savedLatch = KeployDedupAgent.observedPreCapturedUntrackedExecutor.get();
         KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
