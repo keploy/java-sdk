@@ -2559,6 +2559,8 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "hand", "(Ljava/lang/Object;" + taskType + ")" + taskType,
                     false);
             mv.visitVarInsn(Opcodes.ASTORE, handed);
+            mv.visitVarInsn(Opcodes.ALOAD, handed);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "enterTrackedDispatch", "(Ljava/lang/Object;)V", false);
             mv.visitLabel(start);
             slot = 0;
             if (!isStatic) {
@@ -2572,6 +2574,8 @@ final class ServerEntries implements ClassFileTransformer {
             mv.visitMethodInsn(isStatic ? Opcodes.INVOKESTATIC : Opcodes.INVOKESPECIAL, owner,
                     renamedPrefix + method.name, method.descriptor, false);
             mv.visitLabel(end);
+            mv.visitVarInsn(Opcodes.ALOAD, handed);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exitTrackedDispatch", "(Ljava/lang/Object;)V", false);
             if (returns.getSort() == Type.OBJECT) {
                 mv.visitInsn(Opcodes.DUP);
                 mv.visitVarInsn(Opcodes.ALOAD, handed);
@@ -2586,6 +2590,8 @@ final class ServerEntries implements ClassFileTransformer {
                 mv.visitFrame(Opcodes.F_FULL, locals.size(), locals.toArray(), 1,
                         new Object[] {"java/lang/Throwable"});
             }
+            mv.visitVarInsn(Opcodes.ALOAD, handed);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exitTrackedDispatch", "(Ljava/lang/Object;)V", false);
             mv.visitVarInsn(Opcodes.ALOAD, handed);
             mv.visitVarInsn(Opcodes.ALOAD, taskSlot);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "dropped", "(Ljava/lang/Object;Ljava/lang/Object;)V",

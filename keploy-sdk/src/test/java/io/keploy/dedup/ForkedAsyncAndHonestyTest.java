@@ -169,8 +169,8 @@ public class ForkedAsyncAndHonestyTest {
         try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
             String covExt = app.runHttpTest("ts/ext-cf-ok", "/external-cf-dependent?ms=200");
             assertFalse("external CF with sufficient wait must not cut: " + covExt, covExt.contains("windowCut"));
-            assertFalse("external CF with sufficient wait must not contaminate: " + covExt,
-                    covExt.contains("contaminated"));
+            assertTrue("unallowlisted external library thread start must be flagged by JDK sink: " + covExt,
+                    covExt.contains("untracked-sink:thread-start:io.fakeexternal.FakeExternalHttpClient"));
             assertTrue("external CF audit probe must land in COV: " + covExt,
                     covExt.contains("\"" + ASYNC_TAIL + "\""));
 
@@ -501,6 +501,125 @@ public class ForkedAsyncAndHonestyTest {
             assertTrue("Kafka listener COV must carry topic + bean attribution: " + cov,
                     cov.contains("\"contaminated\":[\"kafka:orders-topic@"
                             + AsyncHonestyApp.OrdersListenerBean.class.getName() + "\"]"));
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void forkedBootstrapBridgeLoadsInBootstrapClassLoaderAndAgentThreadsNeverLatch() throws Exception {
+        try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
+            JsonObject initial = parseHello(app.initialHello);
+            assertTrue("initial HELLO must declare asyncExecutors=true with bootstrap sink bridge: " + app.initialHello,
+                    initial.get("asyncExecutors").getAsBoolean());
+            String covCheck = app.runHttpTest("ts/bootstrap-cl", "/bootstrap-check");
+            assertFalse("bootstrap-check must not contaminate COV: " + covCheck, covCheck.contains("contaminated"));
+            assertTrue("asyncExecutors must remain true after /bootstrap-check and agent-internal threads: "
+                    + app.lastHello, parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+            String covClean = app.runHttpTest("ts/bootstrap-clean", "/clean");
+            assertFalse("clean baseline must not contaminate COV: " + covClean, covClean.contains("contaminated"));
+            assertTrue("asyncExecutors must remain true after /clean: " + app.lastHello,
+                    parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+        }
+    }
+
+    @Test(timeout = 300000)
+    public void forkedDirectJdkSinkBypassesFailClosedWithExactSinkReasons() throws Exception {
+        // Each tuple: {fixture, expectedSinkPrefix, expectAsyncFalseLatch, warmCommonPoolFirst}
+        // These invoke JDK sinks via reflection/MethodHandle with zero call-site
+        // rewrites, proving each of the 5 core JDK sink hooks independently fails closed.
+        String[][] cases = {
+            {"reflect-thread-start", "untracked-sink:thread-start:", "false", "false"},
+            {"mh-thread-start", "untracked-sink:thread-start:", "false", "false"},
+            {"mh-tpe-execute", "untracked-sink:tpe-execute:", "true", "false"},
+            {"reflect-stpe-schedule", "untracked-sink:stpe-delayed-execute:", "true", "false"},
+            {"reflect-fjp-submit", "untracked-sink:fjp-submit:", "true", "true"},
+            {"reflect-timer-schedule", "untracked-sink:timer-sched:", "true", "false"},
+        };
+        for (String[] tc : cases) {
+            String name = tc[0];
+            String expectedSink = tc[1];
+            boolean expectLatch = Boolean.parseBoolean(tc[2]);
+            boolean warmFjp = Boolean.parseBoolean(tc[3]);
+            try (ForkedApp app = startFork("sink-" + name, "80", false, false, null, null)) {
+                app.runHttpTest("sink/" + name + "-warm", warmFjp ? "/warm-common-pool" : "/clean");
+                assertTrue("case=" + name + " baseline must keep asyncExecutors=true: " + app.lastHello,
+                        parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                String cov1 = app.runHttpTest("sink/" + name + "-w1", "/sink-" + name + "?ms=250");
+                assertTrue("case=" + name + " must fail closed with " + expectedSink + ", got W1=" + cov1,
+                        cov1.contains(expectedSink));
+                if (expectLatch) {
+                    assertFalse("case=" + name + " must latch asyncExecutors=false: " + app.lastHello,
+                            parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                }
+            }
+        }
+    }
+
+    @Test(timeout = 180000)
+    public void forkedJdk21VirtualThreadSinkBypassesFailClosed() throws Exception {
+        String spec = System.getProperty("java.specification.version");
+        org.junit.Assume.assumeTrue("Virtual threads require JDK 21+",
+                !spec.startsWith("1.") && Integer.parseInt(spec) >= 21);
+
+        try (ForkedApp app = startFork("sink-reflect-vthread-start", "80", false, false, null, null)) {
+            app.runHttpTest("vt/reflect-warm", "/clean");
+            assertTrue("baseline must keep asyncExecutors=true: " + app.lastHello,
+                    parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+            String cov1 = app.runHttpTest("vt/reflect-w1", "/sink-reflect-vthread-start?ms=250");
+            assertTrue("reflective VirtualThread.start must fail closed with virtual-thread-start sink: " + cov1,
+                    cov1.contains("untracked-sink:virtual-thread-start:"));
+        }
+
+        for (String name : new String[] {"vthread-exec-worker", "vthread-exec-inwindow"}) {
+            try (ForkedApp app = startFork("sink-" + name, "80", false, false, null, null)) {
+                app.runHttpTest("vt/" + name + "-warm", "/clean");
+                String cov1 = app.runHttpTest("vt/" + name + "-w1", "/sink-" + name + "?ms=300");
+                boolean flagged = cov1.contains("\"contaminated\"") || cov1.contains("\"windowCut\":true");
+                boolean asyncOff = !parseHello(app.lastHello).get("asyncExecutors").getAsBoolean();
+                assertTrue("JDK 21 virtual-thread executor case=" + name + " must fail closed: W1=" + cov1
+                        + " hello=" + app.lastHello, flagged || asyncOff);
+            }
+        }
+    }
+
+    @Test(timeout = 420000)
+    public void forkedAppSubPoolsAndReflectiveStartupWorkersFailClosed() throws Exception {
+        // Isolated forks in both prefix and index modes for app/library JDK pool
+        // subclasses and reflective startup workers.
+        String[][] cases = {
+            {"app-tpe-sub-worker", "false"},
+            {"app-tpe-sub-submit-worker", "false"},
+            {"app-fjp-sub-worker", "false"},
+            {"app-fjp-sub-inwindow", "true"},
+            {"fjtask-worker", "false"},
+            {"app-timer-sub-poller", "false"},
+            {"app-timer-sub-inwindow", "false"},
+            {"app-stpe-sub-poller", "false"},
+            {"lib-fjp-sub", "true"},
+            {"reflect-worker-startup", "false"},
+        };
+        for (boolean prefixMode : new boolean[] {true, false}) {
+            for (String[] tc : cases) {
+                String name = tc[0];
+                boolean expectBaseTrue = Boolean.parseBoolean(tc[1]);
+                try (ForkedApp app = startFork("sink-" + name, "80", prefixMode, false, null, null)) {
+                    app.runHttpTest("sp/" + name + "-warm", "/clean");
+                    if (expectBaseTrue) {
+                        assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                                + " baseline must keep asyncExecutors=true: " + app.lastHello,
+                                parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                    } else {
+                        assertFalse("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                                + " startup worker/timer must latch asyncExecutors=false at boot: " + app.lastHello,
+                                parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                    }
+                    String cov1 = app.runHttpTest("sp/" + name + "-w1", "/sink-" + name + "?ms=300");
+                    boolean flagged = cov1.contains("\"contaminated\"") || cov1.contains("\"windowCut\":true");
+                    boolean asyncOff = !parseHello(app.lastHello).get("asyncExecutors").getAsBoolean();
+                    assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                            + " must fail closed at or before W1: W1=" + cov1 + " hello=" + app.lastHello,
+                            flagged || asyncOff);
+                }
+            }
         }
     }
 

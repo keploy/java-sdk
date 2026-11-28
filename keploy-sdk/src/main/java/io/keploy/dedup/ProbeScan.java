@@ -264,10 +264,13 @@ final class ProbeScan {
     // take it: creating the pool or its thread fails (out of memory, or the
     // container's limit on threads).
     private void submit(FutureTask<List<Hit>> task) {
+        JdkSinkBootstrap.enterInternal();
         try {
             pool().execute(task);
         } catch (Throwable t) {
             task.run();
+        } finally {
+            JdkSinkBootstrap.exitInternal();
         }
     }
 
@@ -393,6 +396,7 @@ final class ProbeScan {
                         return thread;
                     });
             created.allowCoreThreadTimeOut(true);
+            RequestGate.registerAgentInternalPool(created);
             pool = created;
         }
         return pool;

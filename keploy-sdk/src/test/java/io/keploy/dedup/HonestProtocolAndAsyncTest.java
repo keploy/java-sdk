@@ -107,6 +107,7 @@ public class HonestProtocolAndAsyncTest {
     private ClassLoader savedContextLoader;
     private boolean savedTransformerAdded;
     private boolean savedExecutorCallSitesEnabled;
+    private boolean savedJdkSinkBootstrapActive;
     private boolean savedObservedNoServerEntry;
     private boolean savedObservedPreCapturedUntrackedExecutor;
     private Set<String> savedCounted;
@@ -120,6 +121,8 @@ public class HonestProtocolAndAsyncTest {
     public void setUp() {
         savedTransformerAdded = KeployDedupAgent.transformerAdded;
         savedExecutorCallSitesEnabled = KeployDedupAgent.executorCallSitesEnabled;
+        savedJdkSinkBootstrapActive = JdkSinkBootstrap.isActive();
+        JdkSinkBootstrap.setActiveForTest(true);
         savedObservedNoServerEntry = KeployDedupAgent.observedNoServerEntry.get();
         savedObservedPreCapturedUntrackedExecutor = KeployDedupAgent.observedPreCapturedUntrackedExecutor.get();
         savedCounted = ServerEntries.snapshotCounted();
@@ -147,6 +150,7 @@ public class HonestProtocolAndAsyncTest {
         }
         KeployDedupAgent.transformerAdded = savedTransformerAdded;
         KeployDedupAgent.executorCallSitesEnabled = savedExecutorCallSitesEnabled;
+        JdkSinkBootstrap.setActiveForTest(savedJdkSinkBootstrapActive);
         KeployDedupAgent.observedNoServerEntry.set(savedObservedNoServerEntry);
         KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(savedObservedPreCapturedUntrackedExecutor);
         ServerEntries.restoreCounted(savedCounted);

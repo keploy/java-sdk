@@ -132,11 +132,11 @@ public class CoverageTcpClientTest {
             assertHello(in.readLine());
 
             send(out, "FOO");
-            assertEquals("IGNORED", in.readLine());
+            assertEquals("IGNORED proto=3", in.readLine());
             send(out, "START");
-            assertEquals("IGNORED", in.readLine());
+            assertEquals("IGNORED proto=3", in.readLine());
             send(out, "PROTO 4");
-            assertEquals("IGNORED", in.readLine());
+            assertEquals("IGNORED proto=3", in.readLine());
             send(out, "NOP");
             assertEquals("ACK", in.readLine());
         }

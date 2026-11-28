@@ -210,6 +210,152 @@ public final class RequestGate {
     // runs, counts in; null on any other thread.
     private static final ThreadLocal<Window> INSIDE = new ThreadLocal<>();
 
+    // Scoped depth > 0 while RequestGate or a hooked Spring executor is
+    // delegating a proven permit-holding Hand to an underlying JDK sink
+    // (TPE.execute, STPE.delayedExecute, FJP external submit, Thread.start
+    // for worker growth or SimpleAsyncTaskExecutor).
+    private static final ThreadLocal<Integer> TRACKED_DISPATCH_DEPTH = new ThreadLocal<>();
+
+    // Weak identity set of Keploy's own agent-internal pools (e.g. ProbeScan's
+    // scan pool) so agent work never false-latches JDK sinks.
+    private static final ConcurrentHashMap<WeakIdentityKey, Boolean> AGENT_INTERNAL_POOLS =
+            new ConcurrentHashMap<>();
+    private static final ReferenceQueue<Object> DEAD_AGENT_POOLS = new ReferenceQueue<>();
+
+    // Tracked Executor wrapper for 1-arg CompletableFuture.*Async stages when
+    // RequestGate holds a permit: delegates to ForkJoinPool.commonPool() inside
+    // TRACKED_DISPATCH_DEPTH so even deferred completion from another thread is
+    // proven tracked at the ForkJoinPool sink.
+    private static final Executor TRACKED_COMMON_POOL = new Executor() {
+        @Override
+        public void execute(Runnable command) {
+            enterTrackedDispatch();
+            try {
+                java.util.concurrent.ForkJoinPool.commonPool().execute(command);
+            } finally {
+                exitTrackedDispatch();
+            }
+        }
+    };
+
+    static void registerAgentInternalPool(Object pool) {
+        if (pool == null) {
+            return;
+        }
+        drainDeadAgentPools();
+        AGENT_INTERNAL_POOLS.put(new WeakIdentityKey(pool, DEAD_AGENT_POOLS), Boolean.TRUE);
+    }
+
+    static boolean isAgentInternalPool(Object pool) {
+        if (pool == null || AGENT_INTERNAL_POOLS.isEmpty()) {
+            return false;
+        }
+        return AGENT_INTERNAL_POOLS.containsKey(new LookupKey(pool));
+    }
+
+    private static void drainDeadAgentPools() {
+        Reference<?> ref;
+        while ((ref = DEAD_AGENT_POOLS.poll()) != null) {
+            AGENT_INTERNAL_POOLS.remove(ref);
+        }
+    }
+
+    static boolean isTrackedTask(Object task) {
+        return task instanceof Hand;
+    }
+
+    /**
+     * Marks entry into a proven tracked dispatch scope when {@code handed} is a
+     * {@link Hand} permit, allowing downstream JDK sinks to recognize it.
+     *
+     * @param handed task returned by {@link #hand(Object, Runnable)} or {@link #hand(Object, Callable)}
+     */
+    public static void enterTrackedDispatch(Object handed) {
+        if (handed instanceof Hand) {
+            enterTrackedDispatch();
+        }
+    }
+
+    /**
+     * Exits a proven tracked dispatch scope entered by {@link #enterTrackedDispatch(Object)}.
+     *
+     * @param handed task passed to {@link #enterTrackedDispatch(Object)}
+     */
+    public static void exitTrackedDispatch(Object handed) {
+        if (handed instanceof Hand) {
+            exitTrackedDispatch();
+        }
+    }
+
+    static void enterTrackedDispatch() {
+        Integer cur = TRACKED_DISPATCH_DEPTH.get();
+        TRACKED_DISPATCH_DEPTH.set(cur == null ? Integer.valueOf(1) : Integer.valueOf(cur.intValue() + 1));
+    }
+
+    static void exitTrackedDispatch() {
+        Integer cur = TRACKED_DISPATCH_DEPTH.get();
+        if (cur == null || cur.intValue() <= 1) {
+            TRACKED_DISPATCH_DEPTH.remove();
+        } else {
+            TRACKED_DISPATCH_DEPTH.set(Integer.valueOf(cur.intValue() - 1));
+        }
+    }
+
+    static boolean isTrackedDispatchActive() {
+        Integer cur = TRACKED_DISPATCH_DEPTH.get();
+        return cur != null && cur.intValue() > 0;
+    }
+
+    static boolean isInsideTrackedWindowOrJob() {
+        return INSIDE.get() != null
+                || JobGate.runningAttribution() != null
+                || JobGate.expiredRunningName() != null;
+    }
+
+    private static Executor wrapTrackedExecutor(final Executor delegate) {
+        if (delegate == null) {
+            return TRACKED_COMMON_POOL;
+        }
+        return new Executor() {
+            @Override
+            public void execute(Runnable command) {
+                enterTrackedDispatch();
+                try {
+                    delegate.execute(command);
+                } finally {
+                    exitTrackedDispatch();
+                }
+            }
+        };
+    }
+
+    static void handleUntrackedSink(String sink, Object receiver, Object task, String caller) {
+        String target = caller != null ? caller
+                : (receiver != null ? receiver.getClass().getName()
+                        : (task != null ? task.getClass().getName() : "unknown"));
+        String reason = "untracked-sink:" + sink + ":" + target;
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow(reason, false);
+            return;
+        }
+        Window window = INSIDE.get();
+        JobGate.Attribution job = currentOrExpiredJob(window);
+        if (window == null && job == null) {
+            noteBackgroundWorkerOutsideWindow(reason, true);
+            return;
+        }
+        if (receiver instanceof Thread) {
+            noteTrackedUntrackedAsync(reason, receiver, false);
+        } else if (task instanceof Future) {
+            noteTrackedUntrackedAsync(reason, task, false);
+            KeployDedupAgent.noteObservedUntrackedAsyncLibrary("untracked async pool/scheduler (" + reason + ")", true);
+        } else {
+            noteUntrackedAsync(reason, 0L);
+            KeployDedupAgent.noteObservedUntrackedAsyncLibrary("untracked async pool/scheduler (" + reason + ")", true);
+        }
+    }
+
     // Lock-free weak identity map from submitted Future -> WeakReference<Hand>,
     // explicitly removed on BOTH Hand.enter() and Hand.finishRelease(), so
     // self-referencing patterns (job.future = exec.submit(job)) can never leak
@@ -668,11 +814,14 @@ public final class RequestGate {
         }
         Runnable handed = hand(executor, task);
         registerForExecutor(executor, handed, task);
+        enterTrackedDispatch(handed);
         try {
             executor.execute(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
     }
 
@@ -692,11 +841,14 @@ public final class RequestGate {
         Runnable handed = hand(executor, task);
         registerForExecutor(executor, handed, task);
         Future<?> future;
+        enterTrackedDispatch(handed);
         try {
             future = executor.submit(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         trackSubmitted(future, handed, task);
         return future;
@@ -720,11 +872,14 @@ public final class RequestGate {
         Runnable handed = hand(executor, task);
         registerForExecutor(executor, handed, task);
         Future<T> future;
+        enterTrackedDispatch(handed);
         try {
             future = executor.submit(handed, result);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         trackSubmitted(future, handed, task);
         return future;
@@ -747,11 +902,14 @@ public final class RequestGate {
         Callable<T> handed = hand(executor, task);
         registerForExecutor(executor, handed, task);
         Future<T> future;
+        enterTrackedDispatch(handed);
         try {
             future = executor.submit(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         trackSubmitted(future, handed, task);
         return future;
@@ -773,11 +931,14 @@ public final class RequestGate {
         }
         Runnable handed = handInternal(null, task, true);
         CompletableFuture<Void> cf;
+        enterTrackedDispatch(handed);
         try {
             cf = CompletableFuture.runAsync(handed);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         attachCompletionRelease(cf, handed, task);
         return cf;
@@ -799,11 +960,14 @@ public final class RequestGate {
         Runnable handed = handInternal(executor, task, true);
         registerForExecutor(executor, handed, task);
         CompletableFuture<Void> cf;
+        enterTrackedDispatch(handed);
         try {
             cf = CompletableFuture.runAsync(handed, executor);
         } catch (Throwable t) {
             dropped(handed, task);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         attachCompletionRelease(cf, handed, task);
         return cf;
@@ -824,11 +988,14 @@ public final class RequestGate {
         }
         Supplier<T> handed = handSupplierInternal(null, supplier, true);
         CompletableFuture<T> cf;
+        enterTrackedDispatch(handed);
         try {
             cf = CompletableFuture.supplyAsync(handed);
         } catch (Throwable t) {
             dropped(handed, supplier);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         attachCompletionRelease(cf, handed, supplier);
         return cf;
@@ -851,11 +1018,14 @@ public final class RequestGate {
         Supplier<T> handed = handSupplierInternal(executor, supplier, true);
         registerForExecutor(executor, handed, supplier);
         CompletableFuture<T> cf;
+        enterTrackedDispatch(handed);
         try {
             cf = CompletableFuture.supplyAsync(handed, executor);
         } catch (Throwable t) {
             dropped(handed, supplier);
             throw t;
+        } finally {
+            exitTrackedDispatch(handed);
         }
         attachCompletionRelease(cf, handed, supplier);
         return cf;
@@ -1112,6 +1282,9 @@ public final class RequestGate {
         Hand hand = supplier == null ? null : prepareCfStageHand(cf, null, false);
         Supplier<? extends T> target = hand == null ? supplier : wrapSupplier(hand, supplier);
         CompletableFuture<T> out;
+        if (hand != null) {
+            enterTrackedDispatch();
+        }
         try {
             out = (CompletableFuture<T>) invokeCfReflect(CF_COMPLETE_ASYNC_1, cf, target);
         } catch (Throwable t) {
@@ -1119,6 +1292,10 @@ public final class RequestGate {
                 hand.releaseIfPending();
             }
             throw sneakyThrow(t);
+        } finally {
+            if (hand != null) {
+                exitTrackedDispatch();
+            }
         }
         return finishCfStage(out, hand);
     }
@@ -1139,7 +1316,8 @@ public final class RequestGate {
         Supplier<? extends T> target = hand == null ? supplier : wrapSupplier(hand, supplier);
         CompletableFuture<T> out;
         try {
-            out = (CompletableFuture<T>) invokeCfReflect(CF_COMPLETE_ASYNC_2, cf, target, executor);
+            Executor targetExecutor = hand == null ? executor : wrapTrackedExecutor(executor);
+            out = (CompletableFuture<T>) invokeCfReflect(CF_COMPLETE_ASYNC_2, cf, target, targetExecutor);
         } catch (Throwable t) {
             if (hand != null) {
                 hand.releaseIfPending();
@@ -1166,7 +1344,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.thenApplyAsync(wrapFunction(hand, fn));
+            out = cf.thenApplyAsync(wrapFunction(hand, fn), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1192,7 +1370,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.thenApplyAsync(wrapFunction(hand, fn), executor);
+            out = cf.thenApplyAsync(wrapFunction(hand, fn), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1216,7 +1394,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenAcceptAsync(wrapConsumer(hand, action));
+            out = cf.thenAcceptAsync(wrapConsumer(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1241,7 +1419,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenAcceptAsync(wrapConsumer(hand, action), executor);
+            out = cf.thenAcceptAsync(wrapConsumer(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1264,7 +1442,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenRunAsync(wrapStageRunnable(hand, action));
+            out = cf.thenRunAsync(wrapStageRunnable(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1289,7 +1467,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenRunAsync(wrapStageRunnable(hand, action), executor);
+            out = cf.thenRunAsync(wrapStageRunnable(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1314,7 +1492,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.thenComposeAsync(wrapFunction(hand, fn));
+            out = cf.thenComposeAsync(wrapFunction(hand, fn), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1340,7 +1518,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.thenComposeAsync(wrapFunction(hand, fn), executor);
+            out = cf.thenComposeAsync(wrapFunction(hand, fn), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1367,7 +1545,7 @@ public final class RequestGate {
         }
         CompletableFuture<V> out;
         try {
-            out = cf.thenCombineAsync(other, wrapBiFunction(hand, fn));
+            out = cf.thenCombineAsync(other, wrapBiFunction(hand, fn), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1396,7 +1574,7 @@ public final class RequestGate {
         }
         CompletableFuture<V> out;
         try {
-            out = cf.thenCombineAsync(other, wrapBiFunction(hand, fn), executor);
+            out = cf.thenCombineAsync(other, wrapBiFunction(hand, fn), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1422,7 +1600,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenAcceptBothAsync(other, wrapBiConsumer(hand, action));
+            out = cf.thenAcceptBothAsync(other, wrapBiConsumer(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1449,7 +1627,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.thenAcceptBothAsync(other, wrapBiConsumer(hand, action), executor);
+            out = cf.thenAcceptBothAsync(other, wrapBiConsumer(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1474,7 +1652,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.runAfterBothAsync(other, wrapStageRunnable(hand, action));
+            out = cf.runAfterBothAsync(other, wrapStageRunnable(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1500,7 +1678,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.runAfterBothAsync(other, wrapStageRunnable(hand, action), executor);
+            out = cf.runAfterBothAsync(other, wrapStageRunnable(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1526,7 +1704,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.applyToEitherAsync(other, wrapFunction(hand, fn));
+            out = cf.applyToEitherAsync(other, wrapFunction(hand, fn), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1553,7 +1731,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.applyToEitherAsync(other, wrapFunction(hand, fn), executor);
+            out = cf.applyToEitherAsync(other, wrapFunction(hand, fn), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1578,7 +1756,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.acceptEitherAsync(other, wrapConsumer(hand, action));
+            out = cf.acceptEitherAsync(other, wrapConsumer(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1604,7 +1782,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.acceptEitherAsync(other, wrapConsumer(hand, action), executor);
+            out = cf.acceptEitherAsync(other, wrapConsumer(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1629,7 +1807,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.runAfterEitherAsync(other, wrapStageRunnable(hand, action));
+            out = cf.runAfterEitherAsync(other, wrapStageRunnable(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1655,7 +1833,7 @@ public final class RequestGate {
         }
         CompletableFuture<Void> out;
         try {
-            out = cf.runAfterEitherAsync(other, wrapStageRunnable(hand, action), executor);
+            out = cf.runAfterEitherAsync(other, wrapStageRunnable(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1680,7 +1858,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.handleAsync(wrapBiFunction(hand, fn));
+            out = cf.handleAsync(wrapBiFunction(hand, fn), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1706,7 +1884,7 @@ public final class RequestGate {
         }
         CompletableFuture<U> out;
         try {
-            out = cf.handleAsync(wrapBiFunction(hand, fn), executor);
+            out = cf.handleAsync(wrapBiFunction(hand, fn), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1730,7 +1908,7 @@ public final class RequestGate {
         }
         CompletableFuture<T> out;
         try {
-            out = cf.whenCompleteAsync(wrapBiConsumer(hand, action));
+            out = cf.whenCompleteAsync(wrapBiConsumer(hand, action), TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1755,7 +1933,7 @@ public final class RequestGate {
         }
         CompletableFuture<T> out;
         try {
-            out = cf.whenCompleteAsync(wrapBiConsumer(hand, action), executor);
+            out = cf.whenCompleteAsync(wrapBiConsumer(hand, action), wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             hand.releaseIfPending();
             throw t;
@@ -1778,7 +1956,7 @@ public final class RequestGate {
         Function<Throwable, ? extends T> target = hand == null ? fn : wrapFunction(hand, fn);
         CompletableFuture<T> out;
         try {
-            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_ASYNC_1, cf, target);
+            out = hand == null ? (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_ASYNC_1, cf, target) : (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_ASYNC_2, cf, target, TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             if (hand != null) {
                 hand.releaseIfPending();
@@ -1804,7 +1982,7 @@ public final class RequestGate {
         Function<Throwable, ? extends T> target = hand == null ? fn : wrapFunction(hand, fn);
         CompletableFuture<T> out;
         try {
-            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_ASYNC_2, cf, target, executor);
+            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_ASYNC_2, cf, target, hand == null ? executor : wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             if (hand != null) {
                 hand.releaseIfPending();
@@ -1829,7 +2007,7 @@ public final class RequestGate {
         Function<Throwable, ? extends CompletionStage<T>> target = hand == null ? fn : wrapFunction(hand, fn);
         CompletableFuture<T> out;
         try {
-            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE_ASYNC_1, cf, target);
+            out = hand == null ? (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE_ASYNC_1, cf, target) : (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE_ASYNC_2, cf, target, TRACKED_COMMON_POOL);
         } catch (Throwable t) {
             if (hand != null) {
                 hand.releaseIfPending();
@@ -1855,7 +2033,7 @@ public final class RequestGate {
         Function<Throwable, ? extends CompletionStage<T>> target = hand == null ? fn : wrapFunction(hand, fn);
         CompletableFuture<T> out;
         try {
-            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE_ASYNC_2, cf, target, executor);
+            out = (CompletableFuture<T>) invokeCfReflect(CF_EXCEPTIONALLY_COMPOSE_ASYNC_2, cf, target, hand == null ? executor : wrapTrackedExecutor(executor));
         } catch (Throwable t) {
             if (hand != null) {
                 hand.releaseIfPending();
@@ -3075,14 +3253,16 @@ public final class RequestGate {
         if (!(receiver instanceof Executor)) {
             return;
         }
+        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+            return;
+        }
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(receiver, false);
             return;
         }
         if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            return;
-        }
-        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+            noteExecutorHandOffOutsideWindow(receiver, true);
             return;
         }
         noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
@@ -3102,19 +3282,27 @@ public final class RequestGate {
                 && !OrderedPools.isSpringAsyncTaskExecutor(receiver)) {
             return;
         }
+        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+            return;
+        }
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(receiver, false);
             return;
         }
         if (INSIDE.get() == null && JobGate.runningAttribution() == null && JobGate.expiredRunningName() == null) {
-            return;
-        }
-        if (OrderedPools.isInlineExecutor(receiver) || OrderedPools.isHookedAndVerifiedSpringExecutor(receiver)) {
+            noteExecutorHandOffOutsideWindow(receiver, true);
             return;
         }
         noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
     }
 
+    /**
+     * Marks an active request window or job run contaminated if {@code receiver}
+     * is a JDK concurrent/blocking queue enqueued from application bytecode.
+     *
+     * @param receiver target queue receiver
+     */
     public static void noteIfBlockingQueue(Object receiver) {
         if (!(receiver instanceof java.util.concurrent.BlockingQueue)
                 && !(receiver instanceof java.util.concurrent.ConcurrentLinkedQueue)

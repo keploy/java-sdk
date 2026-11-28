@@ -58,11 +58,17 @@ public final class AsyncHonestyApp {
         t.setDaemon(true);
         return t;
     });
-    private static final ExecutorService SERIALIZABLE_ONLY_POOL = new SerializableOnlyExecutor(false);
-    private static final ExecutorService ASYNC_SERIALIZABLE_POOL = new SerializableOnlyExecutor(true);
-    private static final ConcreteCustomPool CONCRETE_POOL = new ConcreteCustomPool();
     private static volatile java.util.concurrent.CountDownLatch VIRTUAL_RELEASE_LATCH;
     private static volatile Thread VIRTUAL_THREAD;
+
+    private static final class SerializablePoolHolder {
+        static final ExecutorService SYNC = new SerializableOnlyExecutor(false);
+        static final ExecutorService ASYNC = new SerializableOnlyExecutor(true);
+    }
+
+    private static final class ConcretePoolHolder {
+        static final ConcreteCustomPool POOL = new ConcreteCustomPool();
+    }
 
     private AsyncHonestyApp() {
     }
@@ -85,9 +91,11 @@ public final class AsyncHonestyApp {
             tomcat.start();
             port = tomcat.getConnector().getLocalPort();
             server = tomcat::stop;
-        } else if ("jetty".equals(mode) || mode.startsWith("handoff-")) {
+        } else if ("jetty".equals(mode) || mode.startsWith("handoff-") || mode.startsWith("sink-")) {
             if (mode.startsWith("handoff-")) {
                 HandOffFixtures.init(mode.substring("handoff-".length()));
+            } else if (mode.startsWith("sink-")) {
+                SinkFixtures.init(mode.substring("sink-".length()));
             }
             Server jetty = new Server(0);
             ServletContextHandler context = new ServletContextHandler();
@@ -178,20 +186,20 @@ public final class AsyncHonestyApp {
                         }, PLAIN_POOL);
             } else if ("/unknown-serializable".equals(path)) {
                 Runnable serializableTask = (Runnable & Serializable) () -> AsyncTail.ran();
-                SERIALIZABLE_ONLY_POOL.execute(serializableTask);
+                SerializablePoolHolder.SYNC.execute(serializableTask);
                 java.util.concurrent.Callable<String> serializableCall =
                         (java.util.concurrent.Callable<String> & Serializable) () -> {
                             AsyncTail.ran();
                             return "ok";
                         };
-                SERIALIZABLE_ONLY_POOL.submit(serializableCall);
+                SerializablePoolHolder.SYNC.submit(serializableCall);
             } else if ("/unknown-serializable-async".equals(path)) {
                 final long delay = ms;
                 Runnable serializableTask = (Runnable & Serializable) () -> {
                     sleepQuietly(delay);
                     AsyncTail.ran();
                 };
-                ASYNC_SERIALIZABLE_POOL.execute(serializableTask);
+                SerializablePoolHolder.ASYNC.execute(serializableTask);
             } else if ("/external-cf-dependent".equals(path)) {
                 // Simulates an external library future (e.g., HttpClient.sendAsync)
                 // completed on an external event-loop thread, with app code attaching
@@ -210,7 +218,7 @@ public final class AsyncHonestyApp {
                     return v + "-stage";
                 }, PLAIN_POOL);
             } else if ("/concrete-pool".equals(path)) {
-                CONCRETE_POOL.execute(() -> AsyncTail.ran());
+                ConcretePoolHolder.POOL.execute(() -> AsyncTail.ran());
             } else if ("/subclassed-thread".equals(path)) {
                 MyWorkerThread t = new MyWorkerThread(() -> AsyncTail.ran());
                 t.setDaemon(true);
@@ -279,6 +287,22 @@ public final class AsyncHonestyApp {
                 } catch (Exception e) {
                     throw new IOException(e);
                 }
+            } else if (path.startsWith("/sink-")) {
+                try {
+                    SinkFixtures.handle(path.substring("/sink-".length()), ms);
+                } catch (Exception e) {
+                    throw new IOException(e);
+                }
+            } else if ("/bootstrap-check".equals(path)) {
+                ClassLoader cl = io.keploy.dedup.bootstrap.KeploySinkBridge.class.getClassLoader();
+                ClassLoader hcl = io.keploy.dedup.bootstrap.KeploySinkBridge.Handler.class.getClassLoader();
+                if (cl != null || hcl != null) {
+                    throw new IOException("Expected bootstrap CL (null), got bridge=" + cl + " handler=" + hcl);
+                }
+                Tail.ran();
+            } else if ("/warm-common-pool".equals(path)) {
+                CompletableFuture.supplyAsync(() -> "warm").join();
+                Tail.ran();
             } else if ("/untracked-schedule".equals(path)) {
                 SCHED.schedule(() -> AsyncTail.ran(), 1, TimeUnit.MILLISECONDS);
             } else if ("/untracked-thread".equals(path)) {
@@ -910,6 +934,407 @@ public final class AsyncHonestyApp {
             } else {
                 throw new IllegalArgumentException("unknown handoff fixture: " + kind);
             }
+        }
+    }
+
+    /**
+     * Isolated sink-bypass and JDK-pool-subclass fixtures. Each scenario lives in
+     * its own nested class so loading one scenario never loads references from
+     * another scenario or pollutes clean baselines.
+     */
+    public static final class SinkFixtures {
+
+        static final java.util.ArrayDeque<Runnable> DEQUE = new java.util.ArrayDeque<>();
+        static final Object LOCK = new Object();
+        static volatile Object keepAlive;
+
+        static Runnable workerLoop() {
+            return new Runnable() {
+                @Override
+                public void run() {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        Runnable task;
+                        synchronized (LOCK) {
+                            while (DEQUE.isEmpty()) {
+                                try {
+                                    LOCK.wait();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    return;
+                                }
+                            }
+                            task = DEQUE.poll();
+                        }
+                        if (task != null) {
+                            task.run();
+                        }
+                    }
+                }
+            };
+        }
+
+        static Runnable pollerTick() {
+            return new Runnable() {
+                @Override
+                public void run() {
+                    Runnable task;
+                    synchronized (LOCK) {
+                        task = DEQUE.poll();
+                    }
+                    if (task != null) {
+                        task.run();
+                    }
+                }
+            };
+        }
+
+        static Runnable asyncTailTask(final long ms) {
+            return new Runnable() {
+                @Override
+                public void run() {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                }
+            };
+        }
+
+        static void feed(long ms) {
+            synchronized (LOCK) {
+                DEQUE.add(asyncTailTask(ms));
+                LOCK.notifyAll();
+            }
+        }
+
+        static void init(String kind) throws Exception {
+            switch (kind) {
+                case "app-tpe-sub-worker":
+                    AppTpeSubWorkerFixture.init();
+                    break;
+                case "app-tpe-sub-submit-worker":
+                    AppTpeSubSubmitWorkerFixture.init();
+                    break;
+                case "app-fjp-sub-worker":
+                    AppFjpSubWorkerFixture.init();
+                    break;
+                case "app-fjp-sub-inwindow":
+                    AppFjpSubInWindowFixture.init();
+                    break;
+                case "fjtask-worker":
+                    FjTaskWorkerFixture.init();
+                    break;
+                case "app-timer-sub-poller":
+                    AppTimerSubPollerFixture.init();
+                    break;
+                case "app-timer-sub-inwindow":
+                    AppTimerSubInWindowFixture.init();
+                    break;
+                case "app-stpe-sub-poller":
+                    AppStpeSubPollerFixture.init();
+                    break;
+                case "reflect-worker-startup":
+                    ReflectWorkerStartupFixture.init();
+                    break;
+                case "vthread-exec-worker":
+                    VirtualThreadExecWorkerFixture.init();
+                    break;
+                case "vthread-exec-inwindow":
+                    VirtualThreadExecInWindowFixture.init();
+                    break;
+                default:
+                    // In-window-only reflective / MethodHandle / library fixtures need no startup init.
+                    break;
+            }
+        }
+
+        static void handle(String kind, long ms) throws Exception {
+            switch (kind) {
+                case "app-tpe-sub-worker":
+                case "app-tpe-sub-submit-worker":
+                case "app-fjp-sub-worker":
+                case "fjtask-worker":
+                case "app-timer-sub-poller":
+                case "app-stpe-sub-poller":
+                case "reflect-worker-startup":
+                case "vthread-exec-worker":
+                    feed(ms);
+                    break;
+                case "app-fjp-sub-inwindow":
+                    AppFjpSubInWindowFixture.handle(ms);
+                    break;
+                case "app-timer-sub-inwindow":
+                    AppTimerSubInWindowFixture.handle(ms);
+                    break;
+                case "lib-fjp-sub":
+                    LibFjpSubFixture.handle(ms);
+                    break;
+                case "vthread-exec-inwindow":
+                    VirtualThreadExecInWindowFixture.handle(ms);
+                    break;
+                case "reflect-thread-start":
+                    ReflectThreadStartFixture.handle(ms);
+                    break;
+                case "mh-thread-start":
+                    MethodHandleThreadStartFixture.handle(ms);
+                    break;
+                case "mh-tpe-execute":
+                    MethodHandleTpeExecuteFixture.handle(ms);
+                    break;
+                case "reflect-stpe-schedule":
+                    ReflectStpeScheduleFixture.handle(ms);
+                    break;
+                case "reflect-fjp-submit":
+                    ReflectFjpSubmitFixture.handle(ms);
+                    break;
+                case "reflect-timer-schedule":
+                    ReflectTimerScheduleFixture.handle(ms);
+                    break;
+                case "reflect-vthread-start":
+                    ReflectVirtualThreadStartFixture.handle(ms);
+                    break;
+                default:
+                    throw new IllegalArgumentException("unknown sink fixture: " + kind);
+            }
+        }
+    }
+
+    public static final class AppTpeSub extends ThreadPoolExecutor {
+        AppTpeSub() {
+            super(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>());
+        }
+    }
+
+    public static final class AppFjpSub extends java.util.concurrent.ForkJoinPool {
+        AppFjpSub() {
+            super(2);
+        }
+    }
+
+    public static final class AppStpeSub extends java.util.concurrent.ScheduledThreadPoolExecutor {
+        AppStpeSub() {
+            super(1);
+        }
+    }
+
+    public static final class AppTimerSub extends java.util.Timer {
+        AppTimerSub() {
+            super(true);
+        }
+    }
+
+    public static final class AppTpeSubWorkerFixture {
+        static void init() {
+            AppTpeSub pool = new AppTpeSub();
+            SinkFixtures.keepAlive = pool;
+            pool.execute(SinkFixtures.workerLoop());
+        }
+    }
+
+    public static final class AppTpeSubSubmitWorkerFixture {
+        static void init() {
+            AppTpeSub pool = new AppTpeSub();
+            SinkFixtures.keepAlive = pool;
+            pool.submit(SinkFixtures.workerLoop());
+        }
+    }
+
+    public static final class AppFjpSubWorkerFixture {
+        static void init() {
+            AppFjpSub pool = new AppFjpSub();
+            SinkFixtures.keepAlive = pool;
+            pool.execute(SinkFixtures.workerLoop());
+        }
+    }
+
+    public static final class AppFjpSubInWindowFixture {
+        static volatile AppFjpSub pool;
+
+        static void init() {
+            pool = new AppFjpSub();
+        }
+
+        static void handle(long ms) {
+            pool.execute(SinkFixtures.asyncTailTask(ms));
+        }
+    }
+
+    public static final class FjTaskWorkerFixture {
+        static void init() {
+            java.util.concurrent.ForkJoinPool.commonPool().execute(ForkJoinTask.adapt(SinkFixtures.workerLoop()));
+        }
+    }
+
+    public static final class AppTimerSubPollerFixture {
+        static void init() {
+            AppTimerSub timer = new AppTimerSub();
+            SinkFixtures.keepAlive = timer;
+            timer.schedule(new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    SinkFixtures.pollerTick().run();
+                }
+            }, 0L, 50L);
+        }
+    }
+
+    public static final class AppTimerSubInWindowFixture {
+        static volatile AppTimerSub timer;
+
+        static void init() {
+            timer = new AppTimerSub();
+        }
+
+        static void handle(final long ms) {
+            timer.schedule(new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    SinkFixtures.asyncTailTask(ms).run();
+                }
+            }, 1L);
+        }
+    }
+
+    public static final class AppStpeSubPollerFixture {
+        static void init() {
+            AppStpeSub pool = new AppStpeSub();
+            SinkFixtures.keepAlive = pool;
+            pool.scheduleWithFixedDelay(SinkFixtures.pollerTick(), 0L, 50L, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    public static final class LibFjpSubFixture {
+        static void handle(long ms) {
+            io.fakeexternal.SubForkJoinPool.fire(SinkFixtures.asyncTailTask(ms));
+        }
+    }
+
+    public static final class ReflectWorkerStartupFixture {
+        static void init() throws Exception {
+            Class<?> threadCls = Class.forName("java.lang.Thread");
+            Object thread = threadCls.getConstructor(Runnable.class).newInstance(SinkFixtures.workerLoop());
+            threadCls.getMethod("setDaemon", boolean.class).invoke(thread, Boolean.TRUE);
+            threadCls.getMethod("start").invoke(thread);
+            SinkFixtures.keepAlive = thread;
+        }
+    }
+
+    public static final class ReflectThreadStartFixture {
+        static void handle(long ms) throws Exception {
+            Class<?> threadCls = Class.forName("java.lang.Thread");
+            Object thread = threadCls.getConstructor(Runnable.class).newInstance(SinkFixtures.asyncTailTask(ms));
+            threadCls.getMethod("setDaemon", boolean.class).invoke(thread, Boolean.TRUE);
+            threadCls.getMethod("start").invoke(thread);
+        }
+    }
+
+    public static final class MethodHandleThreadStartFixture {
+        static void handle(long ms) throws Exception {
+            try {
+                Class<?> threadCls = Class.forName("java.lang.Thread");
+                Thread t = (Thread) threadCls.getConstructor(Runnable.class).newInstance(SinkFixtures.asyncTailTask(ms));
+                t.setDaemon(true);
+                java.lang.invoke.MethodHandle mh = java.lang.invoke.MethodHandles.lookup().findVirtual(
+                        Thread.class, "start", java.lang.invoke.MethodType.methodType(void.class));
+                mh.invokeExact(t);
+            } catch (Throwable t) {
+                throw new RuntimeException(t);
+            }
+        }
+    }
+
+    public static final class MethodHandleTpeExecuteFixture {
+        static volatile Object pool;
+
+        static void handle(long ms) throws Exception {
+            try {
+                Class<?> tpeCls = Class.forName("java.util.concurrent.ThreadPoolExecutor");
+                Object p = pool;
+                if (p == null) {
+                    p = tpeCls.getConstructor(int.class, int.class, long.class, TimeUnit.class,
+                            java.util.concurrent.BlockingQueue.class).newInstance(
+                                    Integer.valueOf(1), Integer.valueOf(1), Long.valueOf(0L),
+                                    TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>());
+                    pool = p;
+                }
+                java.lang.invoke.MethodHandle mh = java.lang.invoke.MethodHandles.lookup().findVirtual(
+                        tpeCls, "execute", java.lang.invoke.MethodType.methodType(void.class, Runnable.class));
+                mh.invoke(p, SinkFixtures.asyncTailTask(ms));
+            } catch (Throwable t) {
+                throw new RuntimeException(t);
+            }
+        }
+    }
+
+    public static final class ReflectStpeScheduleFixture {
+        static volatile Object pool;
+
+        static void handle(long ms) throws Exception {
+            Class<?> stpeCls = Class.forName("java.util.concurrent.ScheduledThreadPoolExecutor");
+            Object p = pool;
+            if (p == null) {
+                p = stpeCls.getConstructor(int.class).newInstance(Integer.valueOf(1));
+                pool = p;
+            }
+            stpeCls.getMethod("schedule", Runnable.class, long.class, TimeUnit.class)
+                    .invoke(p, SinkFixtures.asyncTailTask(ms), Long.valueOf(1L), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    public static final class ReflectFjpSubmitFixture {
+        static void handle(long ms) throws Exception {
+            Class<?> fjpCls = Class.forName("java.util.concurrent.ForkJoinPool");
+            Object common = fjpCls.getMethod("commonPool").invoke(null);
+            fjpCls.getMethod("execute", Runnable.class).invoke(common, SinkFixtures.asyncTailTask(ms));
+        }
+    }
+
+    public static final class ReflectTimerScheduleFixture {
+        static volatile Object timer;
+
+        static void handle(final long ms) throws Exception {
+            Class<?> timerCls = Class.forName("java.util.Timer");
+            Object t = timer;
+            if (t == null) {
+                t = timerCls.getConstructor(boolean.class).newInstance(Boolean.TRUE);
+                timer = t;
+            }
+            java.util.TimerTask task = new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    SinkFixtures.asyncTailTask(ms).run();
+                }
+            };
+            timerCls.getMethod("schedule", java.util.TimerTask.class, long.class)
+                    .invoke(t, task, Long.valueOf(1L));
+        }
+    }
+
+    public static final class ReflectVirtualThreadStartFixture {
+        static void handle(long ms) throws Exception {
+            Class<?> threadCls = Class.forName("java.lang.Thread");
+            threadCls.getMethod("startVirtualThread", Runnable.class)
+                    .invoke(null, SinkFixtures.asyncTailTask(ms));
+        }
+    }
+
+    public static final class VirtualThreadExecWorkerFixture {
+        static void init() throws Exception {
+            ExecutorService vt = (ExecutorService) Executors.class
+                    .getMethod("newVirtualThreadPerTaskExecutor").invoke(null);
+            SinkFixtures.keepAlive = vt;
+            vt.execute(SinkFixtures.workerLoop());
+        }
+    }
+
+    public static final class VirtualThreadExecInWindowFixture {
+        static volatile ExecutorService vt;
+
+        static void init() throws Exception {
+            vt = (ExecutorService) Executors.class
+                    .getMethod("newVirtualThreadPerTaskExecutor").invoke(null);
+        }
+
+        static void handle(long ms) {
+            vt.submit(SinkFixtures.asyncTailTask(ms));
         }
     }
 }

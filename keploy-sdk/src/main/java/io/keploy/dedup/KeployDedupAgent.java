@@ -382,6 +382,8 @@ public final class KeployDedupAgent {
                 && !ServerEntries.hadAppRewriteFailure()
                 && !ServerEntries.hadAsyncHookFailure()
                 && !ServerEntries.hasUnhookedAsyncDispatcher()
+                && JdkSinkBootstrap.isActive()
+                && !JdkSinkBootstrap.hasFailed()
                 && !observedPreCapturedUntrackedExecutor.get();
         boolean listenerContamination = agentAttached
                 && !ServerEntries.hadListenerHookFailure()
@@ -645,7 +647,12 @@ public final class KeployDedupAgent {
         Thread thread = new Thread(worker, threadName);
         thread.setDaemon(true);
         coverageThread = thread;
-        thread.start();
+        JdkSinkBootstrap.enterInternal();
+        try {
+            thread.start();
+        } finally {
+            JdkSinkBootstrap.exitInternal();
+        }
         registerShutdownHook();
         return true;
     }
@@ -697,6 +704,9 @@ public final class KeployDedupAgent {
             instrumentation.addTransformer(new ServerEntries(requests, allowed, prefix), retransformable);
             transformerAdded = true;
             executorCallSitesEnabled = hasCallSiteRewrites;
+            if (!asyncCallSitesOff) {
+                JdkSinkBootstrap.install(instrumentation);
+            }
         } catch (RuntimeException e) {
             log(Level.WARNING, "Keploy dedup does not count the app's requests or see its scheduled jobs' runs:"
                     + " their classes could not be changed to count them", e);
@@ -1662,7 +1672,7 @@ public final class KeployDedupAgent {
                     CoverageCommand command = CoverageCommand.parse(trimmed);
                     if (command == null) {
                         synchronized (testCaseLock) {
-                            writeLine(out, IGNORED_REPLY);
+                            writeLine(out, UNIX_REPLY_IGNORED);
                             out.flush();
                         }
                         continue;
@@ -2237,6 +2247,7 @@ public final class KeployDedupAgent {
             final long began = System.nanoTime();
             final AppWarmup warmup = new AppWarmup(instrumentation);
             Thread thread;
+            JdkSinkBootstrap.enterInternal();
             try {
                 thread = warmupThreads.newThread(() -> runWarmup(warmup, began));
                 thread.start();
@@ -2246,6 +2257,8 @@ public final class KeployDedupAgent {
                 log(Level.WARNING, "Keploy dedup: no warmup, as its thread could not start; the app's classes"
                         + " initialize when the app first uses them", t);
                 return;
+            } finally {
+                JdkSinkBootstrap.exitInternal();
             }
             try {
                 thread.join(warmupWaitMillis);
@@ -2933,7 +2946,12 @@ public final class KeployDedupAgent {
                     }
                 }, "keploy-index-report");
                 t.setDaemon(true);
-                t.start();
+                JdkSinkBootstrap.enterInternal();
+                try {
+                    t.start();
+                } finally {
+                    JdkSinkBootstrap.exitInternal();
+                }
             } catch (Throwable ignored) {
                 reportPrecomputeStarted.set(false);
             }

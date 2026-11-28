@@ -456,6 +456,7 @@ final class BuildTable {
          * the WARNING then says that ask is not sent, as it was ACKed and logged as sent later.
          */
         private boolean start(Runnable send, boolean handover) {
+            JdkSinkBootstrap.enterInternal();
             try {
                 threads.newThread(() -> loop(send)).start();
                 return true;
@@ -468,6 +469,8 @@ final class BuildTable {
                         ? ": the ask for the build table that waited for the send before it is not sent (Keploy"
                         + " asks again on its next run)" : ""), t);
                 return false;
+            } finally {
+                JdkSinkBootstrap.exitInternal();
             }
         }
 
