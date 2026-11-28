@@ -122,6 +122,27 @@ public class CoverageTcpClientTest {
     }
 
     @Test
+    public void unknownOrMalformedTcpCommandAnswersIgnoredAndKeepsConnectionAlive() throws Exception {
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
+
+            send(out, "FOO");
+            assertEquals("IGNORED", in.readLine());
+            send(out, "START");
+            assertEquals("IGNORED", in.readLine());
+            send(out, "PROTO 4");
+            assertEquals("IGNORED", in.readLine());
+            send(out, "NOP");
+            assertEquals("ACK", in.readLine());
+        }
+    }
+
+    @Test
     public void aStartWhoseResetFailedNamesTheTestThenAnswersAckAndSoDoesItsEnd() throws Exception {
         jacoco = new FakeJacoco();
         System.setProperty(JACOCO_PORT_PROPERTY, String.valueOf(jacoco.server.getLocalPort()));

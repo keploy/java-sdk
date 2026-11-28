@@ -482,6 +482,9 @@ public class ServerTailTest {
                 command.add(String.join(File.pathSeparator, modulePath));
                 command.add("--add-modules");
                 command.add("org.apache.tomcat.embed.core");
+                // Tomcat 9.0's JreCompat.disableCanonCaches reflects on java.io.FileSystem.useCanonCaches on JDK 11.
+                command.add("--add-opens");
+                command.add("java.base/java.io=org.apache.tomcat.embed.core");
             }
             command.add("-cp");
             command.add(String.join(File.pathSeparator, classPath));

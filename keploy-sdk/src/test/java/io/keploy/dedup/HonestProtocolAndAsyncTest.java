@@ -5250,6 +5250,152 @@ public class HonestProtocolAndAsyncTest {
     }
 
     @Test(timeout = 60000)
+    public void isolatedCollectionAndDequePreScanExecutorOutsideWindowAndJdkPoolSubclasses() throws Exception {
+        ClassLoader loader = getClass().getClassLoader();
+
+        // 1. Isolated Collection.add-only caller (no Queue/Deque in constant pool).
+        String colClsName = "com/acme/CollectionOnlyCaller";
+        ClassWriter colCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        colCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, colClsName, null, "java/lang/Object", null);
+        emitDefaultCtor(colCw);
+        MethodVisitor colMv = colCw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "push",
+                "(Ljava/util/Collection;Ljava/lang/Object;)Z", null, null);
+        colMv.visitCode();
+        colMv.visitVarInsn(Opcodes.ALOAD, 0);
+        colMv.visitVarInsn(Opcodes.ALOAD, 1);
+        colMv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Collection", "add", "(Ljava/lang/Object;)Z", true);
+        colMv.visitInsn(Opcodes.IRETURN);
+        colMv.visitMaxs(2, 2);
+        colMv.visitEnd();
+        colCw.visitEnd();
+        ServerEntries colEntries = new ServerEntries(true, Collections.singleton(colClsName), null);
+        byte[] colRewritten = colEntries.transform(loader, colClsName, null, null, colCw.toByteArray());
+        assertNotNull("Collection.add-only caller must be rewritten", colRewritten);
+        Class<?> colCls = new ByteLoader(loader).define(colClsName.replace('/', '.'), colRewritten);
+        RequestGate.disarm();
+        RequestGate.open("col-only-bq", null);
+        Object tok = RequestGate.enter();
+        try {
+            colCls.getMethod("push", java.util.Collection.class, Object.class)
+                    .invoke(null, new LinkedBlockingQueue<Object>(), "x");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome colOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("Collection.add backed by LinkedBlockingQueue must contaminate: " + colOut.contaminations,
+                colOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // 2. Isolated Deque.addFirst-only caller (no Queue/Collection/offer in constant pool).
+        String dqClsName = "com/acme/DequeOnlyCaller";
+        ClassWriter dqCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        dqCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, dqClsName, null, "java/lang/Object", null);
+        emitDefaultCtor(dqCw);
+        MethodVisitor dqMv = dqCw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "pushFirst",
+                "(Ljava/util/Deque;Ljava/lang/Object;)V", null, null);
+        dqMv.visitCode();
+        dqMv.visitVarInsn(Opcodes.ALOAD, 0);
+        dqMv.visitVarInsn(Opcodes.ALOAD, 1);
+        dqMv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Deque", "addFirst", "(Ljava/lang/Object;)V", true);
+        dqMv.visitInsn(Opcodes.RETURN);
+        dqMv.visitMaxs(2, 2);
+        dqMv.visitEnd();
+        dqCw.visitEnd();
+        ServerEntries dqEntries = new ServerEntries(true, Collections.singleton(dqClsName), null);
+        byte[] dqRewritten = dqEntries.transform(loader, dqClsName, null, null, dqCw.toByteArray());
+        assertNotNull("Deque.addFirst-only caller must be rewritten", dqRewritten);
+        Class<?> dqCls = new ByteLoader(loader).define(dqClsName.replace('/', '.'), dqRewritten);
+        RequestGate.disarm();
+        RequestGate.open("dq-only-bq", null);
+        tok = RequestGate.enter();
+        try {
+            dqCls.getMethod("pushFirst", java.util.Deque.class, Object.class)
+                    .invoke(null, new java.util.concurrent.LinkedBlockingDeque<Object>(), "x");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome dqOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("Deque.addFirst backed by LinkedBlockingDeque must contaminate: " + dqOut.contaminations,
+                dqOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // 3. Any non-inline executor hand-off outside a window and job (armed or unarmed)
+        //    must latch asyncExecutors=false; inline executors must NOT latch.
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        org.springframework.core.task.SyncTaskExecutor inlineExec =
+                new org.springframework.core.task.SyncTaskExecutor();
+        try {
+            // Inline executor outside window: armed and unarmed must stay clean.
+            RequestGate.disarm();
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            RequestGate.execute(inlineExec, () -> { });
+            assertFalse("unarmed inline executor must not latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            RequestGate.arm();
+            RequestGate.execute(inlineExec, () -> { });
+            assertFalse("armed inline executor must not latch",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+            // Non-inline execute / submit / runAsync / supplyAsync outside window (armed + unarmed): ALL latch!
+            for (boolean armedMode : new boolean[] {false, true}) {
+                if (armedMode) {
+                    RequestGate.arm();
+                } else {
+                    RequestGate.disarm();
+                }
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.execute(pool, () -> { });
+                assertTrue("execute outside window (armed=" + armedMode + ") must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.submit(pool, () -> { }).get(5, TimeUnit.SECONDS);
+                assertTrue("submit(Runnable) outside window (armed=" + armedMode + ") must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.submit(pool, () -> "ok").get(5, TimeUnit.SECONDS);
+                assertTrue("submit(Callable) outside window (armed=" + armedMode + ") must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.runAsync(() -> { }, pool).get(5, TimeUnit.SECONDS);
+                assertTrue("runAsync outside window (armed=" + armedMode + ") must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.supplyAsync(() -> "ok", pool).get(5, TimeUnit.SECONDS);
+                assertTrue("supplyAsync outside window (armed=" + armedMode + ") must latch",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            }
+
+            // 4. Non-allowlisted library subclasses of JDK concurrency types must latch on load.
+            ServerEntries subEntries = new ServerEntries(true, Collections.singleton("com/acme/App"), null);
+            String[][] jdkSubclasses = {
+                {"io/fakeexternal/CustomTpe", "java/util/concurrent/ThreadPoolExecutor"},
+                {"io/fakeexternal/CustomStpe", "java/util/concurrent/ScheduledThreadPoolExecutor"},
+                {"io/fakeexternal/CustomFjp", "java/util/concurrent/ForkJoinPool"},
+                {"io/fakeexternal/CustomTimer", "java/util/Timer"},
+                {"io/fakeexternal/CustomAes", "java/util/concurrent/AbstractExecutorService"},
+            };
+            for (String[] spec : jdkSubclasses) {
+                ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+                ClassWriter subCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+                subCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, spec[0], null, spec[1], null);
+                emitDefaultCtor(subCw);
+                subCw.visitEnd();
+                assertNull("library subclass must not be rewritten: " + spec[0],
+                        subEntries.transform(loader, spec[0], null, null, subCw.toByteArray()));
+                assertTrue("non-allowlisted subclass of " + spec[1] + " must latch asyncExecutors=false",
+                        ServerEntries.hasUnhookedAsyncDispatcher());
+            }
+        } finally {
+            pool.shutdownNow();
+            RequestGate.disarm();
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        }
+    }
+
+    @Test(timeout = 60000)
     public void queueRuntimeCheckDirectSubmissionPublisherMessagingProducerAndExternalOverflow() throws Exception {
         ClassLoader loader = getClass().getClassLoader();
 

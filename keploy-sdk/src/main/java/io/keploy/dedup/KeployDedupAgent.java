@@ -1661,6 +1661,10 @@ public final class KeployDedupAgent {
                     }
                     CoverageCommand command = CoverageCommand.parse(trimmed);
                     if (command == null) {
+                        synchronized (testCaseLock) {
+                            writeLine(out, IGNORED_REPLY);
+                            out.flush();
+                        }
                         continue;
                     }
                     Phases phases = new Phases();

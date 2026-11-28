@@ -432,6 +432,9 @@ public class ForkedAsyncAndHonestyTest {
             {"collection-add", "8", "false"},
             {"lib-callback", "8", "true"},
             {"scheduled-outbox", "8", "false"},
+            {"exec-worker-deque", "8", "false"},
+            {"spring-tpte-worker", "8", "false"},
+            {"lib-subpool", "8", "true"},
         };
         for (boolean prefixMode : new boolean[] {true, false}) {
             for (String[] tc : cases) {

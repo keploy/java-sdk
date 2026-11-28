@@ -604,6 +604,10 @@ public final class AsyncHonestyApp {
                 new java.util.concurrent.ConcurrentLinkedQueue<>();
         private static volatile org.springframework.context.event.SimpleApplicationEventMulticaster overrideMc;
         private static volatile org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler outboxScheduler;
+        private static final java.util.ArrayDeque<Runnable> EXEC_DEQUE = new java.util.ArrayDeque<>();
+        private static final java.util.ArrayDeque<Runnable> SPRING_TPTE_DEQUE = new java.util.ArrayDeque<>();
+        private static volatile ExecutorService execWorkerPool;
+        private static volatile org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor springTptePool;
         private static volatile Object fakeKafkaTemplate;
         private static volatile Method directKafkaSendMethod;
 
@@ -680,6 +684,55 @@ public final class AsyncHonestyApp {
                         new org.springframework.scheduling.support.ScheduledMethodRunnable(new OutboxPoller(), "drain"),
                         250L);
                 outboxScheduler = ts;
+            } else if ("exec-worker-deque".equals(kind)) {
+                ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
+                    Thread t = new Thread(r, "app-exec-deque-worker");
+                    t.setDaemon(true);
+                    return t;
+                });
+                execWorkerPool = pool;
+                pool.execute(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        Runnable task;
+                        synchronized (EXEC_DEQUE) {
+                            while (EXEC_DEQUE.isEmpty()) {
+                                try {
+                                    EXEC_DEQUE.wait();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    return;
+                                }
+                            }
+                            task = EXEC_DEQUE.removeFirst();
+                        }
+                        task.run();
+                    }
+                });
+            } else if ("spring-tpte-worker".equals(kind)) {
+                org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor tpte =
+                        new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+                tpte.setCorePoolSize(1);
+                tpte.setMaxPoolSize(1);
+                tpte.setDaemon(true);
+                tpte.initialize();
+                springTptePool = tpte;
+                tpte.execute(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        Runnable task;
+                        synchronized (SPRING_TPTE_DEQUE) {
+                            while (SPRING_TPTE_DEQUE.isEmpty()) {
+                                try {
+                                    SPRING_TPTE_DEQUE.wait();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    return;
+                                }
+                            }
+                            task = SPRING_TPTE_DEQUE.removeFirst();
+                        }
+                        task.run();
+                    }
+                });
             } else if ("kafka-direct-produce".equals(kind)) {
                 // Define a stand-in org/springframework/kafka/core/KafkaTemplate and an
                 // app caller class in org/example/servers/ that invokes KafkaTemplate.send()
@@ -824,6 +877,27 @@ public final class AsyncHonestyApp {
                 });
             } else if ("scheduled-outbox".equals(kind)) {
                 OUTBOX_QUEUE.add(Long.valueOf(ms));
+            } else if ("exec-worker-deque".equals(kind)) {
+                synchronized (EXEC_DEQUE) {
+                    EXEC_DEQUE.addLast(() -> {
+                        sleepQuietly(ms);
+                        AsyncTail.ran();
+                    });
+                    EXEC_DEQUE.notify();
+                }
+            } else if ("spring-tpte-worker".equals(kind)) {
+                synchronized (SPRING_TPTE_DEQUE) {
+                    SPRING_TPTE_DEQUE.addLast(() -> {
+                        sleepQuietly(ms);
+                        AsyncTail.ran();
+                    });
+                    SPRING_TPTE_DEQUE.notify();
+                }
+            } else if ("lib-subpool".equals(kind)) {
+                io.fakeexternal.SubPoolExecutor.fire(() -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
             } else if ("kafka-direct-produce".equals(kind)) {
                 directKafkaSendMethod.invoke(null, fakeKafkaTemplate, "orders-topic", Long.valueOf(ms));
             } else if ("submission-publisher".equals(kind)) {

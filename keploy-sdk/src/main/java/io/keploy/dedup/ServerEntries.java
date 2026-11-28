@@ -320,6 +320,7 @@ final class ServerEntries implements ClassFileTransformer {
                     "org/apache/coyote/AbstractProtocol",
                     "org/apache/juli/AsyncFileHandler$DropFlushPolicy",
                     "org/apache/juli/AsyncFileHandler$DropLastPolicy",
+                    "org/apache/juli/AsyncFileHandler$LoggerExecutorService",
                     "org/apache/juli/ClassLoaderLogManager$Cleaner",
                     "org/apache/juli/FileHandler",
                     "org/apache/tomcat/util/net/AbstractEndpoint",
@@ -344,10 +345,12 @@ final class ServerEntries implements ClassFileTransformer {
                     "org/apache/tomcat/util/net/SocketWrapperBase",
                     "org/apache/tomcat/util/net/SocketWrapperBase$OperationState",
                     "org/apache/tomcat/util/net/WriteBuffer",
+                    "org/apache/tomcat/util/threads/InlineExecutorService",
                     "org/apache/tomcat/util/threads/ScheduledThreadPoolExecutor",
                     "org/apache/tomcat/util/threads/TaskQueue",
                     "org/apache/tomcat/util/threads/TaskThread",
                     "org/apache/tomcat/util/threads/ThreadPoolExecutor",
+                    "org/apache/tomcat/util/threads/VirtualThreadExecutor",
                     "org/apache/tomcat/websocket/WsWebSocketContainer",
                     // (b2) Jetty (request dispatch enters hooked HttpChannel/ServletChannel)
                     "org/eclipse/jetty/io/AbstractConnection",
@@ -390,13 +393,17 @@ final class ServerEntries implements ClassFileTransformer {
                     "org/xnio/ChannelListeners",
                     "org/xnio/ChannelListeners$13",
                     "org/xnio/XnioIoThread",
+                    "org/xnio/XnioWorker",
+                    "org/xnio/XnioWorker$DefaultThreadPoolExecutor",
                     "org/xnio/XnioWorker$ExecutorServiceTaskPool",
                     "org/xnio/XnioWorker$ThreadPoolExecutorTaskPool",
                     "org/jboss/threads/DelegatingExecutor",
                     "org/jboss/threads/DelegatingExecutorService",
                     "org/jboss/threads/DelegatingScheduledExecutorService",
                     "org/jboss/threads/EnhancedQueueExecutor",
+                    "org/jboss/threads/EnhancedQueueExecutorBase0",
                     "org/jboss/threads/HandoffRejectedExecutionHandler",
+                    "org/jboss/threads/JBossScheduledThreadPoolExecutor",
                     "org/jboss/threads/JBossThread",
                     "org/jboss/threads/ManagedThreadPoolExecutor",
                     "org/jboss/threads/ViewExecutor",
@@ -438,6 +445,15 @@ final class ServerEntries implements ClassFileTransformer {
     static Set<String> allowlistedDispatchClasses() {
         return ALLOWLISTED_DISPATCH_CLASSES;
     }
+
+    // JDK classes whose subclasses dispatch work through inherited JDK code (scanned like Thread).
+    private static final Set<String> JDK_DISPATCH_SUPERCLASSES = Collections.unmodifiableSet(new HashSet<>(
+            Arrays.asList(
+                    "java/util/concurrent/AbstractExecutorService",
+                    "java/util/concurrent/ThreadPoolExecutor",
+                    "java/util/concurrent/ScheduledThreadPoolExecutor",
+                    "java/util/concurrent/ForkJoinPool",
+                    "java/util/Timer")));
 
     private static final String SPRING_EVENT_MULTICASTER =
             "org/springframework/context/event/SimpleApplicationEventMulticaster";
@@ -1525,8 +1541,15 @@ final class ServerEntries implements ClassFileTransformer {
         boolean allowlisted = className != null && ALLOWLISTED_DISPATCH_CLASSES.contains(className);
         try {
             ClassReader reader = new ClassReader(classfile);
-            if (!allowlisted && checkDispatchPrimitives && "java/lang/Thread".equals(reader.getSuperName())) {
-                recordUnhookedAsyncDispatcher("java.lang.Thread subclass", className);
+            if (!allowlisted && checkDispatchPrimitives && (reader.getAccess() & Opcodes.ACC_INTERFACE) == 0) {
+                String superName = reader.getSuperName();
+                if ("java/lang/Thread".equals(superName)) {
+                    recordUnhookedAsyncDispatcher("java.lang.Thread subclass", className);
+                } else if (JDK_DISPATCH_SUPERCLASSES.contains(superName)) {
+                    // A JDK pool or timer subclass dispatches through inherited JDK code, and its
+                    // callers name the subclass as the Methodref owner, which no table matches.
+                    recordUnhookedAsyncDispatcher(superName.replace('/', '.') + " subclass", className);
+                }
             }
             int itemCount = reader.getItemCount();
             char[] buf = new char[reader.getMaxStringLength()];

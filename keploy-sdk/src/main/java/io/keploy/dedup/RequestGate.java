@@ -460,6 +460,7 @@ public final class RequestGate {
         if (!armed) {
             if (task != null) {
                 noteUnarmedHandOffIfInFlight();
+                noteExecutorHandOffOutsideWindow(executor, false);
             }
             return task;
         }
@@ -483,6 +484,7 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            noteExecutorHandOffOutsideWindow(executor, true);
             return task;
         }
         if (OrderedPools.isInlineExecutor(executor)) {
@@ -525,6 +527,7 @@ public final class RequestGate {
         if (!armed) {
             if (task != null) {
                 noteUnarmedHandOffIfInFlight();
+                noteExecutorHandOffOutsideWindow(executor, false);
             }
             return task;
         }
@@ -549,6 +552,7 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            noteExecutorHandOffOutsideWindow(executor, true);
             return task;
         }
         if (OrderedPools.isInlineExecutor(executor)) {
@@ -589,6 +593,7 @@ public final class RequestGate {
         if (!armed) {
             if (supplier != null) {
                 noteUnarmedHandOffIfInFlight();
+                noteExecutorHandOffOutsideWindow(executor, false);
             }
             return supplier;
         }
@@ -613,6 +618,7 @@ public final class RequestGate {
         Window window = INSIDE.get();
         JobGate.Attribution job = currentOrExpiredJob(window);
         if (window == null && job == null) {
+            noteExecutorHandOffOutsideWindow(executor, true);
             return supplier;
         }
         if (OrderedPools.isInlineExecutor(executor)) {
@@ -656,6 +662,7 @@ public final class RequestGate {
     public static void execute(Executor executor, Runnable task) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             executor.execute(task);
             return;
         }
@@ -679,6 +686,7 @@ public final class RequestGate {
     public static Future<?> submit(ExecutorService executor, Runnable task) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             return executor.submit(task);
         }
         Runnable handed = hand(executor, task);
@@ -706,6 +714,7 @@ public final class RequestGate {
     public static <T> Future<T> submit(ExecutorService executor, Runnable task, T result) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             return executor.submit(task, result);
         }
         Runnable handed = hand(executor, task);
@@ -732,6 +741,7 @@ public final class RequestGate {
     public static <T> Future<T> submit(ExecutorService executor, Callable<T> task) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             return executor.submit(task);
         }
         Callable<T> handed = hand(executor, task);
@@ -758,6 +768,7 @@ public final class RequestGate {
     public static CompletableFuture<Void> runAsync(Runnable task) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(null, false);
             return CompletableFuture.runAsync(task);
         }
         Runnable handed = handInternal(null, task, true);
@@ -782,6 +793,7 @@ public final class RequestGate {
     public static CompletableFuture<Void> runAsync(Runnable task, Executor executor) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             return CompletableFuture.runAsync(task, executor);
         }
         Runnable handed = handInternal(executor, task, true);
@@ -807,6 +819,7 @@ public final class RequestGate {
     public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(null, false);
             return CompletableFuture.supplyAsync(supplier);
         }
         Supplier<T> handed = handSupplierInternal(null, supplier, true);
@@ -832,6 +845,7 @@ public final class RequestGate {
     public static <T> CompletableFuture<T> supplyAsync(Supplier<T> supplier, Executor executor) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteExecutorHandOffOutsideWindow(executor, false);
             return CompletableFuture.supplyAsync(supplier, executor);
         }
         Supplier<T> handed = handSupplierInternal(executor, supplier, true);
@@ -3130,6 +3144,20 @@ public final class RequestGate {
         if (INSIDE.get() != null || JobGate.runningAttribution() != null || JobGate.expiredRunningName() != null) {
             noteUntrackedAsync("untracked-async:" + label, 0L);
         }
+    }
+
+    /**
+     * An executor hand-off made with no request window and no job open (at startup, from a
+     * {@code @PostConstruct}, or from any thread no window owns) can start a long-lived worker
+     * that later runs work a request hands it through shared state (an {@code ArrayDeque} under a
+     * lock, a volatile field, wait/notify): fail closed exactly as {@code Thread.start} does.
+     * Same-thread inline executors start no worker and are left alone.
+     */
+    private static void noteExecutorHandOffOutsideWindow(Object executor, boolean isArmed) {
+        if (executor != null && OrderedPools.isInlineExecutor(executor)) {
+            return;
+        }
+        noteBackgroundWorkerOutsideWindow("untracked-async:executor-outside-window", isArmed);
     }
 
     private static void noteBackgroundWorkerOutsideWindow(String reason, boolean isArmed) {
