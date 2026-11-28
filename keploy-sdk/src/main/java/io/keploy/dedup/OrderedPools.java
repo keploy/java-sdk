@@ -134,6 +134,8 @@ final class OrderedPools {
     private static final String SPRING_SCHEDULER = "org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler";
     private static final String SPRING_CONCURRENT = "org.springframework.scheduling.concurrent.ConcurrentTaskExecutor";
     private static final String SPRING_SIMPLE_ASYNC = "org.springframework.core.task.SimpleAsyncTaskExecutor";
+    private static final String SPRING_SIMPLE_SCHEDULER =
+            "org.springframework.scheduling.concurrent.SimpleAsyncTaskScheduler";
     private static final String SPRING_TASK_EXECUTOR_ADAPTER =
             "org.springframework.core.task.support.TaskExecutorAdapter";
     private static final String SPRING_ASYNC_ASPECT =
@@ -219,6 +221,7 @@ final class OrderedPools {
                 || SPRING_SCHEDULER.equals(name)
                 || SPRING_CONCURRENT.equals(name)
                 || SPRING_SIMPLE_ASYNC.equals(name)
+                || SPRING_SIMPLE_SCHEDULER.equals(name)
                 || SPRING_TASK_EXECUTOR_ADAPTER.equals(name)
                 || SPRING_ASYNC_ASPECT.equals(name);
     }
@@ -246,7 +249,8 @@ final class OrderedPools {
             if (SPRING_POOL.equals(name)
                     || SPRING_SCHEDULER.equals(name)
                     || SPRING_CONCURRENT.equals(name)
-                    || SPRING_SIMPLE_ASYNC.equals(name)) {
+                    || SPRING_SIMPLE_ASYNC.equals(name)
+                    || SPRING_SIMPLE_SCHEDULER.equals(name)) {
                 hookedBase = name;
                 break;
             }
@@ -280,7 +284,8 @@ final class OrderedPools {
             if (SPRING_POOL.equals(name)
                     || SPRING_SCHEDULER.equals(name)
                     || SPRING_CONCURRENT.equals(name)
-                    || SPRING_SIMPLE_ASYNC.equals(name)) {
+                    || SPRING_SIMPLE_ASYNC.equals(name)
+                    || SPRING_SIMPLE_SCHEDULER.equals(name)) {
                 hookedBase = name;
                 break;
             }

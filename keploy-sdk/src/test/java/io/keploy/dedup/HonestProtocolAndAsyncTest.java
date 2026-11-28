@@ -4971,6 +4971,693 @@ public class HonestProtocolAndAsyncTest {
                 KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
     }
 
+    @Test(timeout = 60000)
+    public void perClassDispatchAllowlistFailClosedAndLatchOnCallHooks() throws Exception {
+        ClassLoader loader = getClass().getClassLoader();
+        ServerEntries transformer = new ServerEntries(true, Collections.singleton("com/acme/App"), null);
+
+        // 1. Every entry in ALLOWLISTED_DISPATCH_CLASSES must be an exact internal
+        //    class name (no wildcards/prefixes) and must never include unhooked
+        //    async frameworks.
+        Set<String> allowlisted = ServerEntries.allowlistedDispatchClasses();
+        assertFalse("allowlist must be non-empty", allowlisted.isEmpty());
+        String[] forbiddenPrefixes = {
+            "kotlinx/", "kotlin/", "reactor/", "okhttp3/", "com/google/common/",
+            "org/springframework/integration/", "rx/", "io/reactivex/", "io/grpc/",
+            "io/netty/", "org/apache/hc/", "org/apache/http/", "akka/",
+            "org/apache/pekko/", "io/nats/", "io/fakeexternal/", "org/h2/store/fs/async/"
+        };
+        for (String cls : allowlisted) {
+            assertFalse("allowlist entry must not end with '/': " + cls, cls.endsWith("/"));
+            assertFalse("allowlist entry must not contain '*': " + cls, cls.contains("*"));
+            assertFalse("allowlist entry must use internal '/' format: " + cls, cls.contains("."));
+            for (String bad : forbiddenPrefixes) {
+                assertFalse("unhooked async framework must never be allowlisted: " + cls, cls.startsWith(bad));
+            }
+            // Positive control: allowlisted class referencing Executor.execute must NOT latch.
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            transformer.transform(loader, cls, null, null, generateExecutorCaller(cls));
+            assertFalse("allowlisted class must not false-latch on load: " + cls,
+                    ServerEntries.hasUnhookedAsyncDispatcher());
+        }
+
+        // 2. Any non-allowlisted library class calling a concurrency dispatch primitive
+        //    (Executor.execute, Thread.start, CompletableFuture.supplyAsync, BlockingQueue.offer,
+        //    ConcurrentLinkedQueue.add, HttpClient.sendAsync) latches asyncExecutors=false
+        //    without any package exclusion hiding it.
+        String[][] unhookedLibCallers = {
+            {"kotlinx/coroutines/scheduling/CoroutineScheduler", "java/lang/Thread", "start", "()V", "virtual"},
+            {"kotlin/concurrent/ThreadsKt", "java/lang/Thread", "start", "()V", "virtual"},
+            {"reactor/core/scheduler/ParallelScheduler", "java/util/concurrent/ScheduledExecutorService",
+                "schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;", "interface"},
+            {"okhttp3/internal/concurrent/TaskRunner", "java/util/concurrent/Executor", "execute", "(Ljava/lang/Runnable;)V", "interface"},
+            {"com/google/common/eventbus/AsyncEventBus", "java/util/concurrent/Executor", "execute", "(Ljava/lang/Runnable;)V", "interface"},
+            {"org/springframework/integration/channel/ExecutorChannel", "java/util/concurrent/Executor", "execute", "(Ljava/lang/Runnable;)V", "interface"},
+            {"io/fakeexternal/CustomCallbackClient", "java/util/concurrent/LinkedBlockingQueue", "offer", "(Ljava/lang/Object;)Z", "virtual"},
+            {"com/thirdparty/ClqBus", "java/util/concurrent/ConcurrentLinkedQueue", "add", "(Ljava/lang/Object;)Z", "virtual"},
+            {"com/thirdparty/CfHelper", "java/util/concurrent/CompletableFuture", "supplyAsync",
+                "(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;", "static"},
+            {"com/thirdparty/JdkHttpAsync", "java/net/http/HttpClient", "sendAsync",
+                "(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;", "virtual"},
+        };
+        for (String[] spec : unhookedLibCallers) {
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            byte[] bytes = generateMethodRefCaller(spec[0], spec[1], spec[2], spec[3], spec[4]);
+            assertNull("non-app library class must never be bytecode-rewritten: " + spec[0],
+                    transformer.transform(loader, spec[0], null, null, bytes));
+            assertTrue("non-allowlisted library class calling " + spec[1] + "." + spec[2]
+                    + " must latch asyncExecutors=false: " + spec[0],
+                    ServerEntries.hasUnhookedAsyncDispatcher());
+        }
+
+        // 2b. Even a rewritten app class calling JDK HttpClient.sendAsync latches asyncExecutors=false.
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        byte[] appHttpAsync = generateMethodRefCaller("com/acme/App", "java/net/http/HttpClient", "sendAsync",
+                "(Ljava/net/http/HttpRequest;Ljava/net/http/HttpResponse$BodyHandler;)Ljava/util/concurrent/CompletableFuture;",
+                "virtual");
+        transformer.transform(loader, "com/acme/App", null, null, appHttpAsync);
+        assertTrue("app class calling HttpClient.sendAsync must latch asyncExecutors=false",
+                ServerEntries.hasUnhookedAsyncDispatcher());
+
+        // 2c. Non-allowlisted library Thread subclass (e.g. Kotlin's kotlin.concurrent.thread
+        //     anonymous Thread subclass whose INVOKEVIRTUAL targets itself rather than java/lang/Thread)
+        //     must latch asyncExecutors=false on load by construction.
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        ClassWriter threadSubCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        threadSubCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "kotlin/concurrent/ThreadsKt$thread$thread$1",
+                null, "java/lang/Thread", null);
+        emitDefaultCtor(threadSubCw);
+        threadSubCw.visitEnd();
+        assertNull("non-allowlisted Thread subclass must not be rewritten",
+                transformer.transform(loader, "kotlin/concurrent/ThreadsKt$thread$thread$1", null, null,
+                        threadSubCw.toByteArray()));
+        assertTrue("non-allowlisted library Thread subclass must latch asyncExecutors=false",
+                ServerEntries.hasUnhookedAsyncDispatcher());
+
+        // 3. LATCH_ON_CALL hooks: loading sync Caffeine / CacheLoader / LocalAsyncCache /
+        //    Spring ConcurrentMapCache does NOT latch; invoking their async methods DOES
+        //    latch asyncExecutors=false and contaminates the active window!
+        String[][] latchHooks = {
+            {"com/github/benmanes/caffeine/cache/Caffeine", "buildAsync", "class"},
+            {"com/github/benmanes/caffeine/cache/CacheLoader", "asyncReload", "interface"},
+            {"com/github/benmanes/caffeine/cache/LocalAsyncCache", "get", "interface"},
+            {"org/springframework/cache/concurrent/ConcurrentMapCache", "retrieve", "class"},
+        };
+        for (String[] hook : latchHooks) {
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            byte[] raw = generateLatchHookStandIn(hook[0], hook[1], "interface".equals(hook[2]));
+            byte[] hooked = transformer.transform(loader, hook[0], null, null, raw);
+            assertNotNull("LATCH_ON_CALL class must be instrumented: " + hook[0], hooked);
+            assertFalse("loading " + hook[0] + " alone must not latch asyncExecutors",
+                    ServerEntries.hasUnhookedAsyncDispatcher());
+            assertFalse("loading " + hook[0] + " alone must not latch observedPreCapturedUntrackedExecutor",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+            // Invoke the hooked method inside an active window via a concrete subclass or instance.
+            ByteLoader bl = new ByteLoader(loader);
+            Class<?> defined = bl.define(hook[0].replace('/', '.'), hooked);
+            Object instance;
+            if ("interface".equals(hook[2])) {
+                String implName = hook[0] + "$TestImpl";
+                byte[] implBytes = generateInterfaceImpl(implName, hook[0]);
+                instance = bl.define(implName.replace('/', '.'), implBytes).getDeclaredConstructor().newInstance();
+            } else {
+                instance = defined.getDeclaredConstructor().newInstance();
+            }
+            RequestGate.disarm();
+            RequestGate.open("latch-hook-" + hook[1], null);
+            Object tok = RequestGate.enter();
+            try {
+                defined.getMethod(hook[1]).invoke(instance);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            RequestGate.WindowOutcome out = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("invoking " + hook[0] + "." + hook[1] + " must latch asyncExecutors=false",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            assertFalse("invoking " + hook[0] + "." + hook[1] + " inside window must contaminate: "
+                    + out.contaminations, out.contaminations.isEmpty());
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void isolatedCallSiteAndJobGateLatchesForListenableFutureDirectQueueAndScheduledJobs() throws Exception {
+        ClassLoader loader = getClass().getClassLoader();
+
+        // 1. Direct LinkedBlockingQueue.offer call site (static owner IS LinkedBlockingQueue,
+        //    not java/util/Queue) must contaminate with untracked-async:blocking-queue.
+        String bqClsName = "com/acme/DirectBlockingQueueCaller";
+        ClassWriter bqCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        bqCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, bqClsName, null, "java/lang/Object", null);
+        emitDefaultCtor(bqCw);
+        MethodVisitor bqMv = bqCw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "enqueue",
+                "(Ljava/util/concurrent/LinkedBlockingQueue;Ljava/lang/Object;)Z", null, null);
+        bqMv.visitCode();
+        bqMv.visitVarInsn(Opcodes.ALOAD, 0);
+        bqMv.visitVarInsn(Opcodes.ALOAD, 1);
+        bqMv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/concurrent/LinkedBlockingQueue",
+                "offer", "(Ljava/lang/Object;)Z", false);
+        bqMv.visitInsn(Opcodes.IRETURN);
+        bqMv.visitMaxs(2, 2);
+        bqMv.visitEnd();
+        bqCw.visitEnd();
+
+        ServerEntries bqEntries = new ServerEntries(true, Collections.singleton(bqClsName), null);
+        byte[] bqRewritten = bqEntries.transform(loader, bqClsName, null, null, bqCw.toByteArray());
+        assertNotNull("direct LinkedBlockingQueue caller must be rewritten", bqRewritten);
+        Class<?> bqCls = new ByteLoader(loader).define(bqClsName.replace('/', '.'), bqRewritten);
+        RequestGate.disarm();
+        RequestGate.open("direct-bq", null);
+        Object tok = RequestGate.enter();
+        try {
+            bqCls.getMethod("enqueue", LinkedBlockingQueue.class, Object.class)
+                    .invoke(null, new LinkedBlockingQueue<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome bqOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("direct LinkedBlockingQueue.offer must contaminate: " + bqOut.contaminations,
+                bqOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // 2. Spring ListenableFuture.addCallback call site in a rewritten app class must
+        //    contaminate with untracked-async:spring-listenable-future.
+        String lfCbIface = "org/springframework/util/concurrent/ListenableFutureCallback";
+        String lfIface = "org/springframework/util/concurrent/ListenableFuture";
+        String lfImpl = "com/acme/StubListenableFuture";
+        String lfCaller = "com/acme/SpringListenableCaller";
+        String addCbDesc = "(L" + lfCbIface + ";)V";
+        ByteLoader lfLoader = new ByteLoader(loader);
+
+        ClassWriter lfCbCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        lfCbCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT,
+                lfCbIface, null, "java/lang/Object", null);
+        lfCbCw.visitEnd();
+        Class<?> lfCbCls = lfLoader.define(lfCbIface.replace('/', '.'), lfCbCw.toByteArray());
+
+        ClassWriter lfIfaceCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        lfIfaceCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT,
+                lfIface, null, "java/lang/Object", null);
+        lfIfaceCw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, "addCallback",
+                addCbDesc, null, null).visitEnd();
+        lfIfaceCw.visitEnd();
+        Class<?> lfIfaceCls = lfLoader.define(lfIface.replace('/', '.'), lfIfaceCw.toByteArray());
+
+        ClassWriter lfImplCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        lfImplCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, lfImpl, null, "java/lang/Object", new String[] {lfIface});
+        emitDefaultCtor(lfImplCw);
+        MethodVisitor implMv = lfImplCw.visitMethod(Opcodes.ACC_PUBLIC, "addCallback",
+                addCbDesc, null, null);
+        implMv.visitCode();
+        implMv.visitInsn(Opcodes.RETURN);
+        implMv.visitMaxs(0, 2);
+        implMv.visitEnd();
+        lfImplCw.visitEnd();
+        Object lfInstance = lfLoader.define(lfImpl.replace('/', '.'), lfImplCw.toByteArray())
+                .getDeclaredConstructor().newInstance();
+
+        ClassWriter lfCallerCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        lfCallerCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, lfCaller, null, "java/lang/Object", null);
+        emitDefaultCtor(lfCallerCw);
+        MethodVisitor callerMv = lfCallerCw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "attach",
+                "(L" + lfIface + ";L" + lfCbIface + ";)V", null, null);
+        callerMv.visitCode();
+        callerMv.visitVarInsn(Opcodes.ALOAD, 0);
+        callerMv.visitVarInsn(Opcodes.ALOAD, 1);
+        callerMv.visitMethodInsn(Opcodes.INVOKEINTERFACE, lfIface, "addCallback", addCbDesc, true);
+        callerMv.visitInsn(Opcodes.RETURN);
+        callerMv.visitMaxs(2, 2);
+        callerMv.visitEnd();
+        lfCallerCw.visitEnd();
+
+        ServerEntries lfEntries = new ServerEntries(true, Collections.singleton(lfCaller), null);
+        byte[] lfRewritten = lfEntries.transform(lfLoader, lfCaller, null, null, lfCallerCw.toByteArray());
+        assertNotNull("Spring ListenableFuture caller must be rewritten", lfRewritten);
+        Class<?> lfCallerCls = lfLoader.define(lfCaller.replace('/', '.'), lfRewritten);
+        RequestGate.disarm();
+        RequestGate.open("spring-lf", null);
+        tok = RequestGate.enter();
+        try {
+            lfCallerCls.getMethod("attach", lfIfaceCls, lfCbCls).invoke(null, lfInstance, null);
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome lfOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("Spring ListenableFuture.addCallback must contaminate: " + lfOut.contaminations,
+                lfOut.contaminations.contains("untracked-async:spring-listenable-future"));
+
+        // 3. Scheduled job classes (ScheduledMethodRunnable / JobRunShell) latch on load.
+        ServerEntries schedEntries = new ServerEntries(true, Collections.singleton("com/acme/App"), null);
+        for (String jobCls : new String[] {
+                "org/springframework/scheduling/support/ScheduledMethodRunnable",
+                "org/quartz/core/JobRunShell"
+        }) {
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            ClassWriter jobCw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            jobCw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, jobCls, null, "java/lang/Object", null);
+            emitDefaultCtor(jobCw);
+            MethodVisitor runMv = jobCw.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null);
+            runMv.visitCode();
+            runMv.visitInsn(Opcodes.RETURN);
+            runMv.visitMaxs(0, 1);
+            runMv.visitEnd();
+            jobCw.visitEnd();
+            assertNotNull("scheduled job class must still be hooked: " + jobCls,
+                    schedEntries.transform(loader, jobCls, null, null, jobCw.toByteArray()));
+            assertTrue("loading scheduled job class must latch asyncExecutors=false: " + jobCls,
+                    ServerEntries.hasUnhookedAsyncDispatcher());
+        }
+
+        // 4. JobGate.enter for async message listeners ("kafka", "listener") and scheduled jobs
+        //    ("scheduled", "quartz") must each independently latch observedPreCapturedUntrackedExecutor.
+        RequestGate.arm();
+        try {
+            for (String kind : new String[] {"kafka", "listener", "scheduled", "quartz"}) {
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                Object jobTok = JobGate.enter("unit-" + kind, kind);
+                try {
+                    assertTrue("JobGate.enter(" + kind + ") must latch asyncExecutors=false",
+                            KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+                } finally {
+                    JobGate.exit(jobTok);
+                }
+            }
+        } finally {
+            RequestGate.disarm();
+            ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        }
+    }
+
+    @Test(timeout = 60000)
+    public void queueRuntimeCheckDirectSubmissionPublisherMessagingProducerAndExternalOverflow() throws Exception {
+        ClassLoader loader = getClass().getClassLoader();
+
+        // 1. Runtime Queue/Deque/Collection instanceof check (kills QUEUE_RUNTIME_NOOP):
+        //    static java.util.Queue / Deque / Collection call sites must contaminate for
+        //    BlockingQueue & ConcurrentLinkedQueue, and stay clean for ArrayDeque / ArrayList.
+        String qClsName = "com/acme/QueueRuntimeCaller";
+        ServerEntries qEntries = new ServerEntries(true, Collections.singleton(qClsName), null);
+        byte[] qRewritten = qEntries.transform(loader, qClsName, null, null, generateQueueRuntimeCaller(qClsName));
+        assertNotNull("Queue/Deque/Collection caller must be rewritten", qRewritten);
+        Class<?> qCls = new ByteLoader(loader).define(qClsName.replace('/', '.'), qRewritten);
+
+        // BlockingQueue via static java.util.Queue -> contaminates!
+        RequestGate.disarm();
+        RequestGate.open("q-blocking", null);
+        Object tok = RequestGate.enter();
+        try {
+            qCls.getMethod("offerQueue", java.util.Queue.class, Object.class)
+                    .invoke(null, new LinkedBlockingQueue<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome qOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("static Queue backed by LinkedBlockingQueue must contaminate: " + qOut.contaminations,
+                qOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // LinkedBlockingDeque via static java.util.Deque -> contaminates!
+        RequestGate.disarm();
+        RequestGate.open("q-deque", null);
+        tok = RequestGate.enter();
+        try {
+            qCls.getMethod("offerLastDeque", java.util.Deque.class, Object.class)
+                    .invoke(null, new java.util.concurrent.LinkedBlockingDeque<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome dOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("static Deque backed by LinkedBlockingDeque must contaminate: " + dOut.contaminations,
+                dOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // LinkedBlockingQueue via static java.util.Collection.add -> contaminates!
+        RequestGate.disarm();
+        RequestGate.open("q-collection", null);
+        tok = RequestGate.enter();
+        try {
+            qCls.getMethod("addCollection", java.util.Collection.class, Object.class)
+                    .invoke(null, new LinkedBlockingQueue<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome cOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("static Collection backed by LinkedBlockingQueue must contaminate: " + cOut.contaminations,
+                cOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // ConcurrentLinkedQueue via static java.util.Queue -> contaminates!
+        RequestGate.disarm();
+        RequestGate.open("q-clq", null);
+        tok = RequestGate.enter();
+        try {
+            qCls.getMethod("offerQueue", java.util.Queue.class, Object.class)
+                    .invoke(null, new java.util.concurrent.ConcurrentLinkedQueue<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome clqOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("static Queue backed by ConcurrentLinkedQueue must contaminate: " + clqOut.contaminations,
+                clqOut.contaminations.contains("untracked-async:blocking-queue"));
+
+        // Negative controls: ArrayDeque & ArrayList must NOT contaminate!
+        RequestGate.disarm();
+        RequestGate.open("q-plain", null);
+        tok = RequestGate.enter();
+        try {
+            qCls.getMethod("offerQueue", java.util.Queue.class, Object.class)
+                    .invoke(null, new java.util.ArrayDeque<Object>(), "item");
+            qCls.getMethod("offerLastDeque", java.util.Deque.class, Object.class)
+                    .invoke(null, new java.util.ArrayDeque<Object>(), "item");
+            qCls.getMethod("addCollection", java.util.Collection.class, Object.class)
+                    .invoke(null, new ArrayList<Object>(), "item");
+        } finally {
+            RequestGate.exit(tok);
+        }
+        RequestGate.WindowOutcome plainOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+        assertTrue("plain ArrayDeque/ArrayList must not contaminate: " + plainOut.contaminations,
+                plainOut.contaminations.isEmpty());
+
+        // 2. Direct bytecode SubmissionPublisher.submit call site (kills SUBPUB_FLAG_DROP):
+        String spClsName = "com/acme/DirectSubPubCaller";
+        ServerEntries spEntries = new ServerEntries(true, Collections.singleton(spClsName), null);
+        byte[] spRewritten = spEntries.transform(loader, spClsName, null, null,
+                generateDirectSubmissionPublisherCaller(spClsName));
+        assertNotNull("direct SubmissionPublisher.submit caller must be rewritten", spRewritten);
+        assertTrue("rewritten SubmissionPublisher caller must emit untracked-async:submission-publisher",
+                containsLdcString(spRewritten, "untracked-async:submission-publisher"));
+        String spec = System.getProperty("java.specification.version", "1.8");
+        int major = spec.startsWith("1.") ? 8 : Integer.parseInt(spec);
+        if (major >= 9) {
+            Class<?> spCaller = new ByteLoader(loader).define(spClsName.replace('/', '.'), spRewritten);
+            Class<?> spType = Class.forName("java.util.concurrent.SubmissionPublisher");
+            Object pub = spType.getConstructor().newInstance();
+            try {
+                RequestGate.disarm();
+                RequestGate.open("sp-direct", null);
+                tok = RequestGate.enter();
+                try {
+                    spCaller.getMethod("publish", Object.class, Object.class).invoke(null, pub, "msg");
+                } finally {
+                    RequestGate.exit(tok);
+                }
+                RequestGate.WindowOutcome spOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+                assertTrue("direct SubmissionPublisher.submit must contaminate W1: " + spOut.contaminations,
+                        spOut.contaminations.contains("untracked-async:submission-publisher"));
+            } finally {
+                spType.getMethod("close").invoke(pub);
+            }
+        }
+
+        // 3. Direct bytecode messaging producer call sites (kills MSG_PRODUCE_FLAG_DROP)
+        //    with NO listener running: KafkaTemplate, KafkaOperations, RabbitOperations,
+        //    JmsMessagingTemplate, StreamBridge, and Reactor KafkaSender!
+        String[][] msgProducers = {
+            {"org/springframework/kafka/core/KafkaTemplate", "send", "class"},
+            {"org/springframework/kafka/core/KafkaOperations", "send", "interface"},
+            {"org/springframework/amqp/rabbit/core/RabbitOperations", "convertAndSend", "interface"},
+            {"org/springframework/jms/core/JmsMessagingTemplate", "convertAndSend", "class"},
+            {"org/springframework/cloud/stream/function/StreamBridge", "send", "class"},
+            {"reactor/kafka/sender/KafkaSender", "send", "interface"},
+        };
+        for (int i = 0; i < msgProducers.length; i++) {
+            final String owner = msgProducers[i][0];
+            final String method = msgProducers[i][1];
+            final boolean isIface = "interface".equals(msgProducers[i][2]);
+            final String callerName = "com/acme/MsgProducerCaller" + i;
+            ServerEntries msgEntries = new ServerEntries(true, Collections.singleton(callerName), null);
+            byte[] callerBytes = generateMsgProducerCaller(callerName, owner, method, isIface);
+            byte[] rewrittenCaller = msgEntries.transform(loader, callerName, null, null, callerBytes);
+            assertNotNull("messaging producer caller must be rewritten for " + owner, rewrittenCaller);
+
+            final byte[] ownerBytes = generateMsgProducerStub(owner, method, isIface);
+            final String implName = owner + "$StubImpl";
+            final byte[] implBytes = isIface ? generateMsgProducerImpl(implName, owner, method) : null;
+            ClassLoader msgLoader = new ClassLoader(loader) {
+                @Override
+                protected Class<?> findClass(String name) throws ClassNotFoundException {
+                    String internal = name.replace('.', '/');
+                    if (owner.equals(internal)) {
+                        return defineClass(name, ownerBytes, 0, ownerBytes.length);
+                    }
+                    if (isIface && implName.equals(internal)) {
+                        return defineClass(name, implBytes, 0, implBytes.length);
+                    }
+                    if (callerName.equals(internal)) {
+                        return defineClass(name, rewrittenCaller, 0, rewrittenCaller.length);
+                    }
+                    throw new ClassNotFoundException(name);
+                }
+            };
+            Object producer = msgLoader.loadClass((isIface ? implName : owner).replace('/', '.'))
+                    .getDeclaredConstructor().newInstance();
+            Class<?> callerCls = msgLoader.loadClass(callerName.replace('/', '.'));
+
+            RequestGate.disarm();
+            RequestGate.open("msg-prod-" + i, null);
+            tok = RequestGate.enter();
+            try {
+                callerCls.getMethod("produce", Object.class).invoke(null, producer);
+            } finally {
+                RequestGate.exit(tok);
+            }
+            RequestGate.WindowOutcome mOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("direct " + owner + "." + method + " must contaminate W1 with untracked-async:messaging-produce: "
+                    + mOut.contaminations, mOut.contaminations.contains("untracked-async:messaging-produce"));
+        }
+
+        // 4. External untracked handle queue overflow (>64 live handles) for BOTH active-job
+        //    and expired-job branches (kills OVERFLOW_EXT_NOLATCH deterministically).
+        RequestGate.disarm();
+        RequestGate.open("ext-ov-active-init", null);
+        Object jobTok = JobGate.enter(new Object(), "quartz");
+        try {
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            for (int i = 0; i < 66; i++) {
+                RequestGate.trackUntrackedFuture(new CompletableFuture<Void>(), "untracked-async:schedule");
+            }
+            assertTrue("active-job >64 external handle overflow must latch asyncExecutors=false",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+        } finally {
+            JobGate.exit(jobTok);
+        }
+
+        RequestGate.disarm();
+        RequestGate.open("ext-ov-expired-init", null);
+        JobGate.Attribution expiredAttr = new JobGate.Attribution(
+                "quartz:expired.job", true, System.nanoTime() - TimeUnit.SECONDS.toNanos(5));
+        Object expTok = JobGate.enterAs(expiredAttr);
+        try {
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            for (int i = 0; i < 66; i++) {
+                RequestGate.trackUntrackedFuture(new CompletableFuture<Void>(), "untracked-async:schedule");
+            }
+            assertTrue("expired-job >64 external handle overflow must latch asyncExecutors=false",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+        } finally {
+            JobGate.exit(expTok);
+        }
+
+        // 5. App code starting a background thread outside any request window or job
+        //    must latch asyncExecutors=false (closes app-owned queue/outbox workers).
+        RequestGate.disarm();
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        Thread bg = new Thread(() -> { }, "app-outside-bg");
+        RequestGate.startThread(bg);
+        bg.join(5000);
+        assertTrue("Thread.start outside window/job while unarmed must latch asyncExecutors=false",
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+        RequestGate.open("bg-armed-outside", null);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        Thread bgArmed = new Thread(() -> { }, "app-outside-bg-armed");
+        RequestGate.startThread(bgArmed);
+        bgArmed.join(5000);
+        assertTrue("Thread.start outside window/job while armed must latch asyncExecutors=false",
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+    }
+
+    private static boolean containsLdcString(byte[] classfile, final String needle) {
+        final boolean[] found = {false};
+        new org.objectweb.asm.ClassReader(classfile).accept(new org.objectweb.asm.ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String desc, String sig, String[] ex) {
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public void visitLdcInsn(Object value) {
+                        if (needle.equals(value)) {
+                            found[0] = true;
+                        }
+                    }
+                };
+            }
+        }, 0);
+        return found[0];
+    }
+
+    private static byte[] generateMethodRefCaller(String clsName, String owner, String mname, String desc,
+            String kind) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, clsName, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "call", "()V", null, null);
+        mv.visitCode();
+        int op = "static".equals(kind) ? Opcodes.INVOKESTATIC
+                : "interface".equals(kind) ? Opcodes.INVOKEINTERFACE : Opcodes.INVOKEVIRTUAL;
+        if (op != Opcodes.INVOKESTATIC) {
+            mv.visitInsn(Opcodes.ACONST_NULL);
+        }
+        org.objectweb.asm.Type[] args = org.objectweb.asm.Type.getArgumentTypes(desc);
+        for (org.objectweb.asm.Type arg : args) {
+            if (arg.getSort() == org.objectweb.asm.Type.LONG) {
+                mv.visitInsn(Opcodes.LCONST_0);
+            } else {
+                mv.visitInsn(Opcodes.ACONST_NULL);
+            }
+        }
+        mv.visitMethodInsn(op, owner, mname, desc, op == Opcodes.INVOKEINTERFACE);
+        org.objectweb.asm.Type ret = org.objectweb.asm.Type.getReturnType(desc);
+        if (ret.getSort() != org.objectweb.asm.Type.VOID) {
+            mv.visitInsn(ret.getSize() == 2 ? Opcodes.POP2 : Opcodes.POP);
+        }
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(0, 0);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateLatchHookStandIn(String clsName, String methodName, boolean isInterface) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        int acc = Opcodes.ACC_PUBLIC | (isInterface ? (Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT) : 0);
+        cw.visit(Opcodes.V1_8, acc, clsName, null, "java/lang/Object", null);
+        if (!isInterface) {
+            emitDefaultCtor(cw);
+        }
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, methodName, "()V", null, null);
+        mv.visitCode();
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(0, 1);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateInterfaceImpl(String implName, String ifaceName) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, implName, null, "java/lang/Object", new String[] {ifaceName});
+        emitDefaultCtor(cw);
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateQueueRuntimeCaller(String clsName) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, clsName, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+
+        MethodVisitor m1 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "offerQueue",
+                "(Ljava/util/Queue;Ljava/lang/Object;)Z", null, null);
+        m1.visitCode();
+        m1.visitVarInsn(Opcodes.ALOAD, 0);
+        m1.visitVarInsn(Opcodes.ALOAD, 1);
+        m1.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Queue", "offer", "(Ljava/lang/Object;)Z", true);
+        m1.visitInsn(Opcodes.IRETURN);
+        m1.visitMaxs(2, 2);
+        m1.visitEnd();
+
+        MethodVisitor m2 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "offerLastDeque",
+                "(Ljava/util/Deque;Ljava/lang/Object;)Z", null, null);
+        m2.visitCode();
+        m2.visitVarInsn(Opcodes.ALOAD, 0);
+        m2.visitVarInsn(Opcodes.ALOAD, 1);
+        m2.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Deque", "offerLast", "(Ljava/lang/Object;)Z", true);
+        m2.visitInsn(Opcodes.IRETURN);
+        m2.visitMaxs(2, 2);
+        m2.visitEnd();
+
+        MethodVisitor m3 = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "addCollection",
+                "(Ljava/util/Collection;Ljava/lang/Object;)Z", null, null);
+        m3.visitCode();
+        m3.visitVarInsn(Opcodes.ALOAD, 0);
+        m3.visitVarInsn(Opcodes.ALOAD, 1);
+        m3.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Collection", "add", "(Ljava/lang/Object;)Z", true);
+        m3.visitInsn(Opcodes.IRETURN);
+        m3.visitMaxs(2, 2);
+        m3.visitEnd();
+
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateDirectSubmissionPublisherCaller(String clsName) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, clsName, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "publish",
+                "(Ljava/lang/Object;Ljava/lang/Object;)I", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/concurrent/SubmissionPublisher");
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/util/concurrent/SubmissionPublisher",
+                "submit", "(Ljava/lang/Object;)I", false);
+        mv.visitInsn(Opcodes.IRETURN);
+        mv.visitMaxs(2, 2);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateMsgProducerStub(String owner, String method, boolean isIface) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        int acc = Opcodes.ACC_PUBLIC | (isIface ? (Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT) : 0);
+        cw.visit(Opcodes.V1_8, acc, owner, null, "java/lang/Object", null);
+        if (!isIface) {
+            emitDefaultCtor(cw);
+            MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, method, "(Ljava/lang/String;)V", null, null);
+            mv.visitCode();
+            mv.visitInsn(Opcodes.RETURN);
+            mv.visitMaxs(0, 2);
+            mv.visitEnd();
+        } else {
+            cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, method, "(Ljava/lang/String;)V", null, null)
+                    .visitEnd();
+        }
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateMsgProducerImpl(String implName, String ifaceName, String method) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, implName, null, "java/lang/Object", new String[] {ifaceName});
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, method, "(Ljava/lang/String;)V", null, null);
+        mv.visitCode();
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(0, 2);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateMsgProducerCaller(String callerName, String owner, String method, boolean isIface) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, callerName, null, "java/lang/Object", null);
+        emitDefaultCtor(cw);
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "produce",
+                "(Ljava/lang/Object;)V", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, owner);
+        mv.visitLdcInsn("payload");
+        mv.visitMethodInsn(isIface ? Opcodes.INVOKEINTERFACE : Opcodes.INVOKEVIRTUAL,
+                owner, method, "(Ljava/lang/String;)V", isIface);
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(2, 1);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
     private static byte[] generateAppReferencingClass(String appInternalName, String targetInternalName) {
         org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(0);
         cw.visit(org.objectweb.asm.Opcodes.V1_8, org.objectweb.asm.Opcodes.ACC_PUBLIC, appInternalName, null,

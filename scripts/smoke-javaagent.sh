@@ -800,8 +800,12 @@ public final class TomcatHarness {
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
             String ack = readAll(socket.getInputStream());
+            // TomcatHarness is inside KEPLOY_JAVA_CLASS_DIRS and starts its own
+            // in-process coverage-data-receiver Thread outside any request window,
+            // so the agent honestly latches asyncExecutors=false while Tomcat's
+            // own CoyoteAdapter counting stays windowCut=true.
             String pattern = "^ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
-                    + "background=(true|false),ackId=true,asyncExecutors=true,"
+                    + "background=(true|false),ackId=true,asyncExecutors=false,"
                     + "listenerContamination=(true|false)\\n$";
             if (!ack.matches(pattern)) {
                 throw new IllegalStateException("unexpected ACK for " + command + ": " + ack);

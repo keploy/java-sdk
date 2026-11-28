@@ -595,7 +595,27 @@ public final class AsyncHonestyApp {
 
     public static final class HandOffFixtures {
         private static final LinkedBlockingQueue<Runnable> APP_WORKER_QUEUE = new LinkedBlockingQueue<>();
+        private static final java.util.concurrent.ConcurrentLinkedQueue<Runnable> APP_CLQ =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
+        private static final java.util.Deque<Runnable> APP_DEQUE =
+                new java.util.concurrent.LinkedBlockingDeque<>();
+        private static final java.util.Collection<Runnable> APP_COLLECTION = new LinkedBlockingQueue<>();
+        private static final java.util.Queue<Long> OUTBOX_QUEUE =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
         private static volatile org.springframework.context.event.SimpleApplicationEventMulticaster overrideMc;
+        private static volatile org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler outboxScheduler;
+        private static volatile Object fakeKafkaTemplate;
+        private static volatile Method directKafkaSendMethod;
+
+        public static final class OutboxPoller {
+            public void drain() {
+                Long ms;
+                while ((ms = OUTBOX_QUEUE.poll()) != null) {
+                    sleepQuietly(ms.longValue());
+                    AsyncTail.ran();
+                }
+            }
+        }
 
         static void init(String kind) throws Exception {
             if ("submission-publisher".equals(kind)) {
@@ -613,6 +633,75 @@ public final class AsyncHonestyApp {
                 }, "app-queue-worker");
                 worker.setDaemon(true);
                 worker.start();
+            } else if ("clq-worker".equals(kind)) {
+                Thread worker = new Thread(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        Runnable r = APP_CLQ.poll();
+                        if (r == null) {
+                            java.util.concurrent.locks.LockSupport.parkNanos(2_000_000L);
+                            continue;
+                        }
+                        r.run();
+                    }
+                }, "app-clq-worker");
+                worker.setDaemon(true);
+                worker.start();
+            } else if ("deque-worker".equals(kind)) {
+                Thread worker = new Thread(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        try {
+                            ((java.util.concurrent.BlockingDeque<Runnable>) APP_DEQUE).takeFirst().run();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }, "app-deque-worker");
+                worker.setDaemon(true);
+                worker.start();
+            } else if ("collection-add".equals(kind)) {
+                Thread worker = new Thread(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        try {
+                            ((LinkedBlockingQueue<Runnable>) APP_COLLECTION).take().run();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }, "app-collection-worker");
+                worker.setDaemon(true);
+                worker.start();
+            } else if ("scheduled-outbox".equals(kind)) {
+                org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler ts =
+                        new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
+                ts.initialize();
+                ts.scheduleWithFixedDelay(
+                        new org.springframework.scheduling.support.ScheduledMethodRunnable(new OutboxPoller(), "drain"),
+                        250L);
+                outboxScheduler = ts;
+            } else if ("kafka-direct-produce".equals(kind)) {
+                // Define a stand-in org/springframework/kafka/core/KafkaTemplate and an
+                // app caller class in org/example/servers/ that invokes KafkaTemplate.send()
+                // directly in bytecode (no listener running) so W1's own COV must flag!
+                final byte[] tplBytes = generateKafkaTemplateStub();
+                final byte[] callerBytes = generateKafkaProducerCaller();
+                ClassLoader loader = new ClassLoader(AsyncHonestyApp.class.getClassLoader()) {
+                    @Override
+                    protected Class<?> findClass(String name) throws ClassNotFoundException {
+                        if ("org.springframework.kafka.core.KafkaTemplate".equals(name)) {
+                            return defineClass(name, tplBytes, 0, tplBytes.length);
+                        }
+                        if ("org.example.servers.DirectKafkaProducerCaller".equals(name)) {
+                            return defineClass(name, callerBytes, 0, callerBytes.length);
+                        }
+                        throw new ClassNotFoundException(name);
+                    }
+                };
+                Class<?> tplCls = loader.loadClass("org.springframework.kafka.core.KafkaTemplate");
+                Class<?> callerCls = loader.loadClass("org.example.servers.DirectKafkaProducerCaller");
+                fakeKafkaTemplate = tplCls.getDeclaredConstructor().newInstance();
+                directKafkaSendMethod = callerCls.getMethod("produce", Object.class, String.class, Object.class);
             } else if ("kafka-produce".equals(kind)) {
                 byte[] consumerBytes = generateKafkaListenerConsumer();
                 Class<?> consumerClass = new ClassLoader(AsyncHonestyApp.class.getClassLoader()) {
@@ -649,6 +738,56 @@ public final class AsyncHonestyApp {
             }
         }
 
+        private static byte[] generateKafkaTemplateStub() {
+            ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "org/springframework/kafka/core/KafkaTemplate",
+                    null, "java/lang/Object", null);
+            MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+            init.visitCode();
+            init.visitVarInsn(Opcodes.ALOAD, 0);
+            init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+            init.visitInsn(Opcodes.RETURN);
+            init.visitMaxs(1, 1);
+            init.visitEnd();
+            MethodVisitor send = cw.visitMethod(Opcodes.ACC_PUBLIC, "send",
+                    "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;", null, null);
+            send.visitCode();
+            send.visitInsn(Opcodes.ACONST_NULL);
+            send.visitInsn(Opcodes.ARETURN);
+            send.visitMaxs(1, 3);
+            send.visitEnd();
+            cw.visitEnd();
+            return cw.toByteArray();
+        }
+
+        private static byte[] generateKafkaProducerCaller() {
+            ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "org/example/servers/DirectKafkaProducerCaller",
+                    null, "java/lang/Object", null);
+            MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+            init.visitCode();
+            init.visitVarInsn(Opcodes.ALOAD, 0);
+            init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+            init.visitInsn(Opcodes.RETURN);
+            init.visitMaxs(1, 1);
+            init.visitEnd();
+            MethodVisitor prod = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "produce",
+                    "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)V", null, null);
+            prod.visitCode();
+            prod.visitVarInsn(Opcodes.ALOAD, 0);
+            prod.visitTypeInsn(Opcodes.CHECKCAST, "org/springframework/kafka/core/KafkaTemplate");
+            prod.visitVarInsn(Opcodes.ALOAD, 1);
+            prod.visitVarInsn(Opcodes.ALOAD, 2);
+            prod.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "org/springframework/kafka/core/KafkaTemplate",
+                    "send", "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;", false);
+            prod.visitInsn(Opcodes.POP);
+            prod.visitInsn(Opcodes.RETURN);
+            prod.visitMaxs(3, 3);
+            prod.visitEnd();
+            cw.visitEnd();
+            return cw.toByteArray();
+        }
+
         static void handle(String kind, final long ms) throws Exception {
             if ("spring-listenable-callback".equals(kind)) {
                 final org.springframework.util.concurrent.SettableListenableFuture<String> f =
@@ -663,6 +802,30 @@ public final class AsyncHonestyApp {
                     sleepQuietly(ms);
                     AsyncTail.ran();
                 });
+            } else if ("clq-worker".equals(kind)) {
+                APP_CLQ.offer(() -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("deque-worker".equals(kind)) {
+                APP_DEQUE.offerLast(() -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("collection-add".equals(kind)) {
+                APP_COLLECTION.add(() -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("lib-callback".equals(kind)) {
+                io.fakeexternal.FakeExternalHttpClient.runAsync(30, () -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("scheduled-outbox".equals(kind)) {
+                OUTBOX_QUEUE.add(Long.valueOf(ms));
+            } else if ("kafka-direct-produce".equals(kind)) {
+                directKafkaSendMethod.invoke(null, fakeKafkaTemplate, "orders-topic", Long.valueOf(ms));
             } else if ("submission-publisher".equals(kind)) {
                 SubmissionPublisherFixture.submit(ms);
             } else if ("kafka-produce".equals(kind)) {

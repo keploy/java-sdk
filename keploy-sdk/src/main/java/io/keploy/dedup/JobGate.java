@@ -119,6 +119,12 @@ public final class JobGate {
                 // hard-removed without their downstream listener coverage.
                 KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
                         "async message listener (" + run.name + ")", true);
+            } else if ("scheduled".equals(kind) || "quartz".equals(kind)) {
+                // A scheduled job or Quartz run firing during a round may be
+                // draining an outbox or queue written by an earlier HTTP test
+                // whose window already closed; fail closed on asyncExecutors.
+                KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                        "scheduled job (" + run.name + ")", true);
             }
         } catch (Throwable t) {
             // The job runs on. A run counted as going on before this (an

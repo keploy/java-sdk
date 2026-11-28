@@ -316,20 +316,28 @@ public class JobTailTest {
         String test(String id, String... jobs) throws IOException {
             String fullId = "test-set-0/" + id;
             send(sdkOut, "START " + fullId);
-            assertEquals("ACK", sdkIn.readLine());
+            assertEquals("ACK", nextNonHello());
             for (String job : jobs) {
                 command(job);
             }
             send(sdkOut, "END " + fullId);
-            String cov = sdkIn.readLine();
+            String cov = nextNonHello();
             assertTrue(cov, cov != null && cov.startsWith("COV "));
             String line;
-            while (!(line = sdkIn.readLine()).equals("ACK")) {
+            while (!(line = nextNonHello()).equals("ACK")) {
                 assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
             }
             cov = cov.substring("COV ".length());
             assertTrue(cov, cov.contains("\"id\":\"" + fullId + "\""));
             return cov;
+        }
+
+        private String nextNonHello() throws IOException {
+            String line;
+            while ((line = sdkIn.readLine()) != null && line.startsWith("HELLO ")) {
+                // Skip asynchronous HELLO capability refresh frames.
+            }
+            return line;
         }
 
         // command has JobApp fire a job, and returns once its run is over.

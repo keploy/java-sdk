@@ -94,6 +94,8 @@ final class ServerEntries implements ClassFileTransformer {
                 "listener", "doInvokeListener");
         // Spring's executors a request hands work to.
         addAsync("org/springframework/core/task/SimpleAsyncTaskExecutor", "doExecute", "submitCompletable");
+        addAsync("org/springframework/scheduling/concurrent/SimpleAsyncTaskScheduler", "execute", "submit",
+                "submitListenable", "submitCompletable");
         addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor", "execute", "submit",
                 "submitListenable", "submitCompletable");
         addAsync("org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler", "execute", "submit",
@@ -101,6 +103,29 @@ final class ServerEntries implements ClassFileTransformer {
         addAsync("org/springframework/scheduling/concurrent/ConcurrentTaskExecutor", "execute", "submit",
                 "submitListenable", "submitCompletable");
         addAsync("org/springframework/aop/interceptor/AsyncExecutionAspectSupport", "doSubmit");
+    }
+
+    // Classes/interfaces whose async entry methods are hooked to latch
+    // asyncExecutors=false on first invocation (instead of on class load),
+    // so synchronous-only users (e.g. Spring Boot PetClinic using sync
+    // Caffeine/@Cacheable) retain asyncExecutors=true while actual async
+    // cache refresh/load fails closed before W1's COV.
+    private static final Map<String, LatchEntry> LATCH_ON_CALL = new HashMap<>();
+
+    static {
+        addLatchOnCall("com/github/benmanes/caffeine/cache/Caffeine",
+                "caffeine-async-cache", "buildAsync", "executor", "removalListener",
+                "evictionListener", "refreshAfterWrite", "scheduler");
+        addLatchOnCall("com/github/benmanes/caffeine/cache/CacheLoader",
+                "caffeine-async-cache", "asyncLoad", "asyncLoadAll", "asyncReload");
+        addLatchOnCall("com/github/benmanes/caffeine/cache/LocalAsyncCache",
+                "caffeine-async-cache", "get", "getAll", "put");
+        addLatchOnCall("org/springframework/cache/concurrent/ConcurrentMapCache",
+                "spring-async-cache", "retrieve");
+    }
+
+    private static void addLatchOnCall(String className, String label, String... methods) {
+        LATCH_ON_CALL.put(className, new LatchEntry(label, new HashSet<>(Arrays.asList(methods))));
     }
 
     // Classes of servers that are not counted, so that the log can name them
@@ -144,6 +169,10 @@ final class ServerEntries implements ClassFileTransformer {
         UNHOOKED_ASYNC_DISPATCHERS.put("io/reactivex/schedulers/Schedulers", "RxJava 2 Schedulers");
         UNHOOKED_ASYNC_DISPATCHERS.put("io/reactivex/rxjava3/schedulers/Schedulers", "RxJava 3 Schedulers");
         UNHOOKED_ASYNC_DISPATCHERS.put("kotlinx/coroutines/Dispatchers", "Kotlin Coroutines Dispatchers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("kotlinx/coroutines/GlobalScope", "Kotlin Coroutines GlobalScope");
+        UNHOOKED_ASYNC_DISPATCHERS.put("kotlin/concurrent/ThreadsKt", "Kotlin Thread Helper");
+        UNHOOKED_ASYNC_DISPATCHERS.put("reactor/core/scheduler/Schedulers", "Project Reactor Schedulers");
+        UNHOOKED_ASYNC_DISPATCHERS.put("com/google/common/eventbus/AsyncEventBus", "Guava AsyncEventBus");
         UNHOOKED_ASYNC_DISPATCHERS.put("okhttp3/Dispatcher", "OkHttp Dispatcher");
         UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousChannelGroup", "JDK AsynchronousChannelGroup");
         UNHOOKED_ASYNC_DISPATCHERS.put("java/nio/channels/AsynchronousFileChannel", "JDK AsynchronousFileChannel");
@@ -165,11 +194,250 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/concurrent/PriorityBlockingQueue",
             "java/util/concurrent/DelayQueue",
             "java/util/concurrent/SynchronousQueue",
-            "java/util/concurrent/LinkedTransferQueue")));
+            "java/util/concurrent/LinkedTransferQueue",
+            "java/util/concurrent/ConcurrentLinkedQueue",
+            "java/util/concurrent/ConcurrentLinkedDeque")));
 
     private static final Set<String> BLOCKING_QUEUE_ENQUEUE_METHODS = Collections.unmodifiableSet(new HashSet<>(
             Arrays.asList("offer", "put", "add", "offerFirst", "offerLast", "putFirst", "putLast",
                     "addFirst", "addLast", "transfer", "tryTransfer")));
+
+    // JDK HTTP/WebSocket async methods checked even in rewritten app classes
+    // (since java/net/http/* is skipped by isInternalOrAgentClass). Must be
+    // initialized before DISPATCH_PRIMITIVE_METHODS, which merges it via putAll.
+    private static final Map<String, Set<String>> JDK_ASYNC_HTTP_METHODS = buildJdkAsyncHttpMethods();
+    // Concurrency dispatch primitives checked by Methodref/InterfaceMethodref
+    // constant-pool scan on every non-JDK, non-agent, non-allowlisted loaded class.
+    private static final Map<String, Set<String>> DISPATCH_PRIMITIVE_METHODS = buildDispatchPrimitiveMethods();
+
+    private static Map<String, Set<String>> buildJdkAsyncHttpMethods() {
+        Map<String, Set<String>> m = new HashMap<>();
+        m.put("java/net/http/HttpClient", setOf("sendAsync"));
+        m.put("java/net/http/WebSocket$Builder", setOf("buildAsync"));
+        m.put("java/net/http/WebSocket", setOf("sendText", "sendBinary", "sendPing", "sendPong", "sendClose"));
+        return Collections.unmodifiableMap(m);
+    }
+
+    private static Map<String, Set<String>> buildDispatchPrimitiveMethods() {
+        Map<String, Set<String>> m = new HashMap<>();
+        Set<String> exec = setOf("execute");
+        Set<String> execSvc = setOf("execute", "submit", "invokeAll", "invokeAny");
+        Set<String> schedSvc = setOf("execute", "submit", "invokeAll", "invokeAny",
+                "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay");
+        Set<String> fjp = setOf("execute", "submit", "invokeAll", "invokeAny", "invoke");
+        Set<String> stageAsync = setOf(
+                "thenApplyAsync", "thenAcceptAsync", "thenRunAsync", "thenComposeAsync",
+                "thenCombineAsync", "thenAcceptBothAsync", "runAfterBothAsync",
+                "applyToEitherAsync", "acceptEitherAsync", "runAfterEitherAsync",
+                "handleAsync", "whenCompleteAsync", "exceptionallyAsync", "exceptionallyComposeAsync");
+        Set<String> cfAsync = new HashSet<>(stageAsync);
+        cfAsync.add("runAsync");
+        cfAsync.add("supplyAsync");
+        cfAsync.add("completeAsync");
+        Set<String> clq = setOf("offer", "add", "offerFirst", "offerLast", "addFirst", "addLast");
+
+        m.put("java/util/concurrent/Executor", exec);
+        m.put("java/util/concurrent/ExecutorService", execSvc);
+        m.put("java/util/concurrent/AbstractExecutorService", execSvc);
+        m.put("java/util/concurrent/ThreadPoolExecutor", execSvc);
+        m.put("java/util/concurrent/ScheduledExecutorService", schedSvc);
+        m.put("java/util/concurrent/ScheduledThreadPoolExecutor", schedSvc);
+        m.put("java/util/concurrent/ForkJoinPool", fjp);
+        m.put("java/util/concurrent/ForkJoinTask", setOf("fork"));
+        m.put("java/util/concurrent/ExecutorCompletionService", setOf("submit"));
+        m.put("java/lang/Thread", setOf("start", "startVirtualThread"));
+        m.put("java/lang/Thread$Builder", setOf("start"));
+        m.put("java/lang/Thread$Builder$OfVirtual", setOf("start"));
+        m.put("java/lang/Thread$Builder$OfPlatform", setOf("start"));
+        m.put("java/util/Timer", setOf("schedule", "scheduleAtFixedRate"));
+        m.put("java/util/concurrent/CompletableFuture", Collections.unmodifiableSet(cfAsync));
+        m.put("java/util/concurrent/CompletionStage", stageAsync);
+        m.put("java/util/concurrent/SubmissionPublisher", setOf("submit", "offer"));
+        // Messaging producers: if a library or dynamically generated proxy outside
+        // rewritten app classes invokes a broker send/publish, fail closed on load.
+        m.put("org/springframework/kafka/core/KafkaTemplate", setOf("send", "sendDefault"));
+        m.put("org/springframework/kafka/core/KafkaOperations", setOf("send", "sendDefault"));
+        m.put("org/apache/kafka/clients/producer/KafkaProducer", setOf("send"));
+        m.put("org/apache/kafka/clients/producer/Producer", setOf("send"));
+        m.put("org/springframework/amqp/rabbit/core/RabbitTemplate", setOf("send", "convertAndSend", "convertSendAndReceive"));
+        m.put("org/springframework/amqp/rabbit/core/RabbitOperations", setOf("send", "convertAndSend", "convertSendAndReceive"));
+        m.put("org/springframework/amqp/core/AmqpTemplate", setOf("send", "convertAndSend", "convertSendAndReceive"));
+        m.put("org/springframework/jms/core/JmsTemplate", setOf("send", "convertAndSend"));
+        m.put("org/springframework/jms/core/JmsOperations", setOf("send", "convertAndSend"));
+        m.put("org/springframework/jms/core/JmsMessagingTemplate", setOf("send", "convertAndSend"));
+        m.put("org/springframework/cloud/stream/function/StreamBridge", setOf("send"));
+        m.put("reactor/kafka/sender/KafkaSender", setOf("send"));
+        for (String q : BLOCKING_QUEUE_OWNERS) {
+            if ("java/util/concurrent/ConcurrentLinkedQueue".equals(q)
+                    || "java/util/concurrent/ConcurrentLinkedDeque".equals(q)) {
+                m.put(q, clq);
+            } else {
+                m.put(q, BLOCKING_QUEUE_ENQUEUE_METHODS);
+            }
+        }
+        m.putAll(JDK_ASYNC_HTTP_METHODS);
+        return Collections.unmodifiableMap(m);
+    }
+
+    // Explicit per-class allowlist (no package wildcards): every entry is either
+    // (a) a hooked & tested Spring async executor or its internal delegate,
+    // (b) a hooked servlet server connector/lifecycle class (Tomcat, Jetty,
+    //     Undertow/XNIO/JBoss Threads) whose request dispatch enters a hooked
+    //     request entry, or
+    // (c) a verified non-app-dispatching JDBC pool/driver/DB/Hibernate/
+    //     Micrometer/Spring Boot startup-shutdown infrastructure class observed
+    //     on Spring PetClinic.
+    // Unhooked async libraries (Kotlin coroutines, Reactor, OkHttp, Guava,
+    // Spring Integration, RxJava, Akka/Pekko, gRPC, Netty, HttpAsyncClient,
+    // NATS, custom callbacks, H2 FileAsync) are absent and fail closed by
+    // construction.
+    private static final Set<String> ALLOWLISTED_DISPATCH_CLASSES = Collections.unmodifiableSet(new HashSet<>(
+            Arrays.asList(
+                    // (a) Hooked Spring async executors & delegates
+                    "org/springframework/context/event/SimpleApplicationEventMulticaster",
+                    "org/springframework/core/task/AsyncTaskExecutor",
+                    "org/springframework/core/task/SimpleAsyncTaskExecutor",
+                    "org/springframework/scheduling/concurrent/SimpleAsyncTaskScheduler",
+                    "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor",
+                    "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor$1",
+                    "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler",
+                    "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler$1",
+                    "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor",
+                    "org/springframework/aop/interceptor/AsyncExecutionAspectSupport",
+                    // (b1) Tomcat (request dispatch enters hooked CoyoteAdapter)
+                    "org/apache/catalina/core/ContainerBase",
+                    "org/apache/catalina/core/StandardServer",
+                    "org/apache/catalina/core/StandardVirtualThreadExecutor",
+                    "org/apache/catalina/servlets/CGIServlet$CGIRunner",
+                    "org/apache/catalina/startup/Catalina$CatalinaShutdownHook",
+                    "org/apache/catalina/startup/ContextConfig",
+                    "org/apache/catalina/startup/HostConfig",
+                    "org/apache/catalina/startup/UserConfig",
+                    "org/apache/catalina/util/TimeBucketCounter",
+                    "org/apache/catalina/util/TimeBucketCounter$MaintenanceMonitor",
+                    "org/apache/catalina/util/TimeBucketCounterBase",
+                    "org/apache/catalina/util/TimeBucketCounterBase$MaintenanceMonitor",
+                    "org/apache/coyote/AbstractProtocol",
+                    "org/apache/juli/AsyncFileHandler$DropFlushPolicy",
+                    "org/apache/juli/AsyncFileHandler$DropLastPolicy",
+                    "org/apache/juli/ClassLoaderLogManager$Cleaner",
+                    "org/apache/juli/FileHandler",
+                    "org/apache/tomcat/util/net/AbstractEndpoint",
+                    "org/apache/tomcat/util/net/AprEndpoint",
+                    "org/apache/tomcat/util/net/AprEndpoint$Poller",
+                    "org/apache/tomcat/util/net/AprEndpoint$Sendfile",
+                    "org/apache/tomcat/util/net/NioEndpoint",
+                    "org/apache/tomcat/util/net/Nio2Channel",
+                    "org/apache/tomcat/util/net/Nio2Endpoint",
+                    "org/apache/tomcat/util/net/Nio2Endpoint$Nio2Acceptor",
+                    "org/apache/tomcat/util/net/Nio2Endpoint$Nio2SocketWrapper",
+                    "org/apache/tomcat/util/net/Nio2Endpoint$SocketProcessor",
+                    "org/apache/tomcat/util/net/SecureNio2Channel",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$1",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$2",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$3",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$4",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$FutureFlush",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$FutureRead",
+                    "org/apache/tomcat/util/net/SecureNio2Channel$FutureWrite",
+                    "org/apache/tomcat/util/net/SocketProperties",
+                    "org/apache/tomcat/util/net/SocketWrapperBase",
+                    "org/apache/tomcat/util/net/SocketWrapperBase$OperationState",
+                    "org/apache/tomcat/util/net/WriteBuffer",
+                    "org/apache/tomcat/util/threads/ScheduledThreadPoolExecutor",
+                    "org/apache/tomcat/util/threads/TaskQueue",
+                    "org/apache/tomcat/util/threads/TaskThread",
+                    "org/apache/tomcat/util/threads/ThreadPoolExecutor",
+                    "org/apache/tomcat/websocket/WsWebSocketContainer",
+                    // (b2) Jetty (request dispatch enters hooked HttpChannel/ServletChannel)
+                    "org/eclipse/jetty/io/AbstractConnection",
+                    "org/eclipse/jetty/io/SelectorManager",
+                    "org/eclipse/jetty/io/ssl/SslConnection$DecryptedEndPoint",
+                    "org/eclipse/jetty/io/ssl/SslConnection$DecryptedEndPoint$IncompleteWriteCallback",
+                    "org/eclipse/jetty/server/AbstractConnector",
+                    "org/eclipse/jetty/server/AsyncRequestLogWriter",
+                    "org/eclipse/jetty/server/AsyncRequestLogWriter$WriterThread",
+                    "org/eclipse/jetty/server/HttpChannel",
+                    "org/eclipse/jetty/server/HttpConnection",
+                    "org/eclipse/jetty/server/HttpInput",
+                    "org/eclipse/jetty/server/ShutdownMonitor",
+                    "org/eclipse/jetty/server/handler/ShutdownHandler$1",
+                    "org/eclipse/jetty/util/thread/ExecutorThreadPool",
+                    "org/eclipse/jetty/util/thread/QueuedThreadPool",
+                    "org/eclipse/jetty/util/thread/ReservedThreadExecutor",
+                    "org/eclipse/jetty/util/thread/ScheduledExecutorScheduler",
+                    "org/eclipse/jetty/util/thread/ShutdownThread",
+                    "org/eclipse/jetty/util/thread/TimerScheduler",
+                    "org/eclipse/jetty/util/thread/TryExecutor$NoTryExecutor",
+                    "org/eclipse/jetty/util/thread/strategy/EatWhatYouKill",
+                    "org/eclipse/jetty/util/thread/strategy/ExecuteProduceConsume",
+                    "org/eclipse/jetty/util/thread/strategy/ProduceConsume",
+                    "org/eclipse/jetty/util/thread/strategy/ProduceExecuteConsume",
+                    // (b3) Undertow / XNIO / JBoss Threads (request dispatch enters hooked Connectors)
+                    "io/undertow/protocols/ssl/SslConduit",
+                    "io/undertow/server/Connectors",
+                    "io/undertow/server/DefaultByteBufferPool",
+                    "io/undertow/server/HttpServerExchange",
+                    "io/undertow/server/protocol/framed/AbstractFramedChannel",
+                    "io/undertow/server/protocol/framed/ShutdownFallbackExecutor",
+                    "io/undertow/server/protocol/http/HttpReadListener",
+                    "io/undertow/servlet/spec/AsyncContextImpl",
+                    "io/undertow/util/PipeliningExecutor",
+                    "io/undertow/util/SimpleObjectPool$SimplePooledObject",
+                    "org/xnio/AbstractIoFuture",
+                    "org/xnio/AutomaticReference$Cleaner$1",
+                    "org/xnio/ByteBufferPool",
+                    "org/xnio/ChannelListeners",
+                    "org/xnio/ChannelListeners$13",
+                    "org/xnio/XnioIoThread",
+                    "org/xnio/XnioWorker$ExecutorServiceTaskPool",
+                    "org/xnio/XnioWorker$ThreadPoolExecutorTaskPool",
+                    "org/jboss/threads/DelegatingExecutor",
+                    "org/jboss/threads/DelegatingExecutorService",
+                    "org/jboss/threads/DelegatingScheduledExecutorService",
+                    "org/jboss/threads/EnhancedQueueExecutor",
+                    "org/jboss/threads/HandoffRejectedExecutionHandler",
+                    "org/jboss/threads/JBossThread",
+                    "org/jboss/threads/ManagedThreadPoolExecutor",
+                    "org/jboss/threads/ViewExecutor",
+                    "org/jboss/threads/ViewExecutor$TaskWrapper",
+                    // (c) Verified non-app-dispatching JDBC/DB/Hibernate/Caffeine/Micrometer/Spring Boot infra
+                    //     (Caffeine async entry points are hooked via LATCH_ON_CALL on Caffeine/CacheLoader/LocalAsyncCache)
+                    "com/github/benmanes/caffeine/cache/BoundedLocalCache",
+                    "com/github/benmanes/caffeine/cache/UnboundedLocalCache",
+                    "com/zaxxer/hikari/pool/HikariPool",
+                    "com/zaxxer/hikari/pool/ProxyLeakTask",
+                    "com/zaxxer/hikari/util/ConcurrentBag",
+                    "com/mysql/cj/jdbc/AbandonedConnectionCleanupThread",
+                    "org/postgresql/Driver",
+                    "org/h2/mvstore/FileStore",
+                    "org/h2/mvstore/MVStore",
+                    "org/h2/mvstore/db/LobStorageMap",
+                    "org/h2/util/MathUtils",
+                    "org/h2/util/Task",
+                    "org/h2/util/Utils",
+                    "org/hibernate/internal/util/collections/BoundedConcurrentHashMap$LIRS",
+                    "org/hibernate/internal/util/collections/BoundedConcurrentHashMap$LRU",
+                    "io/micrometer/core/instrument/HighCardinalityTagsDetector",
+                    "org/springframework/beans/factory/support/DefaultListableBeanFactory",
+                    "org/springframework/boot/actuate/context/ShutdownEndpoint",
+                    "org/springframework/boot/autoconfigure/condition/OnClassCondition$ThreadedOutcomesResolver",
+                    "org/springframework/boot/autoconfigure/preinitialize/BackgroundPreinitializingApplicationListener",
+                    "org/springframework/boot/autoconfigure/ssl/FileWatcher$WatcherThread",
+                    "org/springframework/boot/context/metrics/buffering/BufferingApplicationStartup",
+                    "org/springframework/boot/tomcat/GracefulShutdown",
+                    "org/springframework/boot/tomcat/TomcatWebServer",
+                    "org/springframework/boot/tomcat/TomcatWebServer$1",
+                    "org/springframework/boot/web/embedded/tomcat/GracefulShutdown",
+                    "org/springframework/boot/web/embedded/tomcat/TomcatWebServer",
+                    "org/springframework/boot/web/embedded/tomcat/TomcatWebServer$1",
+                    "org/springframework/context/support/AbstractApplicationContext$1",
+                    "org/springframework/context/support/DefaultLifecycleProcessor",
+                    "org/springframework/jmx/support/ConnectorServerFactoryBean$1")));
+
+    static Set<String> allowlistedDispatchClasses() {
+        return ALLOWLISTED_DISPATCH_CLASSES;
+    }
 
     private static final String SPRING_EVENT_MULTICASTER =
             "org/springframework/context/event/SimpleApplicationEventMulticaster";
@@ -234,14 +502,22 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/concurrent/DelayQueue",
             "java/util/concurrent/SynchronousQueue",
             "java/util/concurrent/LinkedTransferQueue",
+            "java/util/concurrent/ConcurrentLinkedQueue",
+            "java/util/concurrent/ConcurrentLinkedDeque",
             "java/util/Queue",
+            "java/util/Deque",
             "org/springframework/kafka/core/KafkaTemplate",
+            "org/springframework/kafka/core/KafkaOperations",
             "org/apache/kafka/clients/producer/KafkaProducer",
             "org/apache/kafka/clients/producer/Producer",
             "org/springframework/amqp/rabbit/core/RabbitTemplate",
+            "org/springframework/amqp/rabbit/core/RabbitOperations",
             "org/springframework/amqp/core/AmqpTemplate",
             "org/springframework/jms/core/JmsTemplate",
             "org/springframework/jms/core/JmsOperations",
+            "org/springframework/jms/core/JmsMessagingTemplate",
+            "org/springframework/cloud/stream/function/StreamBridge",
+            "reactor/kafka/sender/KafkaSender",
             "com/google/common/util/concurrent/Futures",
             "com/google/common/util/concurrent/ListenableFuture",
             "reactor/core/publisher/Mono",
@@ -520,6 +796,10 @@ final class ServerEntries implements ClassFileTransformer {
         if (SPRING_EVENT_MULTICASTER.equals(className)) {
             return hookSpringEventMulticaster(loader, className, classfileBuffer);
         }
+        LatchEntry latchEntry = LATCH_ON_CALL.get(className);
+        if (latchEntry != null) {
+            return hookLatchOnCall(loader, className, classfileBuffer, latchEntry);
+        }
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
             String uncounted = UNCOUNTED.get(className);
@@ -530,20 +810,15 @@ final class ServerEntries implements ClassFileTransformer {
             if (unhookedConsumer != null) {
                 SEEN_UNHOOKED_CONSUMERS.add(unhookedConsumer);
             }
-            // Decide unhooked async dispatchers strictly from app-code references
-            // (scanUnhookedReferences below), NEVER from JVM-wide class loads —
-            // otherwise Tomcat's own NIO2 connector loading AsynchronousSocketChannel
-            // / AsynchronousServerSocketChannel false-latches asyncExecutors=false
-            // on every Tomcat / Spring Boot app.
             if (shouldRewriteExecutorCalls(className)) {
-                scanUnhookedReferences(className, classfileBuffer, false);
+                scanUnhookedReferences(className, classfileBuffer, false, false);
                 if (!canAccessGate(loader, protectionDomain)) {
                     if (seesGate(loader)) {
                         jpmsGuardTriggered = true;
                     } else {
                         appRewriteFailed = true;
                     }
-                    scanUnhookedReferences(className, classfileBuffer, true);
+                    scanUnhookedReferences(className, classfileBuffer, true, true);
                     return null;
                 }
                 try {
@@ -556,15 +831,15 @@ final class ServerEntries implements ClassFileTransformer {
                     appRewriteFailed = true;
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
                 }
-            } else if (className != null && isRewriteAllowedPackage(className)
-                    && !isKnownMessagingPoolWrapper(className)) {
-                // Even when KEPLOY_JAVA_ASYNC_CALLSITES=off or no app allow-list
-                // is configured, read-only CP scan still detects direct raw
-                // Kafka/RabbitMQ/JMS consumer calls and unhooked async
-                // dispatchers (RxJava, Kotlin coroutines, OkHttp, NIO
-                // Asynchronous*Channel, SubmissionPublisher) referenced by app
-                // classes so capabilities stay honest without modifying bytecode.
-                scanUnhookedReferences(className, classfileBuffer, true);
+            } else if (className != null && !isInternalOrAgentClass(className)) {
+                // Fail-closed read-only constant-pool scan of EVERY non-JDK,
+                // non-agent loaded class (both app and library classes). Any
+                // class referencing a concurrency dispatch primitive or unhooked
+                // async dispatcher latches asyncExecutors=false UNLESS its exact
+                // name is in ALLOWLISTED_DISPATCH_CLASSES.
+                boolean checkDispatch = !ALLOWLISTED_DISPATCH_CLASSES.contains(className);
+                scanUnhookedReferences(className, classfileBuffer, !isKnownMessagingPoolWrapper(className),
+                        checkDispatch);
             }
             return null;
         }
@@ -602,6 +877,11 @@ final class ServerEntries implements ClassFileTransformer {
                 COUNTED.add(entry.server);
             } else if (entry.async) {
                 HOOKED_SPRING_CLASSES.add(name);
+            } else if ("scheduled".equals(entry.job) || "quartz".equals(entry.job)) {
+                // Loading a scheduled job runner (@Scheduled or Quartz) means
+                // outbox/background ticks can execute app lines written by an
+                // earlier request; fail closed on asyncExecutors before W1 COV.
+                recordUnhookedAsyncDispatcher("scheduled-job:" + entry.job, className);
             }
             synchronized (changed) {
                 Set<String> names = changed.get(loader);
@@ -662,6 +942,22 @@ final class ServerEntries implements ClassFileTransformer {
             }
             try {
                 return wrapSpringEventMulticaster(classfile);
+            } catch (Throwable t) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup could not re-hook " + className, t);
+                return null;
+            }
+        }
+        LatchEntry latchEntry = LATCH_ON_CALL.get(className);
+        if (latchEntry != null) {
+            synchronized (changed) {
+                Set<String> names = changed.get(loader);
+                if (names == null || !names.contains(className)) {
+                    return null;
+                }
+            }
+            try {
+                return wrapLatchOnCall(classfile, latchEntry);
             } catch (Throwable t) {
                 asyncHookFailed = true;
                 LOGGER.log(Level.WARNING, "Keploy dedup could not re-hook " + className, t);
@@ -972,7 +1268,137 @@ final class ServerEntries implements ClassFileTransformer {
                 if (TARGET_ASYNC_METHOD_NAMES.contains(memberName)) {
                     return true;
                 }
+            } else if (tag == 10 || tag == 11) {
+                String owner = reader.readClass(offset, buf);
+                if ("java/util/Collection".equals(owner)) {
+                    int ntOffset = reader.getItem(reader.readUnsignedShort(offset + 2));
+                    if (ntOffset > 0 && "add".equals(reader.readUTF8(ntOffset, buf))) {
+                        return true;
+                    }
+                }
             }
+        }
+        return false;
+    }
+
+    private byte[] hookLatchOnCall(ClassLoader loader, String className, byte[] classfileBuffer,
+            LatchEntry latchEntry) {
+        String name = className.replace('/', '.');
+        try {
+            if (!seesGate(loader)) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot hook " + name
+                        + ": its class loader does not see keploy-sdk.jar", (Throwable) null);
+                return null;
+            }
+            byte[] wrapped = wrapLatchOnCall(classfileBuffer, latchEntry);
+            if (wrapped == null) {
+                // Only fail closed if this class version actually references a
+                // dispatch primitive without exposing the expected methods (e.g.
+                // Spring 5.3 ConcurrentMapCache has no async retrieve method).
+                if (hasDispatchPrimitiveReference(classfileBuffer)) {
+                    asyncHookFailed = true;
+                    LOGGER.log(Level.WARNING, "Keploy dedup cannot hook " + name
+                            + ": none of " + latchEntry.methods + " found");
+                }
+                return null;
+            }
+            synchronized (changed) {
+                Set<String> names = changed.get(loader);
+                if (names == null) {
+                    names = new HashSet<>();
+                    changed.put(loader, names);
+                }
+                names.add(className);
+            }
+            return wrapped;
+        } catch (Throwable t) {
+            asyncHookFailed = true;
+            LOGGER.log(Level.WARNING, "Keploy dedup could not hook " + name, t);
+            return null;
+        }
+    }
+
+    static byte[] wrapLatchOnCall(byte[] classfile, final LatchEntry latchEntry) {
+        ClassReader reader = new ClassReader(classfile);
+        ClassWriter writer = new ClassWriter(reader, 0);
+        final boolean[] found = {false};
+        final boolean[] alreadyHooked = {false};
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (mv == null || (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE)) != 0
+                        || !latchEntry.methods.contains(name)) {
+                    return mv;
+                }
+                found[0] = true;
+                final String reason = latchEntry.label + ":" + name;
+                return new MethodVisitor(Opcodes.ASM9, mv) {
+                    private boolean injected;
+
+                    @Override
+                    public void visitCode() {
+                        super.visitCode();
+                        if (!injected) {
+                            injected = true;
+                            super.visitLdcInsn(reason);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
+                                    "noteRuntimeUntrackedDispatch", "(Ljava/lang/String;)V", false);
+                        }
+                    }
+
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String mname, String desc,
+                            boolean isInterface) {
+                        if (opcode == Opcodes.INVOKESTATIC && GATE.equals(owner)
+                                && "noteRuntimeUntrackedDispatch".equals(mname)) {
+                            alreadyHooked[0] = true;
+                        }
+                        super.visitMethodInsn(opcode, owner, mname, desc, isInterface);
+                    }
+
+                    @Override
+                    public void visitMaxs(int maxStack, int maxLocals) {
+                        super.visitMaxs(Math.max(maxStack, 1), maxLocals);
+                    }
+                };
+            }
+        }, 0);
+        if (!found[0]) {
+            return null;
+        }
+        return alreadyHooked[0] ? classfile : writer.toByteArray();
+    }
+
+    private static boolean hasDispatchPrimitiveReference(byte[] classfile) {
+        if (classfile == null || classfile.length < 16) {
+            return false;
+        }
+        try {
+            ClassReader reader = new ClassReader(classfile);
+            int itemCount = reader.getItemCount();
+            char[] buf = new char[reader.getMaxStringLength()];
+            for (int i = 1; i < itemCount; i++) {
+                int offset = reader.getItem(i);
+                if (offset == 0) {
+                    continue;
+                }
+                int tag = reader.readByte(offset - 1);
+                if (tag == 10 || tag == 11) {
+                    String owner = reader.readClass(offset, buf);
+                    Set<String> methods = DISPATCH_PRIMITIVE_METHODS.get(owner);
+                    if (methods != null) {
+                        int ntOffset = reader.getItem(reader.readUnsignedShort(offset + 2));
+                        if (ntOffset > 0 && methods.contains(reader.readUTF8(ntOffset, buf))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            return true;
         }
         return false;
     }
@@ -1086,17 +1512,22 @@ final class ServerEntries implements ClassFileTransformer {
         if (SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(dispatcher)) {
             String from = (sourceClass == null || sourceClass.isEmpty())
                     ? "<unknown>" : sourceClass.replace('/', '.');
-            LOGGER.log(Level.INFO, "Keploy dedup: observed app reference to unhooked async dispatcher "
+            LOGGER.log(Level.INFO, "Keploy dedup: observed reference to unhooked async dispatcher "
                     + dispatcher + " in " + from + "; declaring asyncExecutors=false");
         }
     }
 
-    private static void scanUnhookedReferences(String className, byte[] classfile, boolean includeRawConsumers) {
+    private static void scanUnhookedReferences(String className, byte[] classfile, boolean includeRawConsumers,
+            boolean checkDispatchPrimitives) {
         if (classfile == null || classfile.length < 16) {
             return;
         }
+        boolean allowlisted = className != null && ALLOWLISTED_DISPATCH_CLASSES.contains(className);
         try {
             ClassReader reader = new ClassReader(classfile);
+            if (!allowlisted && checkDispatchPrimitives && "java/lang/Thread".equals(reader.getSuperName())) {
+                recordUnhookedAsyncDispatcher("java.lang.Thread subclass", className);
+            }
             int itemCount = reader.getItemCount();
             char[] buf = new char[reader.getMaxStringLength()];
             boolean hasRawConsumerOwner = false;
@@ -1108,22 +1539,40 @@ final class ServerEntries implements ClassFileTransformer {
                 int tag = reader.readByte(offset - 1);
                 if (tag == 7) {
                     String cls = reader.readUTF8(offset, buf);
-                    String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(cls);
-                    if (unhookedAsync != null) {
-                        recordUnhookedAsyncDispatcher(unhookedAsync, className);
+                    if (!allowlisted) {
+                        String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(cls);
+                        if (unhookedAsync != null) {
+                            recordUnhookedAsyncDispatcher(unhookedAsync, className);
+                        }
                     }
                     if (includeRawConsumers && RAW_CONSUMER_OWNERS.contains(cls)) {
                         hasRawConsumerOwner = true;
                     }
                 } else if (tag == 8) {
                     // Catch reflective Class.forName("java.util.concurrent.SubmissionPublisher")
-                    // and similar string-literal lookups in app classes.
-                    String literal = reader.readUTF8(offset, buf);
-                    if (literal != null && literal.indexOf('.') > 0) {
-                        String slash = literal.replace('.', '/');
-                        String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(slash);
-                        if (unhookedAsync != null) {
-                            recordUnhookedAsyncDispatcher(unhookedAsync, className);
+                    // and similar string-literal lookups in non-allowlisted classes.
+                    if (!allowlisted) {
+                        String literal = reader.readUTF8(offset, buf);
+                        if (literal != null && literal.indexOf('.') > 0) {
+                            String slash = literal.replace('.', '/');
+                            String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(slash);
+                            if (unhookedAsync != null) {
+                                recordUnhookedAsyncDispatcher(unhookedAsync, className);
+                            }
+                        }
+                    }
+                } else if ((tag == 10 || tag == 11) && !allowlisted) {
+                    String owner = reader.readClass(offset, buf);
+                    Set<String> methods = checkDispatchPrimitives
+                            ? DISPATCH_PRIMITIVE_METHODS.get(owner)
+                            : JDK_ASYNC_HTTP_METHODS.get(owner);
+                    if (methods != null) {
+                        int ntOffset = reader.getItem(reader.readUnsignedShort(offset + 2));
+                        if (ntOffset > 0) {
+                            String mname = reader.readUTF8(ntOffset, buf);
+                            if (methods.contains(mname)) {
+                                recordUnhookedAsyncDispatcher(owner.replace('/', '.') + "." + mname, className);
+                            }
                         }
                     }
                 }
@@ -1218,7 +1667,8 @@ final class ServerEntries implements ClassFileTransformer {
         if (owner == null || mname == null) {
             return false;
         }
-        if ("org/springframework/kafka/core/KafkaTemplate".equals(owner)) {
+        if ("org/springframework/kafka/core/KafkaTemplate".equals(owner)
+                || "org/springframework/kafka/core/KafkaOperations".equals(owner)) {
             return "send".equals(mname) || "sendDefault".equals(mname);
         }
         if ("org/apache/kafka/clients/producer/KafkaProducer".equals(owner)
@@ -1226,12 +1676,21 @@ final class ServerEntries implements ClassFileTransformer {
             return "send".equals(mname);
         }
         if ("org/springframework/amqp/rabbit/core/RabbitTemplate".equals(owner)
+                || "org/springframework/amqp/rabbit/core/RabbitOperations".equals(owner)
                 || "org/springframework/amqp/core/AmqpTemplate".equals(owner)) {
             return "send".equals(mname) || "convertAndSend".equals(mname) || "convertSendAndReceive".equals(mname);
         }
         if ("org/springframework/jms/core/JmsTemplate".equals(owner)
-                || "org/springframework/jms/core/JmsOperations".equals(owner)) {
-            return "send".equals(mname) || "convertAndSend".equals(mname) || "sendAndReceive".equals(mname);
+                || "org/springframework/jms/core/JmsOperations".equals(owner)
+                || "org/springframework/jms/core/JmsMessagingTemplate".equals(owner)) {
+            return "send".equals(mname) || "convertAndSend".equals(mname)
+                    || "sendAndReceive".equals(mname) || "convertSendAndReceive".equals(mname);
+        }
+        if ("org/springframework/cloud/stream/function/StreamBridge".equals(owner)) {
+            return "send".equals(mname);
+        }
+        if ("reactor/kafka/sender/KafkaSender".equals(owner)) {
+            return "send".equals(mname) || "createOutbound".equals(mname);
         }
         return false;
     }
@@ -1280,6 +1739,7 @@ final class ServerEntries implements ClassFileTransformer {
 
     private static boolean isHookedSpringMethodRefOwner(String owner) {
         return "org/springframework/core/task/SimpleAsyncTaskExecutor".equals(owner)
+                || "org/springframework/scheduling/concurrent/SimpleAsyncTaskScheduler".equals(owner)
                 || "org/springframework/scheduling/concurrent/ThreadPoolTaskExecutor".equals(owner)
                 || "org/springframework/scheduling/concurrent/ThreadPoolTaskScheduler".equals(owner)
                 || "org/springframework/scheduling/concurrent/ConcurrentTaskExecutor".equals(owner);
@@ -1719,9 +2179,20 @@ final class ServerEntries implements ClassFileTransformer {
                         } else if (isMessagingProducerCall(owner, mname)) {
                             emitUntrackedFlag("untracked-async:messaging-produce");
                         } else if ((opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
-                                && "java/util/Queue".equals(owner)
-                                && ("offer".equals(mname) || "add".equals(mname))
-                                && "(Ljava/lang/Object;)Z".equals(desc)) {
+                                && (("java/util/Queue".equals(owner)
+                                                && ("offer".equals(mname) || "add".equals(mname))
+                                                && "(Ljava/lang/Object;)Z".equals(desc))
+                                        || ("java/util/Deque".equals(owner)
+                                                && ((("offer".equals(mname) || "add".equals(mname)
+                                                                || "offerFirst".equals(mname)
+                                                                || "offerLast".equals(mname))
+                                                        && "(Ljava/lang/Object;)Z".equals(desc))
+                                                        || (("addFirst".equals(mname) || "addLast".equals(mname)
+                                                                || "push".equals(mname))
+                                                                && "(Ljava/lang/Object;)V".equals(desc))))
+                                        || ("java/util/Collection".equals(owner)
+                                                && "add".equals(mname)
+                                                && "(Ljava/lang/Object;)Z".equals(desc)))) {
                             changed[0] = true;
                             ensureExtraStack(2);
                             super.visitInsn(Opcodes.DUP2);
@@ -1826,6 +2297,17 @@ final class ServerEntries implements ClassFileTransformer {
         Wrapper wrapper = new Wrapper(writer, methods, job, async);
         reader.accept(wrapper, 0);
         return wrapper.wrapped.isEmpty() ? null : writer.toByteArray();
+    }
+
+    static final class LatchEntry {
+
+        final String label;
+        final Set<String> methods;
+
+        private LatchEntry(String label, Set<String> methods) {
+            this.label = label;
+            this.methods = Collections.unmodifiableSet(methods);
+        }
     }
 
     private static final class Entry {

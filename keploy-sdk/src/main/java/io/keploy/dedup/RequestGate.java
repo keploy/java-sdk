@@ -3102,10 +3102,40 @@ public final class RequestGate {
     }
 
     public static void noteIfBlockingQueue(Object receiver) {
-        if (!(receiver instanceof java.util.concurrent.BlockingQueue)) {
+        if (!(receiver instanceof java.util.concurrent.BlockingQueue)
+                && !(receiver instanceof java.util.concurrent.ConcurrentLinkedQueue)
+                && !(receiver instanceof java.util.concurrent.ConcurrentLinkedDeque)) {
             return;
         }
         noteUntrackedAsync("untracked-async:blocking-queue", 0L);
+    }
+
+    /**
+     * Called from runtime-latch entry hooks on framework/library async methods
+     * (such as Caffeine {@code CacheLoader.asyncReload}/{@code LocalAsyncCache}
+     * and Spring {@code ConcurrentMapCache.retrieve}): permanently latches
+     * {@code asyncExecutors=false} on first invocation and contaminates any
+     * currently active request window or job run.
+     *
+     * @param reason human-readable label for the async dispatch entry
+     */
+    public static void noteRuntimeUntrackedDispatch(String reason) {
+        String label = (reason == null || reason.isEmpty()) ? "library-async" : reason;
+        if (!armed) {
+            noteUnarmedHandOffIfInFlight();
+            KeployDedupAgent.noteObservedUntrackedAsyncLibrary(label, false);
+            return;
+        }
+        KeployDedupAgent.noteObservedUntrackedAsyncLibrary(label, true);
+        if (INSIDE.get() != null || JobGate.runningAttribution() != null || JobGate.expiredRunningName() != null) {
+            noteUntrackedAsync("untracked-async:" + label, 0L);
+        }
+    }
+
+    private static void noteBackgroundWorkerOutsideWindow(String reason, boolean isArmed) {
+        String label = (reason == null || reason.isEmpty()) ? "background-worker" : reason;
+        KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                "app background worker/scheduler started outside request window (" + label + ")", isArmed);
     }
 
     private static void recordUntrackedMethodRef(String reason, String target) {
@@ -3350,6 +3380,7 @@ public final class RequestGate {
         }
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:thread-start", false);
             return;
         }
         noteTrackedUntrackedAsync("untracked-async:thread-start", target, false);
@@ -3379,6 +3410,7 @@ public final class RequestGate {
         if (!armed) {
             if (thread instanceof Thread) {
                 noteUnarmedHandOffIfInFlight();
+                noteBackgroundWorkerOutsideWindow(reason != null ? reason : "untracked-async:thread-start", false);
             }
             return;
         }
@@ -3412,6 +3444,7 @@ public final class RequestGate {
         if (!armed) {
             if (future instanceof Future) {
                 noteUnarmedHandOffIfInFlight();
+                noteBackgroundWorkerOutsideWindow(reason != null ? reason : "untracked-async:schedule", false);
             }
             return;
         }
@@ -3487,7 +3520,14 @@ public final class RequestGate {
                         "untracked async handle queue overflow (>64 live handles)", true);
                 noteExternalUntrackedTail(jobReason, maxLingeringNanos);
             }
+            return;
         }
+        // Rewritten app code started a Thread, ScheduledFuture, or TimerTask
+        // completely outside any request window or tracked job (e.g. a long-lived
+        // background worker or outbox poller). Latch asyncExecutors=false so
+        // later requests handing work to it through shared state cannot be
+        // falsely treated as synchronous.
+        noteBackgroundWorkerOutsideWindow(effectiveReason, true);
     }
 
     private static boolean addHandleToQueue(ConcurrentLinkedQueue<UntrackedHandle> queue, UntrackedHandle handle,
@@ -3561,6 +3601,7 @@ public final class RequestGate {
             long delay, TimeUnit unit) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:schedule", false);
             return executor.schedule(command, delay, unit);
         }
         ScheduledFuture<?> sf = executor.schedule(wrapScheduledContext(executor, command), delay, unit);
@@ -3582,6 +3623,7 @@ public final class RequestGate {
             long delay, TimeUnit unit) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:schedule", false);
             return executor.schedule(callable, delay, unit);
         }
         ScheduledFuture<V> sf = executor.schedule(wrapScheduledContext(executor, callable), delay, unit);
@@ -3604,6 +3646,7 @@ public final class RequestGate {
             long initialDelay, long period, TimeUnit unit) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:schedule", false);
             return executor.scheduleAtFixedRate(command, initialDelay, period, unit);
         }
         ScheduledFuture<?> sf = executor.scheduleAtFixedRate(
@@ -3627,6 +3670,7 @@ public final class RequestGate {
             long initialDelay, long delay, TimeUnit unit) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:schedule", false);
             return executor.scheduleWithFixedDelay(command, initialDelay, delay, unit);
         }
         ScheduledFuture<?> sf = executor.scheduleWithFixedDelay(
@@ -3653,6 +3697,7 @@ public final class RequestGate {
     public static void timerSchedule(Timer timer, TimerTask task, long delay) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.schedule(task, delay);
             return;
         }
@@ -3670,6 +3715,7 @@ public final class RequestGate {
     public static void timerSchedule(Timer timer, TimerTask task, Date time) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.schedule(task, time);
             return;
         }
@@ -3689,6 +3735,7 @@ public final class RequestGate {
     public static void timerSchedule(Timer timer, TimerTask task, long delay, long period) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.schedule(task, delay, period);
             return;
         }
@@ -3707,6 +3754,7 @@ public final class RequestGate {
     public static void timerSchedule(Timer timer, TimerTask task, Date firstTime, long period) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.schedule(task, firstTime, period);
             return;
         }
@@ -3726,6 +3774,7 @@ public final class RequestGate {
     public static void timerScheduleAtFixedRate(Timer timer, TimerTask task, long delay, long period) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.scheduleAtFixedRate(task, delay, period);
             return;
         }
@@ -3744,6 +3793,7 @@ public final class RequestGate {
     public static void timerScheduleAtFixedRate(Timer timer, TimerTask task, Date firstTime, long period) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:timer", false);
             timer.scheduleAtFixedRate(task, firstTime, period);
             return;
         }
@@ -3797,6 +3847,7 @@ public final class RequestGate {
     public static void startThread(Thread thread) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
+            noteBackgroundWorkerOutsideWindow("untracked-async:thread-start", false);
             thread.start();
             return;
         }

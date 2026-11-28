@@ -412,16 +412,26 @@ public class ForkedAsyncAndHonestyTest {
         }
     }
 
-    @Test(timeout = 300000)
+    @Test(timeout = 420000)
     public void forkedLibraryAndJdkHandOffsNeverSilentlyDropAsyncLines() throws Exception {
         String spec = System.getProperty("java.specification.version");
         int major = spec.startsWith("1.") ? 8 : Integer.parseInt(spec);
+        // Each tuple: {name, minJdk, expectBaselineHonest}
+        // Cases whose startup creates an unhooked library/background worker or
+        // scheduled outbox poller fail closed at startup (expectBaselineHonest=false);
+        // in-window-only hand-offs keep asyncExecutors=true on baseline /clean.
         String[][] cases = {
-            {"kafka-produce", "8"},
-            {"spring-listenable-callback", "8"},
-            {"submission-publisher", "9"},
-            {"spring-mc-override", "8"},
-            {"queue-worker", "8"},
+            {"kafka-produce", "8", "false"},
+            {"kafka-direct-produce", "8", "true"},
+            {"spring-listenable-callback", "8", "true"},
+            {"submission-publisher", "9", "false"},
+            {"spring-mc-override", "8", "true"},
+            {"queue-worker", "8", "false"},
+            {"clq-worker", "8", "false"},
+            {"deque-worker", "8", "false"},
+            {"collection-add", "8", "false"},
+            {"lib-callback", "8", "true"},
+            {"scheduled-outbox", "8", "false"},
         };
         for (boolean prefixMode : new boolean[] {true, false}) {
             for (String[] tc : cases) {
@@ -429,11 +439,20 @@ public class ForkedAsyncAndHonestyTest {
                 if (major < Integer.parseInt(tc[1])) {
                     continue;
                 }
+                boolean expectBaseTrue = Boolean.parseBoolean(tc[2]);
                 try (ForkedApp app = startFork("handoff-" + name, "80", prefixMode, false, null, null)) {
                     app.runHttpTest("ho/" + name + "-warm", "/clean");
-                    if (!"submission-publisher".equals(name)) {
+                    // In index mode, DirectKafkaProducerCaller is defined dynamically
+                    // outside KEPLOY_JAVA_CLASS_DIRS, so the read-only scan latches
+                    // asyncExecutors=false immediately at class load (fail closed).
+                    boolean dynamicNonIndexedProducer = "kafka-direct-produce".equals(name) && !prefixMode;
+                    if (expectBaseTrue && !dynamicNonIndexedProducer) {
                         assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
                                 + " baseline /clean must keep asyncExecutors=true: " + app.lastHello,
+                                parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                    }
+                    if (dynamicNonIndexedProducer) {
+                        assertFalse("mode=index case=kafka-direct-produce must fail closed on non-indexed producer load: " + app.lastHello,
                                 parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
                     }
                     String cov1 = app.runHttpTest("ho/" + name + "-w1", "/handoff-" + name + "?ms=400");
@@ -441,21 +460,25 @@ public class ForkedAsyncAndHonestyTest {
                     String cov2 = app.runHttpTest("ho/" + name + "-next", "/clean");
                     Thread.sleep(700);
                     String cov3 = app.runHttpTest("ho/" + name + "-after700", "/clean");
-                    JsonObject helloEnd = parseHello(app.lastHello);
                     boolean flagged1 = cov1.contains("\"windowCut\":true")
                             || cov1.contains("\"contaminated\"")
                             || cov1.contains("\"unverified\"");
-                    boolean asyncOff = !helloAfter1.get("asyncExecutors").getAsBoolean()
-                            || !helloEnd.get("asyncExecutors").getAsBoolean();
+                    boolean asyncOffAtW1 = !helloAfter1.get("asyncExecutors").getAsBoolean();
+                    // Strict W1 honesty: W1's own COV must be flagged OR under a non-honest
+                    // HELLO BEFORE W1's COV (never relying on a late latch at helloEnd).
                     assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
-                            + " must NEVER be silent-missing: W1=" + cov1 + " helloAfter1=" + helloAfter1
-                            + " helloEnd=" + helloEnd,
-                            flagged1 || asyncOff);
+                            + " must be W1-flagged or latched BEFORE W1 COV: W1=" + cov1
+                            + " helloAfter1=" + helloAfter1,
+                            flagged1 || asyncOffAtW1);
+                    if ("kafka-direct-produce".equals(name) && prefixMode) {
+                        assertTrue("kafka-direct-produce must flag W1 COV at the call site: " + cov1,
+                                cov1.contains("untracked-async:messaging-produce"));
+                    }
                     for (String later : new String[] {cov2, cov3}) {
                         boolean laterFlagged = later.contains("\"windowCut\":true")
                                 || later.contains("\"contaminated\"")
                                 || later.contains("\"unverified\"");
-                        if (!asyncOff && later.contains("\"" + ASYNC_TAIL + "\"")) {
+                        if (!asyncOffAtW1 && later.contains("\"" + ASYNC_TAIL + "\"")) {
                             assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
                                     + " clean later window must not silently hold async lines: " + later,
                                     laterFlagged);
