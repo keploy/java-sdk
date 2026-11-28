@@ -355,6 +355,21 @@
                                     </artifactItems>
                                 </configuration>
                             </execution>
+                            <execution>
+                                <id>copy-tomcat10</id>
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>copy</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>${skipTests}</skip>
+                                    <outputDirectory>${project.build.directory}/tomcat10</outputDirectory>
+                                    <artifactItems>
+                                        <artifactItem><groupId>org.apache.tomcat</groupId><artifactId>tomcat-annotations-api</artifactId><version>10.1.34</version></artifactItem>
+                                        <artifactItem><groupId>org.apache.tomcat.embed</groupId><artifactId>tomcat-embed-core</artifactId><version>10.1.34</version></artifactItem>
+                                    </artifactItems>
+                                </configuration>
+                            </execution>
                         </executions>
                     </plugin>
                 </plugins>

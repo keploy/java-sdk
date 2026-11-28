@@ -36,6 +36,7 @@ public class JobGateTest {
 
     @Before
     public void setUp() {
+        JobGate.arm();
         JobGate.close();
     }
 

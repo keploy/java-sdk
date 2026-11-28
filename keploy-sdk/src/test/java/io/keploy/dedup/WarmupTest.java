@@ -125,6 +125,9 @@ public class WarmupTest {
     public void tearDown() throws Exception {
         slow.countDown();
         KeployDedupAgent.stop();
+        KeployDedupAgent.transformerAdded = false;
+        KeployDedupAgent.executorCallSitesEnabled = false;
+        ServerEntries.setHookStatusForTests(false, false, false);
         appEnds.countDown();
         if (appMain != null) {
             appMain.join(5000);
@@ -155,7 +158,7 @@ public class WarmupTest {
         System.setProperty("keploy.java.class.dirs", classes.getPath());
 
         assertTrue(KeployDedupAgent.start());
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+        assertTaken(send("START test-set-0/test-1"));
 
         assertLogged("INFO Keploy dedup: warmed up application classes (initialized=2, skipped=0) in ");
         assertNotLogged("the warmup of the app's classes was still");
@@ -181,7 +184,7 @@ public class WarmupTest {
 
         assertTrue(KeployDedupAgent.start());
         long began = System.nanoTime();
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+        assertTaken(send("START test-set-0/test-1"));
         long tookMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
 
         assertTrue("the START was answered after " + tookMillis + " ms",
@@ -203,7 +206,7 @@ public class WarmupTest {
         // bounded or not, lasts until Slow's 20 s hold ends.
         KeployDedupAgent.warmupWaitMillis = 60000;
         began = System.nanoTime();
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-2"));
+        assertTaken(send("START test-set-0/test-2"));
         tookMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
         assertTrue("the second START was answered after " + tookMillis + " ms", tookMillis < 10000);
         assertEquals(1, countLogged("WARNING Keploy dedup: the warmup of the app's classes was still "));
@@ -237,7 +240,7 @@ public class WarmupTest {
 
             KeployDedupAgent.premain(null, instrumentation(main));
             assertTrue(KeployDedupAgent.isStarted());
-            assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+            assertTaken(send("START test-set-0/test-1"));
 
             assertLogged("INFO Keploy dedup: warmed up application classes (initialized=2, skipped=0) in ");
             assertSame(app, INITIALIZED.get(MAIN));
@@ -417,11 +420,16 @@ public class WarmupTest {
         };
 
         assertTrue(KeployDedupAgent.start());
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-1"));
+        assertTaken(send("START test-set-0/test-1"));
         assertLogged("WARNING Keploy dedup: no warmup, as its thread could not start");
         assertTrue(INITIALIZED.isEmpty());
         // The control server still answers.
-        assertEquals("ACK proto=2\n", send("START test-set-0/test-2"));
+        assertTaken(send("START test-set-0/test-2"));
+    }
+
+    private static void assertTaken(String reply) {
+        assertTrue("expected ACK proto=3 caps=..., got: " + reply,
+                reply != null && reply.startsWith("ACK proto=3 caps=") && reply.endsWith("\n"));
     }
 
     @Test

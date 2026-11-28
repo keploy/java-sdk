@@ -68,8 +68,22 @@ public final class AsyncWork {
         SCHEDULER.setDaemon(true);
         SCHEDULER.setThreadNamePrefix("app-poller-");
         SCHEDULER.initialize();
-        SCHEDULER.scheduleWithFixedDelay(() -> poll(FIRE), 10);
-        startSimplePoller();
+    }
+
+    private static final class ScheduledPollerHolder {
+        static final boolean STARTED;
+        static {
+            SCHEDULER.scheduleWithFixedDelay(() -> poll(FIRE), 10);
+            STARTED = true;
+        }
+    }
+
+    private static final class SimplePollerHolder {
+        static final boolean STARTED;
+        static {
+            startSimplePoller();
+            STARTED = true;
+        }
     }
 
     // On Spring 6.1+, a SimpleAsyncTaskScheduler's poller, whose trigger
@@ -122,11 +136,21 @@ public final class AsyncWork {
             case "throttled":
                 THROTTLED.execute(() -> sleepThenTail(millis));
                 break;
+            case "scheduler":
+                SCHEDULER.submit((Callable<Object>) () -> {
+                    sleepThenTail(millis);
+                    return null;
+                });
+                break;
             case "scheduled":
-                fire(FIRE, millis);
+                if (ScheduledPollerHolder.STARTED) {
+                    fire(FIRE, millis);
+                }
                 break;
             case "simplescheduled":
-                fire(SIMPLE_FIRE, millis);
+                if (SimplePollerHolder.STARTED) {
+                    fire(SIMPLE_FIRE, millis);
+                }
                 break;
             case "priority":
                 String result = PriorityPool.handOff();

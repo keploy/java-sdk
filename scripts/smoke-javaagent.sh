@@ -185,8 +185,9 @@ public final class SmokeHarness {
         // Keploy fires its first test as soon as the app answers a health
         // check, so the agent has to be listening before main runs. This START
         // is main's first act and nothing waits for the control socket: an
-        // agent that binds it any later fails here.
-        command("START test-set-0/" + mode);
+        // agent that binds it any later fails here. Before any serverless END
+        // runs, windowCut is still true.
+        command("START test-set-0/" + mode, true);
 
         delete(DATA_SOCKET);
 
@@ -218,7 +219,9 @@ public final class SmokeHarness {
         if (Work.exercise(1) != 4) {
             throw new IllegalStateException("unexpected application result");
         }
-        command("END test-set-0/" + mode);
+        // Serverless END records probes with enteredCount == 0, latching
+        // windowCut=false (and asyncExecutors=false) for the rest of the JVM.
+        command("END test-set-0/" + mode, false);
 
         String json = next(records, mode);
         String report = null;
@@ -230,10 +233,15 @@ public final class SmokeHarness {
         // e.g. "smoke/Work" — not a source file like "Work.java". JaCoCo's id
         // of each class the app ran is the id of the bytes the index read,
         // so the record names no class in classMismatch: one named here
-        // would lose that class's coverage in Keploy.
+        // would lose that class's coverage in Keploy. Serverless runs also
+        // carry exact trailing "unverified":["no-server-entry"] with no
+        // contaminated or windowCut flags.
         if (!json.contains("\"id\":\"test-set-0/" + mode + "\"")
                 || !json.contains("smoke/Work")
-                || json.contains("\"classMismatch\"")) {
+                || json.contains("\"classMismatch\"")
+                || json.contains("\"contaminated\"")
+                || json.contains("\"windowCut\"")
+                || !json.endsWith("},\"unverified\":[\"no-server-entry\"]}")) {
             throw new IllegalStateException("unexpected coverage payload for " + mode + ": " + json);
         }
         if (report == null
@@ -303,16 +311,18 @@ public final class SmokeHarness {
         URLClassLoader loader = new URLClassLoader(new URL[] {new File(dir).toURI().toURL()}, null);
         try {
             Class<?> other = Class.forName("smoke.Work", false, loader);
-            command("START " + id);
+            command("START " + id, false);
             Object result = other.getMethod("exercise", int.class).invoke(null, 1);
-            command("END " + id);
+            command("END " + id, false);
             if (!Integer.valueOf(3).equals(result)) {
                 throw new IllegalStateException("the copy in " + dir + " did not run in " + mode + ": " + result);
             }
             String json = next(records, mode);
             if (!json.contains("\"id\":\"" + id + "\"")
                     || !json.contains("\"smoke/Work\":[")
-                    || !json.contains(",\"classMismatch\":[\"smoke/Work\"]}")) {
+                    || json.contains("\"contaminated\"")
+                    || json.contains("\"windowCut\"")
+                    || !json.endsWith(",\"classMismatch\":[\"smoke/Work\"],\"unverified\":[\"no-server-entry\"]}")) {
                 throw new IllegalStateException("the record of a test that ran another copy of smoke/Work does"
                         + " not name it, alone, in classMismatch in " + mode + ": " + json);
             }
@@ -375,17 +385,22 @@ public final class SmokeHarness {
         }
     }
 
-    private static void command(String command) throws Exception {
+    private static void command(String command, boolean wantWindowCut) throws Exception {
         try (AFUNIXSocket socket = AFUNIXSocket.newInstance()) {
             socket.connect(AFUNIXSocketAddress.of(CONTROL_SOCKET), 3000);
             OutputStream output = socket.getOutputStream();
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
-            // The whole answer: one line saying the command was taken, then
-            // the close.
+            // The whole answer: one line saying the command was taken (exact
+            // proto=3 caps grammar with pinned windowCut state), then the close.
             String ack = readAll(socket.getInputStream());
-            if (!"ACK proto=2\n".equals(ack)) {
-                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            String pattern = "^ACK proto=3 caps=windowCut=" + wantWindowCut
+                    + ",contaminated=true,classMismatch=true,background=(true|false),ackId=true,asyncExecutors="
+                    + (wantWindowCut ? "(true|false)" : "false")
+                    + ",listenerContamination=(true|false)\\n$";
+            if (!ack.matches(pattern)) {
+                throw new IllegalStateException("unexpected ACK for " + command + " (wantWindowCut="
+                        + wantWindowCut + "): " + ack);
             }
         }
     }
@@ -608,13 +623,60 @@ done
 tomcat_core="${work_dir}/tomcat-libs/tomcat-embed-core-${tomcat_version}.jar"
 tomcat_libs="$(find "${work_dir}/tomcat-libs" -name '*.jar' | sort | paste -sd: -)"
 
-mkdir -p "${work_dir}/tomcat-src/smoke" "${work_dir}/tomcat-classes"
-cat > "${work_dir}/tomcat-src/smoke/TomcatHarness.java" <<'JAVA'
-package smoke;
+mkdir -p "${work_dir}/tomcat-src/smoke/app" "${work_dir}/tomcat-classes" "${work_dir}/driver-src/smoke/driver" "${work_dir}/driver-classes"
+# Out-of-process Unix-domain data-socket receiver (mirrors Keploy's collector)
+# so TomcatHarness runs as a plain Tomcat app with no harness-owned Thread or
+# BlockingQueue inside KEPLOY_JAVA_CLASS_DIRS and pins asyncExecutors=true.
+cat > "${work_dir}/driver-src/smoke/driver/DataReceiver.java" <<'JAVA'
+package smoke.driver;
+
+import org.newsclub.net.unix.AFUNIXServerSocket;
+import org.newsclub.net.unix.AFUNIXSocket;
+import org.newsclub.net.unix.AFUNIXSocketAddress;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+public final class DataReceiver {
+    public static void main(String[] args) throws Exception {
+        File sock = new File(args[0]);
+        File outFile = new File(args[1]);
+        if (sock.exists() && !sock.delete()) {
+            throw new IllegalStateException("failed to delete " + sock);
+        }
+        try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
+            server.bind(AFUNIXSocketAddress.of(sock), 8);
+            for (int i = 0; i < 2; i++) {
+                try (AFUNIXSocket conn = server.accept();
+                     InputStream in = conn.getInputStream()) {
+                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                    byte[] tmp = new byte[1024];
+                    int n;
+                    while ((n = in.read(tmp)) != -1) {
+                        buf.write(tmp, 0, n);
+                    }
+                    String line = new String(buf.toByteArray(), StandardCharsets.UTF_8)
+                            .replace("\r", "").replace("\n", "") + "\n";
+                    try (FileOutputStream fos = new FileOutputStream(outFile, true)) {
+                        fos.write(line.getBytes(StandardCharsets.UTF_8));
+                    }
+                }
+            }
+        }
+    }
+}
+JAVA
+javac -cp "${agent_jar}" -d "${work_dir}/driver-classes" \
+  "${work_dir}/driver-src/smoke/driver/DataReceiver.java"
+
+cat > "${work_dir}/tomcat-src/smoke/app/TomcatHarness.java" <<'JAVA'
+package smoke.app;
 
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
-import org.newsclub.net.unix.AFUNIXServerSocket;
 import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 
@@ -626,8 +688,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.nio.file.Files;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -635,7 +697,6 @@ import javax.servlet.http.HttpServletResponse;
 
 public final class TomcatHarness {
     private static final File CONTROL_SOCKET = new File("/tmp/coverage_control.sock");
-    private static final File DATA_SOCKET = new File("/tmp/coverage_data.sock");
     private static final String ADAPTER = "org/apache/catalina/connector/CoyoteAdapter";
 
     // Hello answers, then runs Tail once the END waits for the request
@@ -684,14 +745,14 @@ public final class TomcatHarness {
     // leave the JVM up, and the case would hang instead of failing.
     public static void main(String[] args) {
         try {
-            run(args[0], new File(args[1]));
+            run(args[0], new File(args[1]), new File(args[2]));
         } catch (Throwable t) {
             t.printStackTrace();
             System.exit(1);
         }
     }
 
-    private static void run(String mode, File base) throws Exception {
+    private static void run(String mode, File base, File recordsFile) throws Exception {
         if (!base.mkdirs()) {
             throw new IllegalStateException("failed to create " + base);
         }
@@ -705,37 +766,11 @@ public final class TomcatHarness {
         tomcat.start();
         int port = tomcat.getConnector().getLocalPort();
 
-        if (DATA_SOCKET.exists() && !DATA_SOCKET.delete()) {
-            throw new IllegalStateException("failed to delete " + DATA_SOCKET);
-        }
-        final BlockingQueue<String> records = new LinkedBlockingQueue<String>();
-        Thread receiver = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try (AFUNIXServerSocket server = AFUNIXServerSocket.newInstance()) {
-                    server.bind(AFUNIXSocketAddress.of(DATA_SOCKET), 8);
-                    for (;;) {
-                        try (AFUNIXSocket socket = server.accept()) {
-                            records.add(readAll(socket.getInputStream()));
-                        }
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }, "coverage-data-receiver");
-        receiver.setDaemon(true);
-        receiver.start();
-        long deadline = System.currentTimeMillis() + 10000L;
-        while (!DATA_SOCKET.exists() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(50L);
-        }
-
         String id = "test-set-0/" + mode;
         command("START " + id);
         String body = get(port);
         command("END " + id);
-        String report = next(records, mode);
+        String report = next(recordsFile, 0, mode);
         // The JaCoCo measuring is the one attached after keploy-sdk.jar (the
         // SDK started none of its own), and the index read Tomcat's jar.
         if (!report.startsWith("{\"kind\":\"index\",")
@@ -745,15 +780,19 @@ public final class TomcatHarness {
             throw new IllegalStateException("the first record on the data socket was no INDEX report with source"
                     + " override, jacoco attached and Tomcat's jar among its roots in " + mode + ": " + report);
         }
-        String json = next(records, mode);
+        String json = next(recordsFile, 1, mode);
         if (!"hello".equals(body)
                 || !json.contains("\"id\":\"" + id + "\"")
                 || !json.contains("\"" + ADAPTER + "\":[")
-                || !json.contains("\"smoke/TomcatHarness$Tail\":[")
-                || json.contains("\"classMismatch\"")) {
+                || !json.contains("\"smoke/app/TomcatHarness$Tail\":[")
+                || json.contains("\"classMismatch\"")
+                || json.contains("\"unverified\"")
+                || json.contains("\"contaminated\"")
+                || json.contains("\"windowCut\"")) {
             throw new IllegalStateException("the record of a request to Tomcat, with JaCoCo attached after"
                     + " keploy-sdk.jar, does not measure " + ADAPTER + " and the servlet's code after the"
-                    + " response with no class in classMismatch in " + mode + " (body " + body + "): " + json);
+                    + " response with no class in classMismatch or unverified/contaminated/windowCut in "
+                    + mode + " (body " + body + "): " + json);
         }
         System.out.println(mode + ": " + json);
         tomcat.stop();
@@ -781,18 +820,28 @@ public final class TomcatHarness {
             output.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             output.flush();
             String ack = readAll(socket.getInputStream());
-            if (!"ACK proto=2\n".equals(ack)) {
-                throw new IllegalStateException("not taken: " + command + ": " + ack);
+            // Plain Tomcat app with out-of-process collector must retain asyncExecutors=true.
+            String pattern = "^ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
+                    + "background=(true|false),ackId=true,asyncExecutors=true,"
+                    + "listenerContamination=(true|false)\\n$";
+            if (!ack.matches(pattern)) {
+                throw new IllegalStateException("unexpected ACK for " + command + ": " + ack);
             }
         }
     }
 
-    private static String next(BlockingQueue<String> records, String mode) throws InterruptedException {
-        String record = records.poll(10, TimeUnit.SECONDS);
-        if (record == null) {
-            throw new IllegalStateException("timed out waiting for a record on the data socket in " + mode);
+    private static String next(File recordsFile, int index, String mode) throws Exception {
+        long deadline = System.currentTimeMillis() + 10000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (recordsFile.exists()) {
+                List<String> lines = Files.readAllLines(recordsFile.toPath(), StandardCharsets.UTF_8);
+                if (lines.size() > index && !lines.get(index).isEmpty()) {
+                    return lines.get(index);
+                }
+            }
+            Thread.sleep(50L);
         }
-        return record;
+        throw new IllegalStateException("timed out waiting for record #" + index + " on the data socket in " + mode);
     }
 
     private static String readAll(InputStream input) throws IOException {
@@ -807,18 +856,30 @@ public final class TomcatHarness {
 }
 JAVA
 javac -cp "${tomcat_libs}:${agent_jar}" -d "${work_dir}/tomcat-classes" \
-  "${work_dir}/tomcat-src/smoke/TomcatHarness.java"
+  "${work_dir}/tomcat-src/smoke/app/TomcatHarness.java"
 
 tomcat_log="${work_dir}/tomcat-jacoco-after.log"
+tomcat_records="${work_dir}/tomcat-records.jsonl"
+rm -f /tmp/coverage_data.sock "${tomcat_records}"
+java -cp "${work_dir}/driver-classes:${agent_jar}" \
+  smoke.driver.DataReceiver /tmp/coverage_data.sock "${tomcat_records}" 2>"${work_dir}/tomcat-receiver.log" &
+tomcat_receiver_pid=$!
+for _ in $(seq 1 100); do
+  [[ -S /tmp/coverage_data.sock ]] && break
+  sleep 0.1
+done
 tomcat_rc=0
+echo "Running Java agent smoke: tomcat-jacoco-after"
+rm -f /tmp/coverage_control.sock "/tmp/keploy-sdk-smoke-tomcat-jacoco-after.exec"
 KEPLOY_JAVA_DEDUP_DIAGNOSTICS=1 KEPLOY_JAVA_END_WAIT_MS=2000 \
 KEPLOY_JAVA_CLASS_DIRS="${work_dir}/tomcat-classes:${tomcat_core}" \
-run_smoke "tomcat-jacoco-after" \
   timeout -k 10 180 java \
     -javaagent:"${agent_jar}" \
-    -javaagent:"${jacoco_jar}=includes=smoke.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
+    -javaagent:"${jacoco_jar}=includes=smoke.app.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
     -cp "${work_dir}/tomcat-classes:${tomcat_libs}:${agent_jar}" \
-    smoke.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" 2>"${tomcat_log}" || tomcat_rc=$?
+    smoke.app.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" "${tomcat_records}" 2>"${tomcat_log}" || tomcat_rc=$?
+kill "${tomcat_receiver_pid}" 2>/dev/null || true
+wait "${tomcat_receiver_pid}" 2>/dev/null || true
 if [[ "${tomcat_rc}" -eq 124 || "${tomcat_rc}" -eq 137 ]]; then
   cat "${tomcat_log}" >&2
   echo "tomcat-jacoco-after: the Tomcat harness was killed or did not end within 180 s (exit ${tomcat_rc}; 137 can also be the OOM killer)" >&2

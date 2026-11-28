@@ -297,6 +297,9 @@ public class JobTailTest {
                 sdk.setSoTimeout(60000);
                 sdkOut = sdk.getOutputStream();
                 sdkIn = new BufferedReader(new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                String hello = sdkIn.readLine();
+                assertTrue("expected HELLO frame on connect, got " + hello,
+                        hello != null && hello.startsWith("HELLO "));
                 commands = new Socket(InetAddress.getLoopbackAddress(), port);
                 commands.setSoTimeout(60000);
                 commandOut = commands.getOutputStream();
@@ -311,21 +314,30 @@ public class JobTailTest {
         // test runs one test that fires these jobs between its START and its
         // END, and returns its record.
         String test(String id, String... jobs) throws IOException {
-            send(sdkOut, "START test-set-0/" + id);
-            assertEquals("ACK", sdkIn.readLine());
+            String fullId = "test-set-0/" + id;
+            send(sdkOut, "START " + fullId);
+            assertEquals("ACK", nextNonHello());
             for (String job : jobs) {
                 command(job);
             }
-            send(sdkOut, "END test-set-0/" + id);
-            String cov = sdkIn.readLine();
+            send(sdkOut, "END " + fullId);
+            String cov = nextNonHello();
             assertTrue(cov, cov != null && cov.startsWith("COV "));
             String line;
-            while (!(line = sdkIn.readLine()).equals("ACK")) {
+            while (!(line = nextNonHello()).equals("ACK")) {
                 assertTrue(line, line.startsWith("CLASSES ") || line.startsWith("MANIFEST "));
             }
             cov = cov.substring("COV ".length());
-            assertTrue(cov, cov.contains("\"id\":\"test-set-0/" + id + "\""));
+            assertTrue(cov, cov.contains("\"id\":\"" + fullId + "\""));
             return cov;
+        }
+
+        private String nextNonHello() throws IOException {
+            String line;
+            while ((line = sdkIn.readLine()) != null && line.startsWith("HELLO ")) {
+                // Skip asynchronous HELLO capability refresh frames.
+            }
+            return line;
         }
 
         // command has JobApp fire a job, and returns once its run is over.

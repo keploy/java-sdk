@@ -296,7 +296,7 @@ public class ServerTailTest {
     // Spring, then one for each poller named: each hand-off's work lands in
     // its test, and no poller's is waited for.
     private void assertSpringHandOffs(Fork fork, String... pollers) throws Exception {
-        String[] counted = {"event", "pool", "execute", "listenable", "async", "completable", "throttled"};
+        String[] counted = {"event", "pool", "execute", "listenable", "async", "completable", "throttled", "scheduler"};
         for (String how : counted) {
             fork.queries.add("async=" + how + "&sleep=500");
         }
@@ -321,6 +321,7 @@ public class ServerTailTest {
         }
         for (String executor : new String[] {"org.springframework.core.task.SimpleAsyncTaskExecutor",
             "org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor",
+            "org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler",
             "org.springframework.aop.interceptor.AsyncExecutionAspectSupport"}) {
             assertTrue(result.log, result.log.contains("Keploy dedup counts Spring's async tasks (" + executor
                     + "): a test's END waits for the tasks its requests hand off to finish"));
@@ -481,6 +482,9 @@ public class ServerTailTest {
                 command.add(String.join(File.pathSeparator, modulePath));
                 command.add("--add-modules");
                 command.add("org.apache.tomcat.embed.core");
+                // Tomcat 9.0's JreCompat.disableCanonCaches reflects on java.io.FileSystem.useCanonCaches on JDK 11.
+                command.add("--add-opens");
+                command.add("java.base/java.io=org.apache.tomcat.embed.core");
             }
             command.add("-cp");
             command.add(String.join(File.pathSeparator, classPath));
@@ -516,13 +520,24 @@ public class ServerTailTest {
                     OutputStream out = sdk.getOutputStream();
                     BufferedReader in = new BufferedReader(
                             new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                    String hello = in.readLine();
+                    assertTrue("expected HELLO frame on connect, got " + hello,
+                            hello != null && hello.startsWith("HELLO "));
                     for (int test = 1; test <= tests; test++) {
-                        send(out, "START test-set-0/test-" + test);
-                        assertEquals("ACK", in.readLine());
+                        String fullId = "test-set-0/test-" + test;
+                        send(out, "START " + fullId);
+                        String startReply = in.readLine();
+                        while (startReply != null && startReply.startsWith("HELLO ")) {
+                            startReply = in.readLine();
+                        }
+                        assertEquals("ACK", startReply);
                         String query = fork.queries.isEmpty() ? "tail=" + tailMillis : fork.queries.get(test - 1);
                         assertEquals("hello", get(port, "/hello?" + query));
-                        send(out, "END test-set-0/test-" + test);
+                        send(out, "END " + fullId);
                         String cov = in.readLine();
+                        while (cov != null && cov.startsWith("HELLO ")) {
+                            cov = in.readLine();
+                        }
                         assertTrue(cov, cov != null && cov.startsWith("COV "));
                         result.covs.add(cov.substring("COV ".length()));
                         String line;

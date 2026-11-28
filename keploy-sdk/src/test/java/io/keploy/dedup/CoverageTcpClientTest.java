@@ -108,6 +108,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             // Two, so that a missing ACK shows as the next test's frame in its place.
             out.write("END test-set-0/test-47\nEND test-set-0/test-48\n".getBytes(StandardCharsets.UTF_8));
@@ -116,6 +117,27 @@ public class CoverageTcpClientTest {
             assertEquals("IGNORED test-set-0/test-47", in.readLine());
             assertEquals("ACK", in.readLine());
             assertEquals("IGNORED test-set-0/test-48", in.readLine());
+            assertEquals("ACK", in.readLine());
+        }
+    }
+
+    @Test
+    public void unknownOrMalformedTcpCommandAnswersIgnoredAndKeepsConnectionAlive() throws Exception {
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
+
+            send(out, "FOO");
+            assertEquals("IGNORED proto=3", in.readLine());
+            send(out, "START");
+            assertEquals("IGNORED proto=3", in.readLine());
+            send(out, "PROTO 4");
+            assertEquals("IGNORED proto=3", in.readLine());
+            send(out, "NOP");
             assertEquals("ACK", in.readLine());
         }
     }
@@ -130,6 +152,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             send(out, "START test-set-0/test-1");
             assertEquals("ACK", in.readLine());
@@ -168,6 +191,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             send(out, "START test-set-0/test-1");
             assertEquals("ACK", in.readLine());
@@ -203,6 +227,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             send(out, "START test-set-0/test-1");
             assertEquals("IGNORED test-set-0/test-1", in.readLine());
@@ -232,6 +257,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             send(out, "START test-set-0/test-1");
             assertEquals("ACK", in.readLine());
@@ -262,6 +288,7 @@ public class CoverageTcpClientTest {
             OutputStream out = sdk.getOutputStream();
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
 
             send(out, "START test-set-0/test-1");
             assertEquals("ACK", in.readLine());
@@ -282,6 +309,7 @@ public class CoverageTcpClientTest {
             send(out, "END test-set-0/test-2");
             String cov = in.readLine();
             assertTrue(cov, cov.startsWith("COV ") && !cov.contains("windowCut"));
+            assertEquals("ACK", in.readLine());
         }
     }
 
@@ -296,15 +324,18 @@ public class CoverageTcpClientTest {
             sdk.setSoTimeout(30000);
             OutputStream out = sdk.getOutputStream();
             InputStream in = sdk.getInputStream();
+            assertHelloLine(readLineRaw(in));
             long[] micros = new long[ROUND_TRIPS];
             for (int i = 0; i < ROUND_TRIPS; i++) {
-                send(out, "START test-set-0/test-" + i);
+                String id = "test-set-0/test-" + i;
+                send(out, "START " + id);
                 assertEquals("ACK\n", readReply(in));
                 long sent = System.nanoTime();
-                send(out, "END test-set-0/test-" + i);
+                send(out, "END " + id);
                 String reply = readReply(in);
                 micros[i] = (System.nanoTime() - sent) / 1000;
-                assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\""));
+                assertTrue(reply, reply.startsWith("COV {\"id\":\"" + id + "\"")
+                        && reply.endsWith("\nACK\n"));
             }
             long[] sorted = micros.clone();
             Arrays.sort(sorted);
@@ -323,17 +354,19 @@ public class CoverageTcpClientTest {
             sdk.setSoTimeout(30000);
             OutputStream out = sdk.getOutputStream();
             InputStream in = sdk.getInputStream();
+            assertHelloLine(readLineRaw(in));
             byte[] buf = new byte[64 * 1024];
             for (int i = 0; i < ROUND_TRIPS; i++) {
-                send(out, "START test-set-0/test-" + i);
+                String id = "test-set-0/test-" + i;
+                send(out, "START " + id);
                 assertEquals("ACK\n", readOnce(in, buf));
-                send(out, "END test-set-0/test-" + i);
+                send(out, "END " + id);
                 String reply = readOnce(in, buf);
                 assertTrue("round " + i + " read " + reply,
-                        reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\"") && reply.endsWith("}\nACK\n"));
+                        reply.startsWith("COV {\"id\":\"" + id + "\"") && reply.endsWith("}\nACK\n"));
                 // Not taken (an END with no START): the IGNORED line and the ACK.
-                send(out, "END test-set-0/test-" + i);
-                assertEquals("IGNORED test-set-0/test-" + i + "\nACK\n", readOnce(in, buf));
+                send(out, "END " + id);
+                assertEquals("IGNORED " + id + "\nACK\n", readOnce(in, buf));
             }
         }
     }
@@ -347,6 +380,7 @@ public class CoverageTcpClientTest {
         try (Socket sdk = collector.accept()) {
             sdk.setSoTimeout(30000);
             OutputStream out = sdk.getOutputStream();
+            assertHelloLine(readLineRaw(sdk.getInputStream()));
             send(out, "END test-set-0/test-1");
             assertEquals("IGNORED test-set-0/test-1\nACK\n", readReply(sdk.getInputStream()));
             Field worker = KeployDedupAgent.class.getDeclaredField("coverageWorker");
@@ -379,6 +413,7 @@ public class CoverageTcpClientTest {
             sdk.setSoTimeout(30000);
             OutputStream out = sdk.getOutputStream();
             InputStream in = sdk.getInputStream();
+            assertHelloLine(readLineRaw(in));
             send(out, "START test-set-0/test-0");
             assertEquals("ACK\n", readReply(in));
             probes[0] = true;
@@ -399,13 +434,14 @@ public class CoverageTcpClientTest {
 
             long[] micros = new long[ROUND_TRIPS];
             for (int i = 1; i <= ROUND_TRIPS; i++) {
-                send(out, "START test-set-0/test-" + i);
+                String id = "test-set-0/test-" + i;
+                send(out, "START " + id);
                 assertEquals("ACK\n", readReply(in));
                 long sent = System.nanoTime();
-                send(out, "END test-set-0/test-" + i);
+                send(out, "END " + id);
                 reply = readReply(in);
                 micros[i - 1] = (System.nanoTime() - sent) / 1000;
-                assertTrue(reply, reply.startsWith("COV {\"id\":\"test-set-0/test-" + i + "\"")
+                assertTrue(reply, reply.startsWith("COV {\"id\":\"" + id + "\"")
                         && reply.endsWith("}\nACK\n"));
             }
             long[] sorted = micros.clone();
@@ -435,6 +471,7 @@ public class CoverageTcpClientTest {
             sdk.setSoTimeout(30000);
             OutputStream out = sdk.getOutputStream();
             InputStream in = sdk.getInputStream();
+            assertHelloLine(readLineRaw(in));
             send(out, "START test-set-0/test-1");
             assertEquals("ACK\n", readReply(in));
             jacoco.onDump = () -> JobGate.exit(JobGate.enter(new Object(), "scheduled"));
@@ -491,6 +528,7 @@ public class CoverageTcpClientTest {
                     sdk.setSoTimeout(30000);
                     OutputStream out = sdk.getOutputStream();
                     InputStream in = sdk.getInputStream();
+                    assertHelloLine(readLineRaw(in));
                     for (int last = test + (connection == 1 ? 2 : 1); test < last; test++) {
                         String id = "test-set-0/test-" + test;
                         System.setProperties(jvm);
@@ -500,7 +538,8 @@ public class CoverageTcpClientTest {
                         int thrown = unreadable.thrown.get();
                         send(out, "END " + id);
                         String reply = readReply(in);
-                        assertTrue(reply, reply.startsWith("COV {\"id\":\"" + id + "\"") && reply.endsWith("}\nACK\n"));
+                        assertTrue(reply, reply.startsWith("COV {\"id\":\"" + id + "\"")
+                                && reply.endsWith("}\nACK\n"));
                         assertEquals("COV, ACK and the end of the reply: " + reply, 3, reply.split("\n", -1).length);
                         assertTrue("the build tag's read threw", unreadable.thrown.get() > thrown);
                         assertEquals("connection " + connection + ", " + id + ": " + warnings(logged),
@@ -517,6 +556,99 @@ public class CoverageTcpClientTest {
             logger.removeHandler(handler);
             logger.setLevel(level);
         }
+    }
+
+    @Test(timeout = 60000)
+    public void betweenTestsBackgroundProbesAreEmittedOnTcpOnlyWhenRequested() throws Exception {
+        byte[] shopBytes = new byte[] {1, 2, 3};
+        File shop = new File(tmp.newFolder("classes"), "com/acme/Shop.class");
+        shop.getParentFile().mkdirs();
+        Files.write(shop.toPath(), shopBytes);
+        System.setProperty(CLASS_DIRS_PROPERTY, shop.getParentFile().getParentFile().getParent());
+        System.setProperty(END_WAIT_PROPERTY, "30");
+        boolean[] probes = inProcessJacoco().probes(IndexReport.classId(shopBytes), "com/acme/Shop", 4);
+        assertTrue(KeployDedupAgent.start());
+        try (Socket sdk = collector.accept()) {
+            sdk.setSoTimeout(30000);
+            OutputStream out = sdk.getOutputStream();
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+            assertHello(in.readLine());
+            // Opt in to correlated ACKs on this connection.
+            send(out, "ACK_ID");
+
+            // Before requesting BACKGROUND: hits between tests are cleared, no BACKGROUND frame emitted.
+            send(out, "START test-set-0/test-0");
+            assertEquals("ACK test-set-0/test-0", in.readLine());
+            probes[0] = true;
+            send(out, "END test-set-0/test-0");
+            assertEquals("COV {\"id\":\"test-set-0/test-0\",\"executedLinesByFile\":{\"com/acme/Shop\":[0]}}",
+                    in.readLine());
+            assertEquals("ACK test-set-0/test-0", in.readLine());
+
+            probes[3] = true; // background hit before BACKGROUND opt-in
+            send(out, "START test-set-0/test-1");
+            assertEquals("ACK test-set-0/test-1", in.readLine());
+            assertFalse("cleared even without BACKGROUND opt-in", probes[3]);
+
+            // Opt in to BACKGROUND (no extra ACK emitted on TCP).
+            send(out, "BACKGROUND");
+            probes[1] = true;
+            send(out, "END test-set-0/test-1");
+            assertEquals("COV {\"id\":\"test-set-0/test-1\",\"executedLinesByFile\":{\"com/acme/Shop\":[1]}}",
+                    in.readLine());
+            assertEquals("ACK test-set-0/test-1", in.readLine());
+
+            // Background job fires between END test-1 and START test-2.
+            // ACK arrives FIRST so START is never delayed by coverageIndex.report(),
+            // followed immediately by the BACKGROUND frame.
+            probes[3] = true;
+            send(out, "START test-set-0/test-2");
+            assertEquals("ACK test-set-0/test-2", in.readLine());
+            String bgLine = in.readLine();
+            assertTrue("expected BACKGROUND frame after ACK, got: " + bgLine,
+                    bgLine != null && bgLine.startsWith("BACKGROUND "));
+            assertTrue(bgLine, bgLine.contains("\"kind\":\"background\""));
+            assertTrue(bgLine, bgLine.contains("\"after\":\"test-set-0/test-1\""));
+            assertTrue(bgLine, bgLine.contains("\"before\":\"test-set-0/test-2\""));
+            assertTrue(bgLine, bgLine.contains("\"com/acme/Shop\":[3]"));
+            assertFalse("background probe cleared for test-2", probes[3]);
+
+            probes[2] = true;
+            send(out, "END test-set-0/test-2");
+            assertEquals("COV {\"id\":\"test-set-0/test-2\",\"executedLinesByFile\":{\"com/acme/Shop\":[2]}}",
+                    in.readLine());
+            assertEquals("ACK test-set-0/test-2", in.readLine());
+
+            // After a windowCut END, hits cleared by the next START are NOT reported as background.
+            send(out, "START test-set-0/test-3");
+            assertEquals("ACK test-set-0/test-3", in.readLine());
+            Object req = RequestGate.enter();
+            try {
+                send(out, "END test-set-0/test-3");
+                String cov3 = in.readLine();
+                assertTrue(cov3, cov3.contains("\"windowCut\":true"));
+                assertEquals("ACK test-set-0/test-3", in.readLine());
+            } finally {
+                RequestGate.exit(req);
+            }
+            probes[3] = true;
+            send(out, "START test-set-0/test-4");
+            assertEquals("ACK test-set-0/test-4", in.readLine());
+            // Confirm no BACKGROUND frame followed START test-4's ACK.
+            send(out, "NOP after-cut");
+            assertEquals("no BACKGROUND frame after cut END", "ACK after-cut", in.readLine());
+        }
+    }
+
+    private static void assertHello(String line) {
+        assertTrue("expected HELLO frame, got: " + line,
+                line != null && line.startsWith("HELLO {\"proto\":3,") && line.endsWith("}"));
+    }
+
+    private static void assertHelloLine(String raw) {
+        assertTrue("expected HELLO line, got: " + raw,
+                raw != null && raw.startsWith("HELLO {\"proto\":3,") && raw.endsWith("}\n"));
     }
 
     // warnings are the WARNING records that say a CLASSES frame could not be built.
@@ -607,14 +739,36 @@ public class CoverageTcpClientTest {
         return agent;
     }
 
-    // readReply reads up to the end of a reply: its ACK line.
+    // readReply reads up to the end of a reply: its ACK line ("ACK <id>\n" or "ACK\n").
     private static String readReply(InputStream in) throws IOException {
         StringBuilder reply = new StringBuilder();
         byte[] buf = new byte[64 * 1024];
-        while (reply.length() < 4 || !reply.substring(reply.length() - 4).equals("ACK\n")) {
+        while (!endsWithAckLine(reply)) {
             reply.append(readOnce(in, buf));
         }
         return reply.toString();
+    }
+
+    private static boolean endsWithAckLine(StringBuilder reply) {
+        int len = reply.length();
+        if (len < 4 || reply.charAt(len - 1) != '\n') {
+            return false;
+        }
+        int lineStart = reply.lastIndexOf("\n", len - 2) + 1;
+        String lastLine = reply.substring(lineStart, len - 1);
+        return lastLine.equals("ACK") || lastLine.startsWith("ACK ");
+    }
+
+    private static String readLineRaw(InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
+        int b;
+        while ((b = in.read()) != -1) {
+            line.write(b);
+            if (b == '\n') {
+                break;
+            }
+        }
+        return new String(line.toByteArray(), StandardCharsets.UTF_8);
     }
 
     // readOnce is one read: what has come of the reply when it wakes.

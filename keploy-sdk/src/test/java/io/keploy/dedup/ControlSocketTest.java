@@ -51,10 +51,11 @@ import org.newsclub.net.unix.AFUNIXSocketChannel;
  * The unix control socket Keploy sends START and END on. Keploy fires its first
  * test as soon as the app answers its health check, so the socket must listen
  * by the time start() (premain, before the app's main) returns. Every command
- * the SDK reads gets one answer line before the close: "ACK proto=2" if it was
- * taken, "IGNORED proto=2" if not. Keploy reads a close with no answer from an
- * SDK that says proto=2 as a command not taken, so only a connection closed
- * with nothing sent may go unanswered.
+ * the SDK reads gets one answer line before the close:
+ * "ACK proto=3 caps=windowCut=...,contaminated=...,classMismatch=...,background=...,ackId=true,asyncExecutors=...,listenerContamination=..."
+ * if it was taken, "IGNORED proto=3" if not. Keploy reads a close with no
+ * answer from an SDK that says proto&gt;=2 as a command not taken, so only a
+ * connection closed with nothing sent may go unanswered.
  *
  * <p>The answers are compared with literals, not the SDK's constants: Keploy
  * reads the words, so a change to them must fail here.
@@ -65,8 +66,10 @@ public class ControlSocketTest {
     private static final String WARMUP_DISABLED_PROPERTY = "keploy.java.dedup.warmup.disabled";
     private static final String CLASS_DIRS_PROPERTY = "keploy.java.class.dirs";
     private static final String END_WAIT_PROPERTY = "keploy.java.end.wait.ms";
-    private static final String TAKEN = "ACK proto=2\n";
-    private static final String IGNORED = "IGNORED proto=2\n";
+    private static final String TAKEN =
+            "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
+            + "background=false,ackId=true,asyncExecutors=false,listenerContamination=false\n";
+    private static final String IGNORED = "IGNORED proto=3\n";
 
     private String savedControlPath;
     private String savedDataPath;
@@ -114,6 +117,8 @@ public class ControlSocketTest {
         // unless a row sets its own bound.
         System.setProperty(BuildTable.MIN_HEAP_PROPERTY, "0");
         KeployDedupAgent.transformerAdded = false;
+        KeployDedupAgent.executorCallSitesEnabled = false;
+        ServerEntries.setHookStatusForTests(false, false, false);
     }
 
     /** A TABLE row needs the heap check's env var unset: it would win over the property setUp sets. */
@@ -139,6 +144,8 @@ public class ControlSocketTest {
         System.clearProperty(BuildTable.MIN_HEAP_PROPERTY);
         System.clearProperty(END_WAIT_PROPERTY);
         KeployDedupAgent.transformerAdded = false;
+        KeployDedupAgent.executorCallSitesEnabled = false;
+        ServerEntries.setHookStatusForTests(false, false, false);
         if (jacoco != null) {
             jacoco.close();
         }
@@ -208,8 +215,8 @@ public class ControlSocketTest {
 
     @Test
     public void aJobRunningInATestsWindowIsNamedInItsRecordAndOneBetweenTestsIsNot() throws Exception {
-        startWithJacoco();
         data = new DataReceiver(KeployDedupAgent.dataSocketPath);
+        startWithJacoco();
         // Running when the START opens the window, done before its END.
         Object running = JobGate.enter(new Object(), "quartz");
         try {
@@ -394,7 +401,7 @@ public class ControlSocketTest {
             int asked = BuildTable.requests();
             assertEquals(TAKEN, send("START test-set-0/test-1"));
             String reply = send("TABLE");
-            assertTrue(reply, reply.matches("IGNORED proto=2 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
+            assertTrue(reply, reply.matches("IGNORED proto=3 reason=low_heap heap_free_mb=\\d+ heap_needed_mb="
                     + needed + "\n"));
             assertEquals("no send started", asked, BuildTable.requests());
             assertNull("no table frame", data.payloads.poll(2, TimeUnit.SECONDS));

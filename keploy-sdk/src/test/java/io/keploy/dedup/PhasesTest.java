@@ -49,7 +49,9 @@ public class PhasesTest {
     private static final String[] PROPERTIES = {"keploy.java.dedup.diagnostics", "keploy.java.class.dirs",
             "keploy.jacoco.port", "keploy.coverage.endpoint", "keploy.java.dedup.warmup.disabled",
             "keploy.build.tag"};
-    private static final String TAKEN = "ACK proto=2\n";
+    private static final String TAKEN =
+            "ACK proto=3 caps=windowCut=false,contaminated=false,classMismatch=true,"
+            + "background=false,ackId=true,asyncExecutors=false,listenerContamination=false\n";
     private static final String MS = "\\d+\\.\\d\\d";
     // The one app class, and the probes a test ran in it.
     private static final String SHOP = "com/acme/Shop";
@@ -140,6 +142,9 @@ public class PhasesTest {
                 OutputStream out = sdk.getOutputStream();
                 BufferedReader in = new BufferedReader(
                         new InputStreamReader(sdk.getInputStream(), StandardCharsets.UTF_8));
+                String hello = in.readLine();
+                assertTrue("expected HELLO frame, got " + hello,
+                        hello != null && hello.startsWith("HELLO {\"proto\":3,"));
                 out.write("START test-set-0/test-1\n".getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 assertEquals("ACK", in.readLine());

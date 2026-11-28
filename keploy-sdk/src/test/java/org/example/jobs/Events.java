@@ -89,6 +89,10 @@ final class Events {
         CountDownLatch drained = new CountDownLatch(1);
         POOL.getThreadPoolExecutor().execute(drained::countDown);
         awaitOrFail(drained);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (POOL.getThreadPoolExecutor().getActiveCount() > 0 && System.nanoTime() < deadline) {
+            Thread.yield();
+        }
     }
 
     static void close() {
