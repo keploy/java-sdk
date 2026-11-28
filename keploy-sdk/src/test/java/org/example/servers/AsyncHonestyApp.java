@@ -1,6 +1,9 @@
 package org.example.servers;
 
 import com.sun.net.httpserver.HttpServer;
+import io.undertow.Undertow;
+import io.undertow.servlet.Servlets;
+import io.undertow.servlet.api.DeploymentManager;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -86,7 +89,8 @@ public final class AsyncHonestyApp {
             tomcat.setBaseDir(base.getPath());
             tomcat.setPort(0);
             Context context = tomcat.addContext("", base.getPath());
-            Tomcat.addServlet(context, "async", new AsyncServlet());
+            org.apache.catalina.Wrapper wrapper = Tomcat.addServlet(context, "async", new AsyncServlet());
+            wrapper.setAsyncSupported(true);
             context.addServletMappingDecoded("/*", "async");
             tomcat.start();
             port = tomcat.getConnector().getLocalPort();
@@ -99,11 +103,29 @@ public final class AsyncHonestyApp {
             }
             Server jetty = new Server(0);
             ServletContextHandler context = new ServletContextHandler();
-            context.addServlet(new ServletHolder(new AsyncServlet()), "/*");
+            ServletHolder holder = new ServletHolder(new AsyncServlet());
+            holder.setAsyncSupported(true);
+            context.addServlet(holder, "/*");
             jetty.setHandler(context);
             jetty.start();
             port = ((ServerConnector) jetty.getConnectors()[0]).getLocalPort();
             server = jetty::stop;
+        } else if ("undertow".equals(mode)) {
+            DeploymentManager deployment = Servlets.defaultContainer().addDeployment(Servlets.deployment()
+                    .setClassLoader(AsyncHonestyApp.class.getClassLoader())
+                    .setContextPath("/")
+                    .setDeploymentName("honesty")
+                    .addServlet(Servlets.servlet("async", AsyncServlet.class)
+                            .setAsyncSupported(true)
+                            .addMapping("/*")));
+            deployment.deploy();
+            Undertow undertow = Undertow.builder()
+                    .addHttpListener(0, "127.0.0.1")
+                    .setHandler(deployment.start())
+                    .build();
+            undertow.start();
+            port = ((InetSocketAddress) undertow.getListenerInfo().get(0).getAddress()).getPort();
+            server = undertow::stop;
         } else if ("uncounted".equals(mode)) {
             HttpServer http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             http.createContext("/clean", exchange -> {
@@ -161,8 +183,31 @@ public final class AsyncHonestyApp {
 
         @Override
         protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-            String path = req.getPathInfo() == null ? "/" : req.getPathInfo();
+            String path = req.getPathInfo();
+            if (path == null || path.isEmpty()) {
+                path = req.getRequestURI() == null ? "/" : req.getRequestURI();
+            }
             long ms = req.getParameter("ms") == null ? 0L : Long.parseLong(req.getParameter("ms"));
+            if ("/async-after-complete".equals(path)) {
+                final javax.servlet.AsyncContext ctx = req.startAsync();
+                final long delay = ms;
+                ctx.start(() -> {
+                    try {
+                        byte[] ok = "ok".getBytes(StandardCharsets.UTF_8);
+                        HttpServletResponse asyncResp = (HttpServletResponse) ctx.getResponse();
+                        asyncResp.setContentType("text/plain");
+                        asyncResp.setContentLength(ok.length);
+                        asyncResp.getOutputStream().write(ok);
+                        asyncResp.flushBuffer();
+                    } catch (IOException ignored) {
+                    } finally {
+                        ctx.complete();
+                    }
+                    sleepQuietly(delay);
+                    AsyncTail.ran();
+                });
+                return;
+            }
             if ("/submit-tail".equals(path)) {
                 PLAIN_POOL.submit(() -> {
                     sleepQuietly(ms);

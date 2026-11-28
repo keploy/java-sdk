@@ -581,6 +581,76 @@ public class ForkedAsyncAndHonestyTest {
         }
     }
 
+    @Test(timeout = 360000)
+    public void forkedServletAsyncContextStartAfterCompleteNeverLeaksAcrossServers() throws Exception {
+        // Servlet AsyncContext.start(r) where r calls ctx.complete() and then keeps
+        // executing AsyncTail.ran() must NEVER silently drop lines from W1 or leak
+        // them cleanly into W2, across Tomcat, Jetty, and Undertow in both modes.
+        String[] servers = {"tomcat", "jetty", "undertow"};
+        for (boolean prefixMode : new boolean[] {true, false}) {
+            for (String server : servers) {
+                String label = "server=" + server + " mode=" + (prefixMode ? "prefix" : "index");
+                boolean isUndertow = "undertow".equals(server);
+                // 1. Short endWait=80ms: post-complete runnable outlives END -> W1 must be
+                //    windowCut:true AND W2 must carry tail contamination (zero silent leakage).
+                try (ForkedApp app = startFork(server, "80", prefixMode, false, null, null)) {
+                    JsonObject hello = parseHello(app.initialHello);
+                    assertTrue(label + " must declare windowCut=true: " + app.initialHello,
+                            hello.get("windowCut").getAsBoolean());
+                    app.runHttpTest("ac/" + server + "-warm", "/clean");
+                    if (!isUndertow) {
+                        assertTrue(label + " must keep asyncExecutors=true after /clean: " + app.lastHello,
+                                parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                    }
+                    String cov1 = app.runHttpTest("ac/" + server + "-cut", "/async-after-complete?ms=400");
+                    assertTrue(label + " W1 must report windowCut:true: " + cov1,
+                            cov1.contains("\"windowCut\":true"));
+                    String cov2 = app.runHttpTest("ac/" + server + "-next", "/clean");
+                    assertTrue(label + " W2 while post-complete task runs must carry tail:ac/"
+                            + server + "-cut: " + cov2,
+                            cov2.contains("\"tail:ac/" + server + "-cut\""));
+                    Thread.sleep(600);
+                    String cov3 = app.runHttpTest("ac/" + server + "-drained", "/clean");
+                    assertFalse(label + " W3 after drain must not be windowCut: " + cov3,
+                            cov3.contains("windowCut"));
+                    if (!isUndertow) {
+                        assertFalse(label + " W3 after drain must not carry tail:ac/" + server + "-cut: " + cov3,
+                                cov3.contains("\"tail:ac/" + server + "-cut\""));
+                        assertFalse(label + " W3 after drain must not be contaminated: " + cov3,
+                                cov3.contains("contaminated"));
+                    }
+                }
+
+                // 2. Sufficient endWait=2000ms: END waits until the post-complete runnable
+                //    finishes -> AsyncTail lands IN-WINDOW inside W1 with zero silent leakage!
+                try (ForkedApp app = startFork(server, "2000", prefixMode, false, null, null)) {
+                    String warmCov = app.runHttpTest("ac/" + server + "-warm2", "/clean");
+                    String cov1 = app.runHttpTest("ac/" + server + "-inwindow", "/async-after-complete?ms=250");
+                    assertFalse(label + " sufficient wait must not cut: " + cov1, cov1.contains("windowCut"));
+                    assertTrue(label + " post-complete AsyncTail must land IN-WINDOW in W1: " + cov1,
+                            cov1.contains("\"" + ASYNC_TAIL + "\""));
+                    String cov2 = app.runHttpTest("ac/" + server + "-clean", "/clean");
+                    assertFalse(label + " W2 must not contain AsyncTail: " + cov2,
+                            cov2.contains("\"" + ASYNC_TAIL + "\""));
+                    if (!isUndertow) {
+                        assertFalse(label + " sufficient wait must not contaminate W1: " + cov1,
+                                cov1.contains("contaminated"));
+                        assertFalse(label + " W2 after in-window completion must be clean: " + cov2,
+                                cov2.contains("contaminated"));
+                    } else {
+                        // Undertow's EnhancedQueueExecutor/JBossThread is NOT allowlisted: either
+                        // the warm request flags untracked-sink:thread-start or startup latched
+                        // asyncExecutors=false.
+                        boolean failClosed = warmCov.contains("untracked-sink:thread-start:")
+                                || !parseHello(app.lastHello).get("asyncExecutors").getAsBoolean();
+                        assertTrue(label + " Undertow JBossThread must not be allowlisted: warm=" + warmCov
+                                + " hello=" + app.lastHello, failClosed);
+                    }
+                }
+            }
+        }
+    }
+
     @Test(timeout = 420000)
     public void forkedAppSubPoolsAndReflectiveStartupWorkersFailClosed() throws Exception {
         // Isolated forks in both prefix and index modes for app/library JDK pool

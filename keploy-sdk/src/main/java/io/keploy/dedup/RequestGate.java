@@ -584,6 +584,43 @@ public final class RequestGate {
         return handInternal(executor, task, false);
     }
 
+    /**
+     * Wraps a {@link Runnable} dispatched via {@code javax.servlet.AsyncContext#start}
+     * or {@code jakarta.servlet.AsyncContext#start} so the dispatching request's
+     * window (or tracked job) stays open until the runnable completes—even if
+     * the runnable calls {@code AsyncContext.complete()} and continues working.
+     * When invoked outside any active window or tracked job (or while unarmed),
+     * latches {@code asyncExecutors=false} (fail closed).
+     *
+     * @param task runnable passed to {@code AsyncContext.start(Runnable)}
+     * @return wrapped runnable holding the window permit, or {@code task} unchanged
+     */
+    public static Runnable handAsyncContext(Runnable task) {
+        if (!armed) {
+            if (task != null) {
+                noteUnarmedHandOffIfInFlight();
+                noteBackgroundWorkerOutsideWindow("untracked-async:async-context-outside-window", false);
+            }
+            return task;
+        }
+        if (task == null || task instanceof Handed) {
+            return task;
+        }
+        Window window = INSIDE.get();
+        JobGate.Attribution job = currentOrExpiredJob(window);
+        if (window == null && job == null) {
+            noteBackgroundWorkerOutsideWindow("untracked-async:async-context-outside-window", true);
+            return task;
+        }
+        Handed handed = task instanceof Future
+                ? new HandedFuture(window, job, task, false)
+                : new Handed(window, job, task, false);
+        if (window != null) {
+            window.running.incrementAndGet();
+        }
+        return handed;
+    }
+
     private static JobGate.Attribution currentOrExpiredJob(Window window) {
         if (window != null) {
             return null;

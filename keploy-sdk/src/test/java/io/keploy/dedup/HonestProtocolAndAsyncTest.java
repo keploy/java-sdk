@@ -3389,10 +3389,11 @@ public class HonestProtocolAndAsyncTest {
             assertEquals("ACK ts/test-1", in.readLine());
             CountDownLatch allowAudit = new CountDownLatch(1);
             CountDownLatch auditDone = new CountDownLatch(1);
+            Thread audit;
             Object req1 = RequestGate.enter();
             try {
                 probes[0] = true;
-                Thread audit = new Thread(() -> {
+                audit = new Thread(() -> {
                     try {
                         allowAudit.await(5, TimeUnit.SECONDS);
                     } catch (InterruptedException e) {
@@ -3415,6 +3416,8 @@ public class HonestProtocolAndAsyncTest {
             // Audit thread runs in the gap between END test-1 and START test-2 and finishes.
             allowAudit.countDown();
             assertTrue("audit ran in gap", auditDone.await(5, TimeUnit.SECONDS));
+            audit.join(5000);
+            assertFalse("audit thread must exit before START ts/test-2", audit.isAlive());
 
             // START test-2 clears probe[2] but MUST NOT emit BACKGROUND!
             send(out, "START ts/test-2");
@@ -3452,10 +3455,11 @@ public class HonestProtocolAndAsyncTest {
             // test-4->test-5) MUST be suppressed!
             CountDownLatch allowLongAudit = new CountDownLatch(1);
             CountDownLatch longAuditDone = new CountDownLatch(1);
+            Thread longAudit;
             Object req3 = RequestGate.enter();
             try {
                 probes[0] = true;
-                Thread longAudit = new Thread(() -> {
+                longAudit = new Thread(() -> {
                     try {
                         allowLongAudit.await(5, TimeUnit.SECONDS);
                     } catch (InterruptedException e) {
@@ -3490,6 +3494,8 @@ public class HonestProtocolAndAsyncTest {
             // Now longAudit finishes in the gap between END test-4 and START test-5!
             allowLongAudit.countDown();
             assertTrue(longAuditDone.await(5, TimeUnit.SECONDS));
+            longAudit.join(5000);
+            assertFalse("longAudit thread must exit before START ts/test-5", longAudit.isAlive());
             send(out, "START ts/test-5");
             assertEquals("ACK ts/test-5", in.readLine());
             send(out, "NOP check-no-bg-bc");
@@ -3607,10 +3613,11 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(sendUnixControl("START ts/u1").startsWith("ACK proto=3"));
             CountDownLatch allowAudit = new CountDownLatch(1);
             CountDownLatch auditDone = new CountDownLatch(1);
+            Thread audit;
             Object req1 = RequestGate.enter();
             try {
                 probes[0] = true;
-                Thread audit = new Thread(() -> {
+                audit = new Thread(() -> {
                     try {
                         allowAudit.await(5, TimeUnit.SECONDS);
                     } catch (InterruptedException e) {
@@ -3627,6 +3634,8 @@ public class HonestProtocolAndAsyncTest {
             assertTrue(sendUnixControl("END ts/u1").startsWith("ACK proto=3"));
             allowAudit.countDown();
             assertTrue(auditDone.await(5, TimeUnit.SECONDS));
+            audit.join(5000);
+            assertFalse("unix audit thread must exit before START ts/u2", audit.isAlive());
 
             assertTrue(sendUnixControl("START ts/u2").startsWith("ACK proto=3"));
             // Clean counted request on Unix -> emits BACKGROUND(u2->u3) with lost:1 from u1->u2!

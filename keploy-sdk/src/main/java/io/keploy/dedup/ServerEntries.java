@@ -1,6 +1,7 @@
 package io.keploy.dedup;
 
 import java.io.File;
+import java.io.InputStream;
 import java.lang.instrument.ClassFileTransformer;
 import java.net.URI;
 import java.net.URL;
@@ -50,6 +51,9 @@ final class ServerEntries implements ClassFileTransformer {
     static final String RENAMED = "keploy$request$";
     static final String JOB_RENAMED = "keploy$job$";
     static final String ASYNC_RENAMED = "keploy$async$";
+    private static final String JAVAX_ASYNC_CONTEXT = "javax/servlet/AsyncContext";
+    private static final String JAKARTA_ASYNC_CONTEXT = "jakarta/servlet/AsyncContext";
+    private static final String ASYNC_CONTEXT_START_DESC = "(Ljava/lang/Runnable;)V";
     private static final String RUNNABLE = "Ljava/lang/Runnable;";
     private static final String CALLABLE = "Ljava/util/concurrent/Callable;";
     // The type of the executor a task is for, when a method takes it as an
@@ -479,6 +483,9 @@ final class ServerEntries implements ClassFileTransformer {
     // Per-loader cache for seesGate(loader) to avoid repeated Class.forName
     // calls and ClassNotFoundExceptions during startup class loading.
     private static final Map<ClassLoader, Boolean> SEES_GATE = new WeakHashMap<>();
+    // Per-loader cache of whether a type (class or interface) implements or
+    // extends javax/servlet/AsyncContext or jakarta/servlet/AsyncContext.
+    private static final Map<ClassLoader, Map<String, Boolean>> ASYNC_CONTEXT_TYPES = new WeakHashMap<>();
     // On Java 9+, normalized code-source locations of boot-layer named modules
     // that do not read RequestGate's unnamed module: rewriting classes inside
     // those named modules would throw IllegalAccessError at call sites. Empty
@@ -629,6 +636,9 @@ final class ServerEntries implements ClassFileTransformer {
     // Application classes whose executor call sites were rewritten on load,
     // by their loader: re-applied if another agent retransforms them.
     private final Map<ClassLoader, Set<String>> rewritten = new WeakHashMap<>();
+    // Implementations of javax/jakarta AsyncContext whose start(Runnable) was
+    // hooked on load, by their loader: re-applied on retransform.
+    private final Map<ClassLoader, Set<String>> asyncContextHooked = new WeakHashMap<>();
     // Whether servers' requests count (END waits for them); jobs' runs
     // count either way.
     private final boolean requests;
@@ -826,26 +836,37 @@ final class ServerEntries implements ClassFileTransformer {
             if (unhookedConsumer != null) {
                 SEEN_UNHOOKED_CONSUMERS.add(unhookedConsumer);
             }
+            byte[] currentBytes = classfileBuffer;
+            boolean hookedAsyncContext = false;
+            if (className != null && !isInternalOrAgentClass(className)) {
+                byte[] asyncCtxWrapped = maybeHookAsyncContextStart(loader, className, protectionDomain, currentBytes);
+                if (asyncCtxWrapped != null) {
+                    currentBytes = asyncCtxWrapped;
+                    hookedAsyncContext = true;
+                }
+            }
             if (shouldRewriteExecutorCalls(className)) {
-                scanUnhookedReferences(className, classfileBuffer, false, false);
+                scanUnhookedReferences(className, currentBytes, false, false);
                 if (!canAccessGate(loader, protectionDomain)) {
                     if (seesGate(loader)) {
                         jpmsGuardTriggered = true;
                     } else {
                         appRewriteFailed = true;
                     }
-                    scanUnhookedReferences(className, classfileBuffer, true, true);
-                    return null;
+                    scanUnhookedReferences(className, currentBytes, true, true);
+                    return hookedAsyncContext ? currentBytes : null;
                 }
                 try {
-                    byte[] updated = wrapExecutorCalls(classfileBuffer);
+                    byte[] updated = wrapExecutorCalls(currentBytes);
                     if (updated != null) {
                         recordRewritten(loader, className);
+                        return updated;
                     }
-                    return updated;
+                    return hookedAsyncContext ? currentBytes : null;
                 } catch (Throwable t) {
                     appRewriteFailed = true;
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site wrap for " + className, t);
+                    return hookedAsyncContext ? currentBytes : null;
                 }
             } else if (className != null && !isInternalOrAgentClass(className)) {
                 // Fail-closed read-only constant-pool scan of EVERY non-JDK,
@@ -854,10 +875,10 @@ final class ServerEntries implements ClassFileTransformer {
                 // async dispatcher latches asyncExecutors=false UNLESS its exact
                 // name is in ALLOWLISTED_DISPATCH_CLASSES.
                 boolean checkDispatch = !ALLOWLISTED_DISPATCH_CLASSES.contains(className);
-                scanUnhookedReferences(className, classfileBuffer, !isKnownMessagingPoolWrapper(className),
+                scanUnhookedReferences(className, currentBytes, !isKnownMessagingPoolWrapper(className),
                         checkDispatch);
             }
-            return null;
+            return hookedAsyncContext ? currentBytes : null;
         }
         // With the wait off, servers are left as they are, and so no task
         // counts as a request's; the executors still count a task a job's
@@ -938,6 +959,286 @@ final class ServerEntries implements ClassFileTransformer {
         }
     }
 
+    private void recordAsyncContextHooked(ClassLoader loader, String className) {
+        synchronized (asyncContextHooked) {
+            Set<String> names = asyncContextHooked.get(loader);
+            if (names == null) {
+                names = new HashSet<>();
+                asyncContextHooked.put(loader, names);
+            }
+            names.add(className);
+        }
+    }
+
+    private boolean wasAsyncContextHooked(ClassLoader loader, String className) {
+        if (className == null) {
+            return false;
+        }
+        synchronized (asyncContextHooked) {
+            Set<String> names = asyncContextHooked.get(loader);
+            return names != null && names.contains(className);
+        }
+    }
+
+    private static Boolean lookupCachedAsyncContextType(ClassLoader loader, String internalName) {
+        synchronized (ASYNC_CONTEXT_TYPES) {
+            Map<String, Boolean> map = ASYNC_CONTEXT_TYPES.get(loader);
+            return map == null ? null : map.get(internalName);
+        }
+    }
+
+    private static void cacheAsyncContextType(ClassLoader loader, String internalName, boolean value) {
+        if (internalName == null) {
+            return;
+        }
+        synchronized (ASYNC_CONTEXT_TYPES) {
+            Map<String, Boolean> map = ASYNC_CONTEXT_TYPES.get(loader);
+            if (map == null) {
+                map = new HashMap<>();
+                ASYNC_CONTEXT_TYPES.put(loader, map);
+            }
+            map.put(internalName, value);
+        }
+    }
+
+    private static boolean isDirectOrCachedAsyncContext(ClassLoader loader, String superName, String[] interfaces) {
+        if (JAVAX_ASYNC_CONTEXT.equals(superName) || JAKARTA_ASYNC_CONTEXT.equals(superName)
+                || Boolean.TRUE.equals(lookupCachedAsyncContextType(loader, superName))) {
+            return true;
+        }
+        if (interfaces != null) {
+            for (String iface : interfaces) {
+                if (JAVAX_ASYNC_CONTEXT.equals(iface) || JAKARTA_ASYNC_CONTEXT.equals(iface)
+                        || Boolean.TRUE.equals(lookupCachedAsyncContextType(loader, iface))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasConcreteStartRunnableMethod(ClassReader reader) {
+        final boolean[] found = {false};
+        reader.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                if ("start".equals(name) && ASYNC_CONTEXT_START_DESC.equals(descriptor)
+                        && (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_STATIC
+                                | Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC)) == 0) {
+                    found[0] = true;
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return found[0];
+    }
+
+    private static boolean isAsyncContextHierarchy(ClassLoader loader, String superName, String[] interfaces,
+            Set<String> visited) {
+        if (isDirectOrCachedAsyncContext(loader, superName, interfaces)) {
+            return true;
+        }
+        if (interfaces != null) {
+            for (String iface : interfaces) {
+                if (isAsyncContextType(loader, iface, visited)) {
+                    return true;
+                }
+            }
+        }
+        if (superName != null && !"java/lang/Object".equals(superName)) {
+            return isAsyncContextType(loader, superName, visited);
+        }
+        return false;
+    }
+
+    private static boolean isAsyncContextType(ClassLoader loader, String internalName, Set<String> visited) {
+        if (internalName == null || "java/lang/Object".equals(internalName)) {
+            return false;
+        }
+        if (JAVAX_ASYNC_CONTEXT.equals(internalName) || JAKARTA_ASYNC_CONTEXT.equals(internalName)) {
+            return true;
+        }
+        if (!visited.add(internalName)) {
+            return false;
+        }
+        Boolean cached = lookupCachedAsyncContextType(loader, internalName);
+        if (cached != null) {
+            return cached;
+        }
+        String resource = internalName + ".class";
+        try (InputStream in = loader != null
+                ? loader.getResourceAsStream(resource)
+                : ClassLoader.getSystemResourceAsStream(resource)) {
+            if (in == null) {
+                return false;
+            }
+            ClassReader parentReader = new ClassReader(in);
+            boolean matches = isAsyncContextHierarchy(loader, parentReader.getSuperName(),
+                    parentReader.getInterfaces(), visited);
+            cacheAsyncContextType(loader, internalName, matches);
+            return matches;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private byte[] maybeHookAsyncContextStart(ClassLoader loader, String className, ProtectionDomain protectionDomain,
+            byte[] classfileBuffer) {
+        if (classfileBuffer == null || classfileBuffer.length < 16) {
+            return null;
+        }
+        ClassReader reader;
+        try {
+            reader = new ClassReader(classfileBuffer);
+        } catch (Throwable ignored) {
+            return null;
+        }
+        boolean isIface = (reader.getAccess() & Opcodes.ACC_INTERFACE) != 0;
+        if (isIface || !hasConcreteStartRunnableMethod(reader)) {
+            // Fast zero-I/O propagation for interfaces and abstract/base classes
+            // so dynamically defined multi-level AsyncContext subclasses resolve
+            // through the cache without getResourceAsStream.
+            if (isDirectOrCachedAsyncContext(loader, reader.getSuperName(), reader.getInterfaces())) {
+                cacheAsyncContextType(loader, className, true);
+            }
+            return null;
+        }
+        if (!isAsyncContextHierarchy(loader, reader.getSuperName(), reader.getInterfaces(), new HashSet<String>())) {
+            cacheAsyncContextType(loader, className, false);
+            return null;
+        }
+        cacheAsyncContextType(loader, className, true);
+        String name = className.replace('/', '.');
+        try {
+            if (!canAccessGate(loader, protectionDomain)) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup cannot hook AsyncContext.start on " + name
+                        + ": its loader/module cannot access keploy-sdk.jar");
+                return null;
+            }
+            if (carriesAsyncContextStartChange(classfileBuffer)) {
+                recordAsyncContextHooked(loader, className);
+                return null;
+            }
+            byte[] wrapped = wrapAsyncContextStart(classfileBuffer);
+            if (wrapped == null) {
+                asyncHookFailed = true;
+                LOGGER.log(Level.WARNING, "Keploy dedup could not wrap AsyncContext.start on " + name);
+                return null;
+            }
+            recordAsyncContextHooked(loader, className);
+            LOGGER.log(Level.INFO, "Keploy dedup counts Servlet AsyncContext.start tasks (" + name + ")");
+            return wrapped;
+        } catch (Throwable t) {
+            asyncHookFailed = true;
+            LOGGER.log(Level.WARNING, "Keploy dedup could not hook AsyncContext.start on " + name, t);
+            return null;
+        }
+    }
+
+    static boolean carriesAsyncContextStartChange(byte[] classfile) {
+        final boolean[] carries = {false};
+        new ClassReader(classfile).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                if ((ASYNC_RENAMED + "start").equals(name) && ASYNC_CONTEXT_START_DESC.equals(descriptor)) {
+                    carries[0] = true;
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return carries[0];
+    }
+
+    static byte[] wrapAsyncContextStart(byte[] classfile) {
+        ClassReader reader = new ClassReader(classfile);
+        ClassWriter writer = new ClassWriter(reader, 0);
+        final String[] ownerHolder = {null};
+        final int[] versionHolder = {0};
+        final Method[] targetHolder = {null};
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public void visit(int version, int access, String name, String signature, String superName,
+                    String[] interfaces) {
+                versionHolder[0] = version & 0xFFFF;
+                ownerHolder[0] = name;
+                super.visit(version, access, name, signature, superName, interfaces);
+            }
+
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                    String[] exceptions) {
+                if ("start".equals(name) && ASYNC_CONTEXT_START_DESC.equals(descriptor)
+                        && (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_STATIC
+                                | Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC)) == 0) {
+                    targetHolder[0] = new Method(access, name, descriptor, signature, exceptions);
+                    int renamedAccess = (access & ~(Opcodes.ACC_PUBLIC | Opcodes.ACC_PROTECTED))
+                            | Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNTHETIC;
+                    return super.visitMethod(renamedAccess, ASYNC_RENAMED + name, descriptor, signature, exceptions);
+                }
+                return super.visitMethod(access, name, descriptor, signature, exceptions);
+            }
+
+            @Override
+            public void visitEnd() {
+                Method method = targetHolder[0];
+                if (method != null) {
+                    int access = method.access & ~Opcodes.ACC_SYNCHRONIZED;
+                    MethodVisitor mv = super.visitMethod(access, method.name, method.descriptor,
+                            method.signature, method.exceptions);
+                    mv.visitCode();
+                    Label start = new Label();
+                    Label end = new Label();
+                    Label thrown = new Label();
+                    mv.visitTryCatchBlock(start, end, thrown, null);
+
+                    // Runnable handed = RequestGate.handAsyncContext(r);
+                    mv.visitVarInsn(Opcodes.ALOAD, 1);
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "handAsyncContext",
+                            "(Ljava/lang/Runnable;)Ljava/lang/Runnable;", false);
+                    mv.visitVarInsn(Opcodes.ASTORE, 2);
+                    // RequestGate.enterTrackedDispatch(handed);
+                    mv.visitVarInsn(Opcodes.ALOAD, 2);
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "enterTrackedDispatch",
+                            "(Ljava/lang/Object;)V", false);
+                    mv.visitLabel(start);
+                    // this.keploy$async$start(handed);
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                    mv.visitVarInsn(Opcodes.ALOAD, 2);
+                    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, ownerHolder[0], ASYNC_RENAMED + method.name,
+                            method.descriptor, false);
+                    mv.visitLabel(end);
+                    // RequestGate.exitTrackedDispatch(handed);
+                    mv.visitVarInsn(Opcodes.ALOAD, 2);
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exitTrackedDispatch",
+                            "(Ljava/lang/Object;)V", false);
+                    mv.visitInsn(Opcodes.RETURN);
+
+                    mv.visitLabel(thrown);
+                    if (versionHolder[0] >= Opcodes.V1_6) {
+                        mv.visitFrame(Opcodes.F_FULL, 3,
+                                new Object[] {ownerHolder[0], "java/lang/Runnable", "java/lang/Runnable"},
+                                1, new Object[] {"java/lang/Throwable"});
+                    }
+                    mv.visitVarInsn(Opcodes.ALOAD, 2);
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "exitTrackedDispatch",
+                            "(Ljava/lang/Object;)V", false);
+                    mv.visitVarInsn(Opcodes.ALOAD, 2);
+                    mv.visitVarInsn(Opcodes.ALOAD, 1);
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "dropped",
+                            "(Ljava/lang/Object;Ljava/lang/Object;)V", false);
+                    mv.visitInsn(Opcodes.ATHROW);
+                    mv.visitMaxs(3, 3);
+                    mv.visitEnd();
+                }
+                super.visitEnd();
+            }
+        }, 0);
+        return targetHolder[0] == null ? null : writer.toByteArray();
+    }
+
     private boolean wasRewritten(ClassLoader loader, String className) {
         if (!shouldRewriteExecutorCalls(className)) {
             return false;
@@ -982,15 +1283,35 @@ final class ServerEntries implements ClassFileTransformer {
         }
         Entry entry = ENTRIES.get(className);
         if (entry == null) {
+            byte[] currentBytes = classfile;
+            boolean changedAny = false;
+            if (wasAsyncContextHooked(loader, className)) {
+                try {
+                    if (!carriesAsyncContextStartChange(currentBytes)) {
+                        byte[] wrapped = wrapAsyncContextStart(currentBytes);
+                        if (wrapped != null) {
+                            currentBytes = wrapped;
+                            changedAny = true;
+                        }
+                    }
+                } catch (Throwable t) {
+                    asyncHookFailed = true;
+                    LOGGER.log(Level.WARNING, "Keploy dedup could not re-hook AsyncContext.start on " + className, t);
+                }
+            }
             if (wasRewritten(loader, className)) {
                 try {
-                    return wrapExecutorCalls(classfile);
+                    byte[] updated = wrapExecutorCalls(currentBytes);
+                    if (updated != null) {
+                        currentBytes = updated;
+                        changedAny = true;
+                    }
                 } catch (Throwable t) {
                     LOGGER.log(Level.FINE, "Keploy dedup skipped executor call-site re-wrap for " + className, t);
                 }
             }
             // Most classes an agent retransforms: no lock taken for them.
-            return null;
+            return changedAny ? currentBytes : null;
         }
         synchronized (changed) {
             Set<String> names = changed.get(loader);
