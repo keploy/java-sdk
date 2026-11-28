@@ -1250,7 +1250,7 @@ public final class KeployDedupAgent {
         private String unixReplyTaken() {
             try {
                 return computeCapabilities(collector).toUnixAck();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | LinkageError e) {
                 log(Level.FINE, "Failed to compute live Unix capabilities; falling back to bare ACK proto=3", e);
                 return UNIX_REPLY_TAKEN;
             }
@@ -1472,12 +1472,54 @@ public final class KeployDedupAgent {
                 + "\"windowCut\":false,\"contaminated\":false,\"classMismatch\":false,\"background\":false,"
                 + "\"ackId\":true,\"nopResync\":true,\"asyncExecutors\":false,\"listenerContamination\":false}";
 
+        private volatile String cachedSdkVersion = "";
+        private volatile String cachedPodUid = "";
+        private volatile String cachedPodName = "";
+        private volatile String cachedSessionId = "";
+        private volatile String cachedJvmNonce = "";
+        private volatile String cachedBuildId = "";
+
         private String helloFrame() {
             RuntimeException injected = testHelloFailure;
             if (injected != null) {
                 throw injected;
             }
-            return computeCapabilities(collector).toHelloFrame(collector.helloBuildId());
+            String sdkVersion = IndexReport.versionOf(IndexReport.class);
+            String podUid = envOrProperty("KEPLOY_DEDUP_POD_UID", "keploy.dedup.pod.uid", "");
+            String podName = envOrProperty("KEPLOY_DEDUP_POD_NAME", "keploy.dedup.pod.name", "");
+            String sessionId = envOrProperty("KEPLOY_DEDUP_SESSION_ID", "keploy.dedup.session.id", "");
+            String nonce = jvmNonce();
+            String buildId = collector.helloBuildId();
+            cachedSdkVersion = sdkVersion == null ? "" : sdkVersion;
+            cachedPodUid = podUid == null ? "" : podUid;
+            cachedPodName = podName == null ? "" : podName;
+            cachedSessionId = sessionId == null ? "" : sessionId;
+            cachedJvmNonce = nonce == null ? "" : nonce;
+            cachedBuildId = buildId == null ? "" : buildId;
+            Capabilities caps = computeCapabilities(collector);
+            return buildHelloFrame(cachedSdkVersion, cachedPodUid, cachedPodName, cachedSessionId,
+                    cachedJvmNonce, cachedBuildId,
+                    caps.windowCut, caps.contaminated, caps.classMismatch, caps.background,
+                    true, true, caps.asyncExecutors, caps.listenerContamination);
+        }
+
+        private String failClosedFallbackHello() {
+            String sdk = cachedSdkVersion;
+            String uid = cachedPodUid;
+            String pod = cachedPodName;
+            String sid = cachedSessionId;
+            String nonce = cachedJvmNonce;
+            String bid = cachedBuildId;
+            if (sdk.isEmpty() && uid.isEmpty() && pod.isEmpty() && sid.isEmpty()
+                    && nonce.isEmpty() && bid.isEmpty()) {
+                return FAIL_CLOSED_FALLBACK_HELLO;
+            }
+            try {
+                return buildHelloFrame(sdk, uid, pod, sid, nonce, bid,
+                        false, false, false, false, true, true, false, false);
+            } catch (RuntimeException | LinkageError ignored) {
+                return FAIL_CLOSED_FALLBACK_HELLO;
+            }
         }
 
         private void maybeSendUpdatedHello(OutputStream out) throws IOException {
@@ -1495,9 +1537,10 @@ public final class KeployDedupAgent {
             } catch (RuntimeException | LinkageError e) {
                 log(Level.FINE, "Failed to refresh HELLO during " + phase
                         + "; sending fail-closed fallback HELLO", e);
-                if (!FAIL_CLOSED_FALLBACK_HELLO.equals(lastHelloSent)) {
-                    writeLine(out, FAIL_CLOSED_FALLBACK_HELLO);
-                    lastHelloSent = FAIL_CLOSED_FALLBACK_HELLO;
+                String fallback = failClosedFallbackHello();
+                if (!fallback.equals(lastHelloSent)) {
+                    writeLine(out, fallback);
+                    lastHelloSent = fallback;
                 }
                 return false;
             }

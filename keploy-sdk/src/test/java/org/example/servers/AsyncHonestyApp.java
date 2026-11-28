@@ -63,24 +63,6 @@ public final class AsyncHonestyApp {
     private static final ConcreteCustomPool CONCRETE_POOL = new ConcreteCustomPool();
     private static volatile java.util.concurrent.CountDownLatch VIRTUAL_RELEASE_LATCH;
     private static volatile Thread VIRTUAL_THREAD;
-    // Simulates an external library's event loop (e.g. HttpClient/Netty/AWS SDK)
-    // started outside any request, completing CompletableFutures asynchronously.
-    private static final LinkedBlockingQueue<Runnable> EXTERNAL_LIBRARY_LOOP = new LinkedBlockingQueue<>();
-
-    static {
-        Thread externalLoop = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    EXTERNAL_LIBRARY_LOOP.take().run();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }, "fake-external-http-loop");
-        externalLoop.setDaemon(true);
-        externalLoop.start();
-    }
 
     private AsyncHonestyApp() {
     }
@@ -103,7 +85,10 @@ public final class AsyncHonestyApp {
             tomcat.start();
             port = tomcat.getConnector().getLocalPort();
             server = tomcat::stop;
-        } else if ("jetty".equals(mode)) {
+        } else if ("jetty".equals(mode) || mode.startsWith("handoff-")) {
+            if (mode.startsWith("handoff-")) {
+                HandOffFixtures.init(mode.substring("handoff-".length()));
+            }
             Server jetty = new Server(0);
             ServletContextHandler context = new ServletContextHandler();
             context.addServlet(new ServletHolder(new AsyncServlet()), "/*");
@@ -211,11 +196,8 @@ public final class AsyncHonestyApp {
                 // Simulates an external library future (e.g., HttpClient.sendAsync)
                 // completed on an external event-loop thread, with app code attaching
                 // a plain .thenAccept(audit) dependent.
-                final CompletableFuture<String> externalFuture = new CompletableFuture<>();
-                EXTERNAL_LIBRARY_LOOP.offer(() -> {
-                    sleepQuietly(25);
-                    externalFuture.complete("http-200");
-                });
+                final CompletableFuture<String> externalFuture =
+                        io.fakeexternal.FakeExternalHttpClient.fetchAsync(25, "http-200");
                 externalFuture.thenAccept(v -> {
                     sleepQuietly(ms);
                     AsyncTail.ran();
@@ -290,6 +272,12 @@ public final class AsyncHonestyApp {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
+                }
+            } else if (path.startsWith("/handoff-")) {
+                try {
+                    HandOffFixtures.handle(path.substring("/handoff-".length()), ms);
+                } catch (Exception e) {
+                    throw new IOException(e);
                 }
             } else if ("/untracked-schedule".equals(path)) {
                 SCHED.schedule(() -> AsyncTail.ran(), 1, TimeUnit.MILLISECONDS);
@@ -508,6 +496,7 @@ public final class AsyncHonestyApp {
     }
 
     public static void runListenerBody() {
+        sleepQuietly(HANDOFF_LISTENER_MS);
         AsyncTail.ran();
     }
 
@@ -576,5 +565,114 @@ public final class AsyncHonestyApp {
 
         cw.visitEnd();
         return cw.toByteArray();
+    }
+
+    static volatile long HANDOFF_LISTENER_MS = 0L;
+    static volatile long HANDOFF_MC_MS = 0L;
+
+    /**
+     * Separate lazily-loaded helper so referencing SubmissionPublisher does not
+     * enter HandOffFixtures' constant pool for unrelated test cases.
+     */
+    public static final class SubmissionPublisherFixture {
+        private static volatile Object publisher;
+
+        static void init() throws Exception {
+            Class<?> sp = Class.forName("java.util.concurrent.SubmissionPublisher");
+            Object p = sp.getConstructor().newInstance();
+            java.util.function.Consumer<Object> consumer = item -> {
+                sleepQuietly((Long) item);
+                AsyncTail.ran();
+            };
+            sp.getMethod("consume", java.util.function.Consumer.class).invoke(p, consumer);
+            publisher = p;
+        }
+
+        static void submit(long ms) throws Exception {
+            publisher.getClass().getMethod("submit", Object.class).invoke(publisher, Long.valueOf(ms));
+        }
+    }
+
+    public static final class HandOffFixtures {
+        private static final LinkedBlockingQueue<Runnable> APP_WORKER_QUEUE = new LinkedBlockingQueue<>();
+        private static volatile org.springframework.context.event.SimpleApplicationEventMulticaster overrideMc;
+
+        static void init(String kind) throws Exception {
+            if ("submission-publisher".equals(kind)) {
+                SubmissionPublisherFixture.init();
+            } else if ("queue-worker".equals(kind)) {
+                Thread worker = new Thread(() -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        try {
+                            APP_WORKER_QUEUE.take().run();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }, "app-queue-worker");
+                worker.setDaemon(true);
+                worker.start();
+            } else if ("kafka-produce".equals(kind)) {
+                byte[] consumerBytes = generateKafkaListenerConsumer();
+                Class<?> consumerClass = new ClassLoader(AsyncHonestyApp.class.getClassLoader()) {
+                    Class<?> define() {
+                        return defineClass(
+                                "org.springframework.kafka.listener.KafkaMessageListenerContainer$ListenerConsumer",
+                                consumerBytes, 0, consumerBytes.length);
+                    }
+                }.define();
+                final Object consumer = consumerClass.getDeclaredConstructor().newInstance();
+                final Method invokeRecord = consumerClass.getDeclaredMethod("invokeRecordListener", Object.class);
+                invokeRecord.setAccessible(true);
+                io.fakeexternal.FakeExternalHttpClient.startBrokerConsumer(150, rec -> {
+                    try {
+                        HANDOFF_LISTENER_MS = rec;
+                        invokeRecord.invoke(consumer, "record-" + rec);
+                    } catch (Exception e) {
+                        e.printStackTrace(System.err);
+                    }
+                });
+            } else if ("spring-mc-override".equals(kind)) {
+                org.springframework.context.event.SimpleApplicationEventMulticaster mc =
+                        new org.springframework.context.event.SimpleApplicationEventMulticaster() {
+                            @Override
+                            protected java.util.concurrent.Executor getTaskExecutor() {
+                                return PLAIN_POOL;
+                            }
+                        };
+                mc.addApplicationListener(ev -> {
+                    sleepQuietly(HANDOFF_MC_MS);
+                    AsyncTail.ran();
+                });
+                overrideMc = mc;
+            }
+        }
+
+        static void handle(String kind, final long ms) throws Exception {
+            if ("spring-listenable-callback".equals(kind)) {
+                final org.springframework.util.concurrent.SettableListenableFuture<String> f =
+                        new org.springframework.util.concurrent.SettableListenableFuture<>();
+                io.fakeexternal.FakeExternalHttpClient.runAsync(30, () -> f.set("sent"));
+                f.addCallback(v -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                }, ex -> { });
+            } else if ("queue-worker".equals(kind)) {
+                APP_WORKER_QUEUE.offer(() -> {
+                    sleepQuietly(ms);
+                    AsyncTail.ran();
+                });
+            } else if ("submission-publisher".equals(kind)) {
+                SubmissionPublisherFixture.submit(ms);
+            } else if ("kafka-produce".equals(kind)) {
+                io.fakeexternal.FakeExternalHttpClient.publishToBroker(ms);
+            } else if ("spring-mc-override".equals(kind)) {
+                HANDOFF_MC_MS = ms;
+                overrideMc.multicastEvent(new org.springframework.context.PayloadApplicationEvent<>("src", "x"));
+            } else {
+                throw new IllegalArgumentException("unknown handoff fixture: " + kind);
+            }
+        }
     }
 }

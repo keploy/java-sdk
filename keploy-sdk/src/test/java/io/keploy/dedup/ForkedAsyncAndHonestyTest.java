@@ -366,10 +366,15 @@ public class ForkedAsyncAndHonestyTest {
 
         // 2. Lazy in-window capture (W1 captures pool::execute, W2 invokes cached ref) flips HELLO
         //    to asyncExecutors=false before W1's COV and stays false across W2 and reconnect.
+        //    First assert Tomcat keeps asyncExecutors=true after a /clean window (proves Tomcat's
+        //    own NIO2 connector never false-latches and the subsequent latch is real).
         try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
             JsonObject initial = parseHello(app.initialHello);
             assertTrue("initial HELLO starts with asyncExecutors=true",
                     initial.get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/lazy-clean", "/clean");
+            assertTrue("Tomcat must keep asyncExecutors=true after /clean window: " + app.lastHello,
+                    parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
             String cov1 = app.runHttpTest("ts/lazy-w1", "/lazy-method-ref?ms=50");
             assertTrue("W1 lazy capture must contaminate COV: " + cov1,
                     cov1.contains("untracked-executor:"));
@@ -385,6 +390,9 @@ public class ForkedAsyncAndHonestyTest {
         // 3. Spring SimpleApplicationEventMulticaster.setTaskExecutor(plainPool) drops asyncExecutors=false.
         try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
             assertTrue(parseHello(app.initialHello).get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/mc-clean", "/clean");
+            assertTrue("Tomcat must keep asyncExecutors=true after /clean before multicaster test: " + app.lastHello,
+                    parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
             app.runHttpTest("ts/spring-mc", "/spring-multicaster-plain");
             JsonObject afterMc = parseHello(app.lastHello);
             assertFalse("Spring SimpleApplicationEventMulticaster with plain JDK pool must drop asyncExecutors=false: "
@@ -394,10 +402,67 @@ public class ForkedAsyncAndHonestyTest {
         // 4. JDK AsynchronousFileChannel usage drops asyncExecutors=false.
         try (ForkedApp app = startFork("tomcat", "2000", false, false, null, null)) {
             assertTrue(parseHello(app.initialHello).get("asyncExecutors").getAsBoolean());
+            app.runHttpTest("ts/nio-clean", "/clean");
+            assertTrue("Tomcat must keep asyncExecutors=true after /clean before NIO test: " + app.lastHello,
+                    parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
             app.runHttpTest("ts/nio-afc", "/nio-async-file");
             JsonObject afterNio = parseHello(app.lastHello);
             assertFalse("JDK AsynchronousFileChannel must drop asyncExecutors=false: " + app.lastHello,
                     afterNio.get("asyncExecutors").getAsBoolean());
+        }
+    }
+
+    @Test(timeout = 300000)
+    public void forkedLibraryAndJdkHandOffsNeverSilentlyDropAsyncLines() throws Exception {
+        String spec = System.getProperty("java.specification.version");
+        int major = spec.startsWith("1.") ? 8 : Integer.parseInt(spec);
+        String[][] cases = {
+            {"kafka-produce", "8"},
+            {"spring-listenable-callback", "8"},
+            {"submission-publisher", "9"},
+            {"spring-mc-override", "8"},
+            {"queue-worker", "8"},
+        };
+        for (boolean prefixMode : new boolean[] {true, false}) {
+            for (String[] tc : cases) {
+                String name = tc[0];
+                if (major < Integer.parseInt(tc[1])) {
+                    continue;
+                }
+                try (ForkedApp app = startFork("handoff-" + name, "80", prefixMode, false, null, null)) {
+                    app.runHttpTest("ho/" + name + "-warm", "/clean");
+                    if (!"submission-publisher".equals(name)) {
+                        assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                                + " baseline /clean must keep asyncExecutors=true: " + app.lastHello,
+                                parseHello(app.lastHello).get("asyncExecutors").getAsBoolean());
+                    }
+                    String cov1 = app.runHttpTest("ho/" + name + "-w1", "/handoff-" + name + "?ms=400");
+                    JsonObject helloAfter1 = parseHello(app.lastHello);
+                    String cov2 = app.runHttpTest("ho/" + name + "-next", "/clean");
+                    Thread.sleep(700);
+                    String cov3 = app.runHttpTest("ho/" + name + "-after700", "/clean");
+                    JsonObject helloEnd = parseHello(app.lastHello);
+                    boolean flagged1 = cov1.contains("\"windowCut\":true")
+                            || cov1.contains("\"contaminated\"")
+                            || cov1.contains("\"unverified\"");
+                    boolean asyncOff = !helloAfter1.get("asyncExecutors").getAsBoolean()
+                            || !helloEnd.get("asyncExecutors").getAsBoolean();
+                    assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                            + " must NEVER be silent-missing: W1=" + cov1 + " helloAfter1=" + helloAfter1
+                            + " helloEnd=" + helloEnd,
+                            flagged1 || asyncOff);
+                    for (String later : new String[] {cov2, cov3}) {
+                        boolean laterFlagged = later.contains("\"windowCut\":true")
+                                || later.contains("\"contaminated\"")
+                                || later.contains("\"unverified\"");
+                        if (!asyncOff && later.contains("\"" + ASYNC_TAIL + "\"")) {
+                            assertTrue("mode=" + (prefixMode ? "prefix" : "index") + " case=" + name
+                                    + " clean later window must not silently hold async lines: " + later,
+                                    laterFlagged);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -422,20 +487,17 @@ public class ForkedAsyncAndHonestyTest {
     private ForkedApp startFork(String mode, String endWait, boolean externalJacocoPrefixMode,
             boolean asyncCallSitesOff, File wholeJarOverride, String extraClassDirs) throws Exception {
         File classes = tmp.newFolder();
-        for (Class<?> cls : new Class<?>[] {
-                AsyncHonestyApp.class, AsyncHonestyApp.AsyncServlet.class,
-                AsyncHonestyApp.PreCapturedDispatcher.class, AsyncHonestyApp.LazyInWindowDispatcher.class,
-                AsyncHonestyApp.NioAsyncFileHelper.class,
-                AsyncHonestyApp.SerializableOnlyExecutor.class, AsyncHonestyApp.ConcreteCustomPool.class,
-                AsyncHonestyApp.MyWorkerThread.class, AsyncHonestyApp.VirtualThreadLauncher.class,
-                AsyncHonestyApp.OrdersListenerBean.class, AsyncHonestyApp.FakeKafkaProps.class,
-                AsyncTail.class, Tail.class
-        }) {
-            String key = cls.getName().replace('.', '/') + ".class";
-            File copy = new File(classes, key);
-            copy.getParentFile().mkdirs();
-            try (InputStream in = cls.getClassLoader().getResourceAsStream(key)) {
-                Files.copy(in, copy.toPath());
+        java.nio.file.Path serversDir = new File(AsyncHonestyApp.class.getProtectionDomain().getCodeSource()
+                .getLocation().getPath()).toPath().resolve("org/example/servers");
+        java.nio.file.Path dstServers = classes.toPath().resolve("org/example/servers");
+        Files.createDirectories(dstServers);
+        try (java.util.stream.Stream<java.nio.file.Path> entries = Files.list(serversDir)) {
+            for (java.nio.file.Path p : (Iterable<java.nio.file.Path>) entries::iterator) {
+                String fn = p.getFileName().toString();
+                if (fn.endsWith(".class") && (fn.startsWith("AsyncHonestyApp")
+                        || fn.equals("AsyncTail.class") || fn.equals("Tail.class"))) {
+                    Files.copy(p, dstServers.resolve(fn));
+                }
             }
         }
 

@@ -623,9 +623,9 @@ done
 tomcat_core="${work_dir}/tomcat-libs/tomcat-embed-core-${tomcat_version}.jar"
 tomcat_libs="$(find "${work_dir}/tomcat-libs" -name '*.jar' | sort | paste -sd: -)"
 
-mkdir -p "${work_dir}/tomcat-src/smoke" "${work_dir}/tomcat-classes"
-cat > "${work_dir}/tomcat-src/smoke/TomcatHarness.java" <<'JAVA'
-package smoke;
+mkdir -p "${work_dir}/tomcat-src/smoke/app" "${work_dir}/tomcat-classes"
+cat > "${work_dir}/tomcat-src/smoke/app/TomcatHarness.java" <<'JAVA'
+package smoke.app;
 
 import org.apache.catalina.Context;
 import org.apache.catalina.startup.Tomcat;
@@ -764,7 +764,7 @@ public final class TomcatHarness {
         if (!"hello".equals(body)
                 || !json.contains("\"id\":\"" + id + "\"")
                 || !json.contains("\"" + ADAPTER + "\":[")
-                || !json.contains("\"smoke/TomcatHarness$Tail\":[")
+                || !json.contains("\"smoke/app/TomcatHarness$Tail\":[")
                 || json.contains("\"classMismatch\"")
                 || json.contains("\"unverified\"")
                 || json.contains("\"contaminated\"")
@@ -801,7 +801,7 @@ public final class TomcatHarness {
             output.flush();
             String ack = readAll(socket.getInputStream());
             String pattern = "^ACK proto=3 caps=windowCut=true,contaminated=true,classMismatch=true,"
-                    + "background=(true|false),ackId=true,asyncExecutors=(true|false),"
+                    + "background=(true|false),ackId=true,asyncExecutors=true,"
                     + "listenerContamination=(true|false)\\n$";
             if (!ack.matches(pattern)) {
                 throw new IllegalStateException("unexpected ACK for " + command + ": " + ack);
@@ -829,7 +829,7 @@ public final class TomcatHarness {
 }
 JAVA
 javac -cp "${tomcat_libs}:${agent_jar}" -d "${work_dir}/tomcat-classes" \
-  "${work_dir}/tomcat-src/smoke/TomcatHarness.java"
+  "${work_dir}/tomcat-src/smoke/app/TomcatHarness.java"
 
 tomcat_log="${work_dir}/tomcat-jacoco-after.log"
 tomcat_rc=0
@@ -838,9 +838,9 @@ KEPLOY_JAVA_CLASS_DIRS="${work_dir}/tomcat-classes:${tomcat_core}" \
 run_smoke "tomcat-jacoco-after" \
   timeout -k 10 180 java \
     -javaagent:"${agent_jar}" \
-    -javaagent:"${jacoco_jar}=includes=smoke.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
+    -javaagent:"${jacoco_jar}=includes=smoke.app.*:org.apache.catalina.connector.CoyoteAdapter,output=none" \
     -cp "${work_dir}/tomcat-classes:${tomcat_libs}:${agent_jar}" \
-    smoke.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" 2>"${tomcat_log}" || tomcat_rc=$?
+    smoke.app.TomcatHarness "tomcat-jacoco-after" "${work_dir}/tomcat-base" 2>"${tomcat_log}" || tomcat_rc=$?
 if [[ "${tomcat_rc}" -eq 124 || "${tomcat_rc}" -eq 137 ]]; then
   cat "${tomcat_log}" >&2
   echo "tomcat-jacoco-after: the Tomcat harness was killed or did not end within 180 s (exit ${tomcat_rc}; 137 can also be the OOM killer)" >&2

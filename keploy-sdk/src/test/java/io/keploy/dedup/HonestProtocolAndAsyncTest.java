@@ -4823,7 +4823,50 @@ public class HonestProtocolAndAsyncTest {
             assertFalse("HELLO must report asyncExecutors=false after plain-pool multicaster",
                     hMc.get("asyncExecutors").getAsBoolean());
 
-            // Inside an active window, it also contaminates!
+            // Initialized hooked Spring ThreadPoolTaskExecutor with non-AbortPolicy (orders() == true)
+            // MUST be rejected by isHookedSpringExecutorOrPendingInit and latch (kills MC_PENDING_ALLOW)!
+            org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor badSpringPool =
+                    new org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor();
+            badSpringPool.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+            badSpringPool.initialize();
+            try {
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+                RequestGate.disarm();
+                assertFalse("initialized Spring pool failing orders() must be rejected",
+                        OrderedPools.isHookedSpringExecutorOrPendingInit(badSpringPool));
+                setExec.invoke(mc, badSpringPool);
+                assertTrue("initialized Spring pool failing orders() must latch via setTaskExecutor",
+                        KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+            } finally {
+                badSpringPool.shutdown();
+            }
+
+            // Subclass overriding getTaskExecutor() to return a plain JDK pool (never calling setTaskExecutor)
+            // MUST be caught by the multicastEvent() hook!
+            KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+            RequestGate.disarm();
+            RequestGate.open("mc-override-window", null);
+            Object overrideMc = hookedMulticaster.getConstructor().newInstance();
+            // Create a small dynamic subclass in the same loader overriding getTaskExecutor() -> plainPool:
+            java.lang.reflect.Field taskExecField = hookedMulticaster.getDeclaredField("taskExecutor");
+            taskExecField.setAccessible(true);
+            taskExecField.set(overrideMc, plainPool);
+            java.lang.reflect.Method multicast = hookedMulticaster.getMethod("multicastEvent",
+                    org.springframework.context.ApplicationEvent.class);
+            Object tokOverride = RequestGate.enter();
+            try {
+                multicast.invoke(overrideMc,
+                        new org.springframework.context.PayloadApplicationEvent<String>("src", "ev"));
+            } finally {
+                RequestGate.exit(tokOverride);
+            }
+            RequestGate.WindowOutcome overrideOut = RequestGate.awaitWindow(TimeUnit.SECONDS.toNanos(2), true);
+            assertTrue("multicastEvent with plain taskExecutor must contaminate: " + overrideOut.contaminations,
+                    overrideOut.contaminations.contains("untracked-executor:" + ThreadPoolExecutor.class.getName()));
+            assertTrue("multicastEvent with plain taskExecutor must latch asyncExecutors=false",
+                    KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+
+            // Inside an active window, setTaskExecutor also contaminates!
             KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
             RequestGate.disarm();
             RequestGate.open("mc-plain-window", null);
@@ -4844,8 +4887,30 @@ public class HonestProtocolAndAsyncTest {
             plainPool.shutdownNow();
         }
 
-        // 2. Class-load detection for RxJava 1/2/3, Kotlin coroutines, OkHttp Dispatcher, and NIO AsynchronousChannelGroup.
+        // 2. JVM-wide JDK class loads (e.g. Tomcat 9's NIO2 connector loading AsynchronousSocketChannel /
+        //    AsynchronousServerSocketChannel) must NOT false-latch asyncExecutors=false!
         ServerEntries transformer = new ServerEntries(true, Collections.singleton("com/acme/App"), null);
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        transformer.transform(getClass().getClassLoader(), "java/nio/channels/AsynchronousSocketChannel", null, null,
+                new byte[0]);
+        transformer.transform(getClass().getClassLoader(), "java/nio/channels/AsynchronousServerSocketChannel", null,
+                null, new byte[0]);
+        assertFalse("JVM-wide NIO2 channel loads (Tomcat connector) must NOT latch hasUnhookedAsyncDispatcher",
+                ServerEntries.hasUnhookedAsyncDispatcher());
+        JsonObject hTomcat = parseHello(connectAndReadHello(true));
+        assertTrue("HELLO must keep asyncExecutors=true after Tomcat NIO2 class loads",
+                hTomcat.get("asyncExecutors").getAsBoolean());
+
+        // 2b. asyncHookFailed must drop asyncExecutors=false in HELLO (kills CAPS_HOOKFAIL)!
+        ServerEntries.setHookStatusForTests(false, false, false, false, true);
+        JsonObject hAsyncHookFail = parseHello(connectAndReadHello(true));
+        assertFalse("asyncHookFailed must declare asyncExecutors=false",
+                hAsyncHookFail.get("asyncExecutors").getAsBoolean());
+        ServerEntries.setHookStatusForTests(false, false, false, false, false);
+
+        // 3. App-class constant-pool scan (tag 7 class refs AND tag 8 string refs) catches RxJava 1/2/3,
+        //    Kotlin coroutines, OkHttp Dispatcher, NIO Asynchronous*, and SubmissionPublisher!
         String[] unhookedInternalNames = new String[] {
             "rx/schedulers/Schedulers",
             "io/reactivex/schedulers/Schedulers",
@@ -4853,20 +4918,30 @@ public class HonestProtocolAndAsyncTest {
             "kotlinx/coroutines/Dispatchers",
             "okhttp3/Dispatcher",
             "java/nio/channels/AsynchronousChannelGroup",
-            "sun/nio/ch/SimpleAsynchronousFileChannelImpl"
+            "java/util/concurrent/SubmissionPublisher"
         };
         for (String internalName : unhookedInternalNames) {
             KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
             ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
-            transformer.transform(getClass().getClassLoader(), internalName, null, null, new byte[0]);
-            assertTrue("loading " + internalName + " must mark hasUnhookedAsyncDispatcher",
+            byte[] appReferencingClass = generateAppReferencingClass("com/acme/App", internalName);
+            transformer.transform(getClass().getClassLoader(), "com/acme/App", null, null, appReferencingClass);
+            assertTrue("app class referencing " + internalName + " must mark hasUnhookedAsyncDispatcher",
                     ServerEntries.hasUnhookedAsyncDispatcher());
             JsonObject h = parseHello(connectAndReadHello(true));
-            assertFalse("HELLO must report asyncExecutors=false after loading " + internalName,
+            assertFalse("HELLO must report asyncExecutors=false when app references " + internalName,
                     h.get("asyncExecutors").getAsBoolean());
         }
 
-        // 3. App-class constant-pool scan catches JDK AsynchronousFileChannel even when JDK class loaded before premain!
+        // 3b. Reflective Class.forName("java.util.concurrent.SubmissionPublisher") string literal in app class!
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        byte[] reflectiveSpApp = generateAppWithStringConstant("com/acme/App",
+                "java.util.concurrent.SubmissionPublisher");
+        transformer.transform(getClass().getClassLoader(), "com/acme/App", null, null, reflectiveSpApp);
+        assertTrue("reflective SubmissionPublisher literal in app class must mark hasUnhookedAsyncDispatcher",
+                ServerEntries.hasUnhookedAsyncDispatcher());
+
+        // 3c. App-class constant-pool scan catches JDK AsynchronousFileChannel even when JDK class loaded before premain!
         KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
         ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
         byte[] nioAppBytes = readClassBytes(FakeNioAsyncChannelApp.class);
@@ -4876,6 +4951,56 @@ public class HonestProtocolAndAsyncTest {
         JsonObject hNio = parseHello(connectAndReadHello(true));
         assertFalse("HELLO must report asyncExecutors=false when app uses AsynchronousFileChannel",
                 hNio.get("asyncExecutors").getAsBoolean());
+
+        // 4. Untracked handle queue overflow (>64 live handles) permanently latches asyncExecutors=false!
+        KeployDedupAgent.observedPreCapturedUntrackedExecutor.set(false);
+        ServerEntries.restoreUnhookedAsyncDispatchers(Collections.<String>emptySet());
+        RequestGate.disarm();
+        RequestGate.open("overflow-window", null);
+        Object tokOv = RequestGate.enter();
+        try {
+            for (int i = 0; i < 66; i++) {
+                java.util.concurrent.CompletableFuture<Void> pending = new java.util.concurrent.CompletableFuture<>();
+                RequestGate.trackUntrackedFuture(pending, "untracked-async:schedule");
+            }
+        } finally {
+            RequestGate.exit(tokOv);
+        }
+        RequestGate.awaitWindow(TimeUnit.MILLISECONDS.toNanos(50), true);
+        assertTrue(">64 live untracked handles overflow must latch asyncExecutors=false",
+                KeployDedupAgent.observedPreCapturedUntrackedExecutor.get());
+    }
+
+    private static byte[] generateAppReferencingClass(String appInternalName, String targetInternalName) {
+        org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(0);
+        cw.visit(org.objectweb.asm.Opcodes.V1_8, org.objectweb.asm.Opcodes.ACC_PUBLIC, appInternalName, null,
+                "java/lang/Object", null);
+        org.objectweb.asm.MethodVisitor mv = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "ref", "()Ljava/lang/Class;", null, null);
+        mv.visitCode();
+        mv.visitLdcInsn(org.objectweb.asm.Type.getObjectType(targetInternalName));
+        mv.visitInsn(org.objectweb.asm.Opcodes.ARETURN);
+        mv.visitMaxs(1, 0);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static byte[] generateAppWithStringConstant(String appInternalName, String literal) {
+        org.objectweb.asm.ClassWriter cw = new org.objectweb.asm.ClassWriter(0);
+        cw.visit(org.objectweb.asm.Opcodes.V1_8, org.objectweb.asm.Opcodes.ACC_PUBLIC, appInternalName, null,
+                "java/lang/Object", null);
+        org.objectweb.asm.MethodVisitor mv = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "name", "()Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitLdcInsn(literal);
+        mv.visitInsn(org.objectweb.asm.Opcodes.ARETURN);
+        mv.visitMaxs(1, 0);
+        mv.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
     }
 
     @Test(timeout = 60000)
@@ -4921,8 +5046,10 @@ public class HonestProtocolAndAsyncTest {
             KeployDedupAgent.testHelloFailure = new RuntimeException("simulated mid-session HELLO refresh failure");
             try {
                 send(out, "END ts/refresh-fail");
-                // Must emit fail-closed all-false fallback HELLO before COV!
+                // Must emit fail-closed all-false fallback HELLO preserving cached identity before COV!
                 JsonObject fallback = parseHello(in.readLine());
+                assertEquals("mid-session fallback HELLO must preserve cached jvmNonce",
+                        KeployDedupAgent.jvmNonce(), fallback.get("jvmNonce").getAsString());
                 assertFalse("fallback HELLO must set windowCut=false", fallback.get("windowCut").getAsBoolean());
                 assertFalse("fallback HELLO must set asyncExecutors=false",
                         fallback.get("asyncExecutors").getAsBoolean());
@@ -4933,6 +5060,28 @@ public class HonestProtocolAndAsyncTest {
             } finally {
                 KeployDedupAgent.testHelloFailure = null;
             }
+        }
+
+        // Also test initial-connect HELLO failure (before any identity was cached) ->
+        // exercises the static FAIL_CLOSED_FALLBACK_HELLO constant directly.
+        KeployDedupAgent.stop();
+        KeployDedupAgent.testHelloFailure = new RuntimeException("simulated initial-connect HELLO failure");
+        try {
+            assertTrue(KeployDedupAgent.start());
+            try (Socket sdk2 = collector.accept()) {
+                sdk2.setSoTimeout(30000);
+                BufferedReader in2 = new BufferedReader(
+                        new InputStreamReader(sdk2.getInputStream(), StandardCharsets.UTF_8));
+                JsonObject initialFallback = parseHello(in2.readLine());
+                assertEquals("initial fallback HELLO has empty jvmNonce when no identity was cached",
+                        "", initialFallback.get("jvmNonce").getAsString());
+                assertFalse("initial fallback HELLO must set windowCut=false",
+                        initialFallback.get("windowCut").getAsBoolean());
+                assertFalse("initial fallback HELLO must set asyncExecutors=false",
+                        initialFallback.get("asyncExecutors").getAsBoolean());
+            }
+        } finally {
+            KeployDedupAgent.testHelloFailure = null;
         }
     }
 

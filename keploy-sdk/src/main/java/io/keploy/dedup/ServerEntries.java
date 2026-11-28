@@ -152,7 +152,24 @@ final class ServerEntries implements ClassFileTransformer {
                 "JDK AsynchronousServerSocketChannel");
         UNHOOKED_ASYNC_DISPATCHERS.put("sun/nio/ch/SimpleAsynchronousFileChannelImpl", "JDK AsynchronousFileChannel");
         UNHOOKED_ASYNC_DISPATCHERS.put("sun/nio/ch/AsynchronousChannelGroupImpl", "JDK AsynchronousChannelGroup");
+        UNHOOKED_ASYNC_DISPATCHERS.put("java/util/concurrent/SubmissionPublisher", "JDK SubmissionPublisher");
     }
+
+    private static final Set<String> BLOCKING_QUEUE_OWNERS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "java/util/concurrent/BlockingQueue",
+            "java/util/concurrent/BlockingDeque",
+            "java/util/concurrent/TransferQueue",
+            "java/util/concurrent/LinkedBlockingQueue",
+            "java/util/concurrent/ArrayBlockingQueue",
+            "java/util/concurrent/LinkedBlockingDeque",
+            "java/util/concurrent/PriorityBlockingQueue",
+            "java/util/concurrent/DelayQueue",
+            "java/util/concurrent/SynchronousQueue",
+            "java/util/concurrent/LinkedTransferQueue")));
+
+    private static final Set<String> BLOCKING_QUEUE_ENQUEUE_METHODS = Collections.unmodifiableSet(new HashSet<>(
+            Arrays.asList("offer", "put", "add", "offerFirst", "offerLast", "putFirst", "putLast",
+                    "addFirst", "addLast", "transfer", "tryTransfer")));
 
     private static final String SPRING_EVENT_MULTICASTER =
             "org/springframework/context/event/SimpleApplicationEventMulticaster";
@@ -204,6 +221,27 @@ final class ServerEntries implements ClassFileTransformer {
             "java/util/Timer",
             "java/util/TimerTask",
             "org/springframework/scheduling/TaskScheduler",
+            "org/springframework/util/concurrent/ListenableFuture",
+            "org/springframework/util/concurrent/SettableListenableFuture",
+            "java/util/concurrent/SubmissionPublisher",
+            "java/util/concurrent/BlockingQueue",
+            "java/util/concurrent/BlockingDeque",
+            "java/util/concurrent/TransferQueue",
+            "java/util/concurrent/LinkedBlockingQueue",
+            "java/util/concurrent/ArrayBlockingQueue",
+            "java/util/concurrent/LinkedBlockingDeque",
+            "java/util/concurrent/PriorityBlockingQueue",
+            "java/util/concurrent/DelayQueue",
+            "java/util/concurrent/SynchronousQueue",
+            "java/util/concurrent/LinkedTransferQueue",
+            "java/util/Queue",
+            "org/springframework/kafka/core/KafkaTemplate",
+            "org/apache/kafka/clients/producer/KafkaProducer",
+            "org/apache/kafka/clients/producer/Producer",
+            "org/springframework/amqp/rabbit/core/RabbitTemplate",
+            "org/springframework/amqp/core/AmqpTemplate",
+            "org/springframework/jms/core/JmsTemplate",
+            "org/springframework/jms/core/JmsOperations",
             "com/google/common/util/concurrent/Futures",
             "com/google/common/util/concurrent/ListenableFuture",
             "reactor/core/publisher/Mono",
@@ -221,7 +259,9 @@ final class ServerEntries implements ClassFileTransformer {
             "schedule", "scheduleAtFixedRate", "scheduleWithFixedDelay",
             "invokeAny", "fork", "subscribe", "start", "startVirtualThread", "cancel",
             "addListener", "addCallback", "transform", "transformAsync", "catching", "catchingAsync",
-            "poll", "basicConsume", "receive", "setMessageListener")));
+            "poll", "basicConsume", "receive", "setMessageListener",
+            "offer", "put", "transfer", "tryTransfer",
+            "send", "sendDefault", "convertAndSend", "convertSendAndReceive", "sendAndReceive")));
 
     // CompletableFuture *Async instance methods rewritten to RequestGate.
     private static final Map<String, Set<String>> CF_ASYNC_INSTANCE_METHODS =
@@ -451,9 +491,14 @@ final class ServerEntries implements ClassFileTransformer {
 
     static void setHookStatusForTests(boolean serverFailed, boolean listenerFailed, boolean jpmsSkipped,
             boolean rewriteFailed) {
+        setHookStatusForTests(serverFailed, listenerFailed, jpmsSkipped, rewriteFailed, false);
+    }
+
+    static void setHookStatusForTests(boolean serverFailed, boolean listenerFailed, boolean jpmsSkipped,
+            boolean rewriteFailed, boolean asyncFailed) {
         serverHookFailed = serverFailed;
         listenerHookFailed = listenerFailed;
-        asyncHookFailed = false;
+        asyncHookFailed = asyncFailed;
         jpmsGuardTriggered = jpmsSkipped;
         appRewriteFailed = rewriteFailed;
         SEEN_UNHOOKED_CONSUMERS.clear();
@@ -485,19 +530,20 @@ final class ServerEntries implements ClassFileTransformer {
             if (unhookedConsumer != null) {
                 SEEN_UNHOOKED_CONSUMERS.add(unhookedConsumer);
             }
-            String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(className);
-            if (unhookedAsync != null) {
-                SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(unhookedAsync);
-            }
+            // Decide unhooked async dispatchers strictly from app-code references
+            // (scanUnhookedReferences below), NEVER from JVM-wide class loads —
+            // otherwise Tomcat's own NIO2 connector loading AsynchronousSocketChannel
+            // / AsynchronousServerSocketChannel false-latches asyncExecutors=false
+            // on every Tomcat / Spring Boot app.
             if (shouldRewriteExecutorCalls(className)) {
-                scanUnhookedReferences(classfileBuffer, false);
+                scanUnhookedReferences(className, classfileBuffer, false);
                 if (!canAccessGate(loader, protectionDomain)) {
                     if (seesGate(loader)) {
                         jpmsGuardTriggered = true;
                     } else {
                         appRewriteFailed = true;
                     }
-                    scanUnhookedReferences(classfileBuffer, true);
+                    scanUnhookedReferences(className, classfileBuffer, true);
                     return null;
                 }
                 try {
@@ -516,10 +562,9 @@ final class ServerEntries implements ClassFileTransformer {
                 // is configured, read-only CP scan still detects direct raw
                 // Kafka/RabbitMQ/JMS consumer calls and unhooked async
                 // dispatchers (RxJava, Kotlin coroutines, OkHttp, NIO
-                // Asynchronous*Channel) so capabilities stay honest without
-                // modifying bytecode (skipping known JMS/RabbitMQ pooling
-                // wrappers used by Spring Boot).
-                scanUnhookedReferences(classfileBuffer, true);
+                // Asynchronous*Channel, SubmissionPublisher) referenced by app
+                // classes so capabilities stay honest without modifying bytecode.
+                scanUnhookedReferences(className, classfileBuffer, true);
             }
             return null;
         }
@@ -977,12 +1022,21 @@ final class ServerEntries implements ClassFileTransformer {
             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                     String[] exceptions) {
                 MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
-                if (mv == null || !"setTaskExecutor".equals(name)
-                        || !"(Ljava/util/concurrent/Executor;)V".equals(descriptor)
-                        || (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_STATIC)) != 0) {
+                if (mv == null || (access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE | Opcodes.ACC_STATIC)) != 0) {
                     return mv;
                 }
-                found[0] = true;
+                final boolean isSetExec = "setTaskExecutor".equals(name)
+                        && "(Ljava/util/concurrent/Executor;)V".equals(descriptor);
+                final boolean isMulticast = "multicastEvent".equals(name)
+                        && ("(Lorg/springframework/context/ApplicationEvent;)V".equals(descriptor)
+                                || "(Lorg/springframework/context/ApplicationEvent;Lorg/springframework/core/ResolvableType;)V"
+                                        .equals(descriptor));
+                if (!isSetExec && !isMulticast) {
+                    return mv;
+                }
+                if (isSetExec) {
+                    found[0] = true;
+                }
                 return new MethodVisitor(Opcodes.ASM9, mv) {
                     private boolean injected;
 
@@ -991,7 +1045,15 @@ final class ServerEntries implements ClassFileTransformer {
                         super.visitCode();
                         if (!injected) {
                             injected = true;
-                            super.visitVarInsn(Opcodes.ALOAD, 1);
+                            if (isSetExec) {
+                                super.visitVarInsn(Opcodes.ALOAD, 1);
+                            } else {
+                                // Invoke this.getTaskExecutor() virtually so subclasses overriding
+                                // getTaskExecutor() without calling setTaskExecutor() are still caught.
+                                super.visitVarInsn(Opcodes.ALOAD, 0);
+                                super.visitMethodInsn(Opcodes.INVOKEVIRTUAL, SPRING_EVENT_MULTICASTER,
+                                        "getTaskExecutor", "()Ljava/util/concurrent/Executor;", false);
+                            }
                             super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE,
                                     "noteSpringMulticasterTaskExecutor", "(Ljava/lang/Object;)V", false);
                         }
@@ -1020,7 +1082,16 @@ final class ServerEntries implements ClassFileTransformer {
         return alreadyHooked[0] ? classfile : writer.toByteArray();
     }
 
-    private static void scanUnhookedReferences(byte[] classfile, boolean includeRawConsumers) {
+    private static void recordUnhookedAsyncDispatcher(String dispatcher, String sourceClass) {
+        if (SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(dispatcher)) {
+            String from = (sourceClass == null || sourceClass.isEmpty())
+                    ? "<unknown>" : sourceClass.replace('/', '.');
+            LOGGER.log(Level.INFO, "Keploy dedup: observed app reference to unhooked async dispatcher "
+                    + dispatcher + " in " + from + "; declaring asyncExecutors=false");
+        }
+    }
+
+    private static void scanUnhookedReferences(String className, byte[] classfile, boolean includeRawConsumers) {
         if (classfile == null || classfile.length < 16) {
             return;
         }
@@ -1031,14 +1102,29 @@ final class ServerEntries implements ClassFileTransformer {
             boolean hasRawConsumerOwner = false;
             for (int i = 1; i < itemCount; i++) {
                 int offset = reader.getItem(i);
-                if (offset != 0 && reader.readByte(offset - 1) == 7) {
+                if (offset == 0) {
+                    continue;
+                }
+                int tag = reader.readByte(offset - 1);
+                if (tag == 7) {
                     String cls = reader.readUTF8(offset, buf);
                     String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(cls);
                     if (unhookedAsync != null) {
-                        SEEN_UNHOOKED_ASYNC_DISPATCHERS.add(unhookedAsync);
+                        recordUnhookedAsyncDispatcher(unhookedAsync, className);
                     }
                     if (includeRawConsumers && RAW_CONSUMER_OWNERS.contains(cls)) {
                         hasRawConsumerOwner = true;
+                    }
+                } else if (tag == 8) {
+                    // Catch reflective Class.forName("java.util.concurrent.SubmissionPublisher")
+                    // and similar string-literal lookups in app classes.
+                    String literal = reader.readUTF8(offset, buf);
+                    if (literal != null && literal.indexOf('.') > 0) {
+                        String slash = literal.replace('.', '/');
+                        String unhookedAsync = UNHOOKED_ASYNC_DISPATCHERS.get(slash);
+                        if (unhookedAsync != null) {
+                            recordUnhookedAsyncDispatcher(unhookedAsync, className);
+                        }
                     }
                 }
             }
@@ -1110,6 +1196,44 @@ final class ServerEntries implements ClassFileTransformer {
         return "java/util/Timer".equals(owner)
                 && ("schedule".equals(mname) || "scheduleAtFixedRate".equals(mname))
                 && desc.startsWith("(Ljava/util/TimerTask;");
+    }
+
+    private static boolean isSpringListenableFutureCallback(int opcode, String owner, String mname, String desc) {
+        return (opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
+                && "addCallback".equals(mname)
+                && desc != null
+                && desc.startsWith("(Lorg/springframework/util/concurrent/");
+    }
+
+    private static boolean isSubmissionPublisherCall(String owner, String mname) {
+        return "java/util/concurrent/SubmissionPublisher".equals(owner)
+                && ("submit".equals(mname) || "offer".equals(mname));
+    }
+
+    private static boolean isBlockingQueueEnqueue(String owner, String mname) {
+        return BLOCKING_QUEUE_OWNERS.contains(owner) && BLOCKING_QUEUE_ENQUEUE_METHODS.contains(mname);
+    }
+
+    private static boolean isMessagingProducerCall(String owner, String mname) {
+        if (owner == null || mname == null) {
+            return false;
+        }
+        if ("org/springframework/kafka/core/KafkaTemplate".equals(owner)) {
+            return "send".equals(mname) || "sendDefault".equals(mname);
+        }
+        if ("org/apache/kafka/clients/producer/KafkaProducer".equals(owner)
+                || "org/apache/kafka/clients/producer/Producer".equals(owner)) {
+            return "send".equals(mname);
+        }
+        if ("org/springframework/amqp/rabbit/core/RabbitTemplate".equals(owner)
+                || "org/springframework/amqp/core/AmqpTemplate".equals(owner)) {
+            return "send".equals(mname) || "convertAndSend".equals(mname) || "convertSendAndReceive".equals(mname);
+        }
+        if ("org/springframework/jms/core/JmsTemplate".equals(owner)
+                || "org/springframework/jms/core/JmsOperations".equals(owner)) {
+            return "send".equals(mname) || "convertAndSend".equals(mname) || "sendAndReceive".equals(mname);
+        }
+        return false;
     }
 
     private static boolean isGuavaAsyncCall(int opcode, String owner, String mname, String desc) {
@@ -1223,6 +1347,13 @@ final class ServerEntries implements ClassFileTransformer {
             return true;
         }
         if ("start".equals(mname) && "(Ljava/lang/Runnable;)Ljava/lang/Thread;".equals(desc)) {
+            return true;
+        }
+        if (isSubmissionPublisherCall(owner, mname)
+                || isBlockingQueueEnqueue(owner, mname)
+                || isMessagingProducerCall(owner, mname)
+                || ("addCallback".equals(mname) && desc != null
+                        && desc.startsWith("(Lorg/springframework/util/concurrent/"))) {
             return true;
         }
         return isReactorSubscribe(owner, mname);
@@ -1579,6 +1710,24 @@ final class ServerEntries implements ClassFileTransformer {
                         // Flag-only async submission sites (task untouched, 100% app-safe).
                         if (isGuavaAsyncCall(opcode, owner, mname, desc)) {
                             emitUntrackedFlag("untracked-async:guava-future");
+                        } else if (isSpringListenableFutureCallback(opcode, owner, mname, desc)) {
+                            emitUntrackedFlag("untracked-async:spring-listenable-future");
+                        } else if (isSubmissionPublisherCall(owner, mname)) {
+                            emitUntrackedFlag("untracked-async:submission-publisher");
+                        } else if (isBlockingQueueEnqueue(owner, mname)) {
+                            emitUntrackedFlag("untracked-async:blocking-queue");
+                        } else if (isMessagingProducerCall(owner, mname)) {
+                            emitUntrackedFlag("untracked-async:messaging-produce");
+                        } else if ((opcode == Opcodes.INVOKEINTERFACE || opcode == Opcodes.INVOKEVIRTUAL)
+                                && "java/util/Queue".equals(owner)
+                                && ("offer".equals(mname) || "add".equals(mname))
+                                && "(Ljava/lang/Object;)Z".equals(desc)) {
+                            changed[0] = true;
+                            ensureExtraStack(2);
+                            super.visitInsn(Opcodes.DUP2);
+                            super.visitInsn(Opcodes.POP);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, GATE, "noteIfBlockingQueue",
+                                    "(Ljava/lang/Object;)V", false);
                         } else if (opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE) {
                             if (isSingleArgExecutorExecute(mname, desc)) {
                                 // Decide at runtime by actual receiver (must be java.util.concurrent.Executor,

@@ -112,6 +112,14 @@ public final class JobGate {
         try {
             run = new Run(name(job, kind), CURRENT.get(), false, 0L);
             begin(run);
+            if ("kafka".equals(kind) || "listener".equals(kind)) {
+                // An async message listener firing during a round may be consuming
+                // a message produced by an earlier HTTP test whose window already
+                // closed; fail closed on asyncExecutors so earlier windows are not
+                // hard-removed without their downstream listener coverage.
+                KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                        "async message listener (" + run.name + ")", true);
+            }
         } catch (Throwable t) {
             // The job runs on. A run counted as going on before this (an
             // OutOfMemoryError on the job's thread as the window counts it)

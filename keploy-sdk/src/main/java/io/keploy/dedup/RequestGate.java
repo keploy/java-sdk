@@ -3101,6 +3101,13 @@ public final class RequestGate {
         noteUntrackedAsync("untracked-executor:" + receiver.getClass().getName(), 0L);
     }
 
+    public static void noteIfBlockingQueue(Object receiver) {
+        if (!(receiver instanceof java.util.concurrent.BlockingQueue)) {
+            return;
+        }
+        noteUntrackedAsync("untracked-async:blocking-queue", 0L);
+    }
+
     private static void recordUntrackedMethodRef(String reason, String target) {
         if (!armed) {
             noteUnarmedHandOffIfInFlight();
@@ -3464,6 +3471,8 @@ public final class RequestGate {
             }
             externalUntrackedTailReason = effectiveReason == null || effectiveReason.isEmpty() ? "job" : effectiveReason;
             if (!addHandleToQueue(EXTERNAL_UNTRACKED_HANDLES, handle, now)) {
+                KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                        "untracked async handle queue overflow (>64 live handles)", true);
                 noteExternalUntrackedTail(effectiveReason, maxLingeringNanos);
             }
             return;
@@ -3474,6 +3483,8 @@ public final class RequestGate {
             JobGate.markUntrackedWindowOnly(jobReason);
             externalUntrackedTailReason = jobReason;
             if (!addHandleToQueue(EXTERNAL_UNTRACKED_HANDLES, handle, now)) {
+                KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                        "untracked async handle queue overflow (>64 live handles)", true);
                 noteExternalUntrackedTail(jobReason, maxLingeringNanos);
             }
         }
@@ -4652,6 +4663,8 @@ public final class RequestGate {
             hadUntrackedAsync = true;
             if (!addHandleToQueue(untrackedHandlesQueue(true), handle, now)) {
                 untrackedHandlesOverflowed = true;
+                KeployDedupAgent.noteObservedUntrackedAsyncLibrary(
+                        "untracked async handle queue overflow (>64 live handles)", true);
             }
         }
 
